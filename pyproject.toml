@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bioterms"
+authors = [
+  { name="Firefox2100", email="wangyunze16@gmail.com" },
+]
+description = "Biomedical Terminology Service"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "aiodataloader~=0.4.2",
+    "ariadne~=0.26.2",
+    "fastapi~=0.117.1",
+    "httpx~=0.28.1",
+    "networkx~=3.5",
+    "numpy~=2.3.3",
+    "owlready2~=0.48",
+    "pandas~=2.3.3",
+    "prometheus-client~=0.23.1",
+    "pyyaml~=6.0.2",
+    "pydantic~=2.11.9",
+    "pydantic-settings~=2.11.0",
+    "pymongo~=4.15.1",
+    "redis~=6.4.0",
+    "rich~=14.1.0",
+    "typer~=0.19.2",
+    "uvicorn~=0.37.0",
+]
+dynamic = [
+    "version"
+]
+
+[project.optional-dependencies]
+test = [
+    "deepdiff~=8.6.1",
+    "pytest~=8.4.2",
+    "pytest-asyncio~=1.2.0",
+    "pytest-cov~=7.0.0",
+    "pylint~=3.3.8",
+]
+
+[project.urls]
+Homepage = "https://github.com/Firefox2100/biomedical-terminology-service"
+Repository = "https://github.com/Firefox2100/biomedical-terminology-service.git"
+Issues = "https://github.com/Firefox2100/biomedical-terminology-service/issues"
+
+[project.scripts]
+bioterms-cli = "bioterms.cli.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "bioterms.__version__"}
