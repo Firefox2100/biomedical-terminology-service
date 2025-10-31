@@ -1,3 +1,4 @@
+import traceback
 from typing import Annotated
 from rich.table import Table
 import typer
@@ -26,3 +27,23 @@ async def download_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(h
         CONSOLE.print(f'[green]Successfully downloaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to download vocabulary {vocabulary.value}: {e}[/red]')
+        traceback.print_exc()
+
+
+@app.command(name='load', help='Load a vocabulary into database.')
+@run_async
+async def load_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help='The vocabulary to load.')],
+                       overwrite: Annotated[
+                           bool,
+                           typer.Option(
+                              '--overwrite',
+                              '-o',
+                              help='Overwrite existing data in the database.')
+                       ] = False
+                       ):
+    try:
+        await load_vocabulary(vocabulary, drop_existing=overwrite)
+        CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value} into the database.[/green]')
+    except Exception as e:
+        CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value} into the database: {e}[/red]')
+        traceback.print_exc()

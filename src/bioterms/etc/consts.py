@@ -29,6 +29,10 @@ class Settings(BaseSettings):
         description='Maximum number of worker process to spawn for handling data. '
                     'This is not used when running as a service, only for CLI commands.',
     )
+    auto_complete_min_length: int = Field(
+        3,
+        description='Minimum length of query string for auto-complete searches',
+    )
 
     logging_level: Literal['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'] = Field(
         'INFO',
@@ -79,26 +83,26 @@ class Settings(BaseSettings):
         'bts',
         description='Name of the MongoDB database to use',
     )
-    mongodb_username: str = Field(
-        'bts_user',
+    mongodb_username: Optional[str] = Field(
+        None,
         description='Username for the MongoDB database',
     )
-    mongodb_password: str = Field(
-        'password',
+    mongodb_password: Optional[str] = Field(
+        None,
         description='Password for the MongoDB database',
+    )
+    mongodb_auth_source: str = Field(
+        'admin',
+        description='Authentication source database for MongoDB',
     )
 
     graph_database_driver: GraphDatabaseDriverType = Field(
         GraphDatabaseDriverType.NEO4J,
         description='Graph database driver to use for the service',
     )
-    neo4j_host: str = Field(
-        'localhost',
-        description='Host for the Neo4j database',
-    )
-    neo4j_port: int = Field(
-        7687,
-        description='Port for the Neo4j database',
+    neo4j_uri: str = Field(
+        'neo4j://localhost:7687',
+        description='Connection URI for the Neo4j database',
     )
     neo4j_db_name: str = Field(
         'neo4j',

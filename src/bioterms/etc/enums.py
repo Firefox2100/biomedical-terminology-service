@@ -29,6 +29,14 @@ class ConceptType(StrEnum):
     """
 
 
+class ConceptRelationshipType(StrEnum):
+    """
+    The type of relationship between concepts in the vocabularies.
+    """
+    IS_A = 'is_a'
+    REPLACED_BY = 'replaced_by'
+
+
 class DocDatabaseDriverType(Enum):
     """
     The type of document database driver.

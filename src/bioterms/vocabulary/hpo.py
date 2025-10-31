@@ -1,12 +1,13 @@
 import os
+import anyio
 import networkx as nx
 from owlready2 import get_ontology
 
 from bioterms.etc.consts import CONFIG, DOWNLOAD_CLIENT
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory
-from bioterms.database import get_active_doc_db
+from bioterms.database import get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
 
@@ -32,9 +33,9 @@ async def download_vocabulary():
         owl_file_path = os.path.join(CONFIG.data_dir, 'hpo/hp.owl')
         os.makedirs(os.path.dirname(owl_file_path), exist_ok=True)
 
-        with open(owl_file_path, 'wb') as owl_file:
+        async with anyio.open_file(owl_file_path, 'wb') as owl_file:
             async for chunk in response.aiter_bytes():
-                owl_file.write(chunk)
+                await owl_file.write(chunk)
 
 
 def delete_vocabulary_files():
@@ -59,7 +60,6 @@ async def load_vocabulary_from_file():
     hpo_ontology = get_ontology(owl_file_path).load()
 
     hpo_graph = nx.DiGraph()
-    replaced_by_graph = nx.DiGraph()
     concepts = []
 
     for hpo_class in hpo_ontology.classes():
@@ -87,19 +87,72 @@ async def load_vocabulary_from_file():
             hpo_graph.add_node(concept.concept_id)
             if hasattr(hpo_class, 'subclasses'):
                 for child in hpo_class.subclasses():
-                    hpo_graph.add_edge(concept.concept_id, child.name.split('_')[-1])
+                    hpo_graph.add_edge(
+                        concept.concept_id,
+                        child.name.split('_')[-1],
+                        label=ConceptRelationshipType.IS_A
+                    )
 
             if hasattr(hpo_class, 'hasAlternativeId'):
                 for replaced_classes in hpo_class.hasAlternativeId:
-                    replaced_by_graph.add_edge(replaced_classes.split(':')[-1], concept.concept_id)
+                    hpo_graph.add_edge(
+                        replaced_classes.split(':')[-1],
+                        concept.concept_id,
+                        label=ConceptRelationshipType.REPLACED_BY
+                    )
 
             if hasattr(hpo_class, 'consider'):
                 for replaced_classes in hpo_class.consider:
-                    replaced_by_graph.add_edge(replaced_classes.split(':')[-1], concept.concept_id)
+                    hpo_graph.add_edge(
+                        replaced_classes.split(':')[-1],
+                        concept.concept_id,
+                        label=ConceptRelationshipType.REPLACED_BY
+                    )
 
     doc_db = get_active_doc_db()
+    graph_db = get_active_graph_db()
 
     await doc_db.save_terms(
         label='hpo',
         terms=concepts
     )
+
+    await graph_db.save_vocabulary_graph(
+        concepts=concepts,
+        graph=hpo_graph,
+    )
+
+
+async def create_indexes(overwrite: bool = False):
+    """
+    Create indexes for the HPO vocabulary in the primary databases.
+    :param overwrite: Whether to overwrite existing indexes.
+    """
+
+    doc_db = get_active_doc_db()
+    graph_db = get_active_graph_db()
+
+    await doc_db.create_index(
+        label='hpo',
+        field='conceptId',
+        unique=True,
+        overwrite=overwrite,
+    )
+    await doc_db.create_index(
+        label='hpo',
+        field='label',
+        overwrite=overwrite,
+    )
+
+    await graph_db.create_index()
+
+
+async def delete_vocabulary_data():
+    """
+    Delete all HPO vocabulary data from the primary databases.
+    """
+    doc_db = get_active_doc_db()
+    graph_db = get_active_graph_db()
+
+    await doc_db.delete_all_for_label('hpo')
+    await graph_db.delete_vocabulary_graph(prefix=ConceptPrefix.HPO)

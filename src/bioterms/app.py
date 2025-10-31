@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
+from bioterms.database import get_active_doc_db, get_active_graph_db
+from bioterms.router import auto_complete_router
 
 
 @asynccontextmanager
@@ -17,12 +19,20 @@ async def lifespan(_: FastAPI):
     """
     LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
 
+    doc_db = get_active_doc_db()
+    graph_db = get_active_graph_db()
+
     try:
         yield
     except Exception as e:
         LOGGER.critical(f'Fatal error during application lifespan: {e}', exc_info=True)
         raise e
     finally:
+        LOGGER.info('Shutting down application...')
+
+        await doc_db.close()
+        await graph_db.close()
+
         LOGGER.info('Application shutdown complete.')
 
 
@@ -71,6 +81,8 @@ def create_app() -> FastAPI:
             'X-Requested-With',
         ),
     )
+
+    app.include_router(auto_complete_router)
 
     @app.exception_handler(BtsError)
     async def cafe_variome_exception_handler(request: Request, exc: BtsError):

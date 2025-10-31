@@ -20,3 +20,12 @@ class FilesNotFound(BtsError):
                  status_code: int = 404
                  ):
         super().__init__(message, status_code)
+
+
+class IndexCreationError(BtsError):
+    """Raised when there is an error creating an index in the database."""
+    def __init__(self,
+                 message: str = 'Error creating index in the database',
+                 status_code: int = 500
+                 ):
+        super().__init__(message, status_code)

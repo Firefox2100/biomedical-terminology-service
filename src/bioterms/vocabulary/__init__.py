@@ -1,6 +1,7 @@
 import importlib
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.utils import check_files_exist
 
 
 ALL_VOCABULARIES = {
@@ -41,3 +42,14 @@ async def load_vocabulary(prefix: ConceptPrefix,
         raise ValueError(f'Vocabulary with prefix {prefix} not found.')
 
     vocabulary_module = importlib.import_module(f'bioterms.vocabulary.{vocabulary_module_name}')
+
+    if not check_files_exist(vocabulary_module.FILE_PATHS):
+        raise ValueError(f'Vocabulary files for {prefix} not found. Are they downloaded?')
+
+    if drop_existing:
+        # Drop existing data before loading
+        await vocabulary_module.delete_vocabulary_data()
+
+    # Create indexes before loading data
+    await vocabulary_module.create_indexes()
+    await vocabulary_module.load_vocabulary_from_file()
