@@ -8,7 +8,7 @@ from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
-from bioterms.router import auto_complete_router
+from bioterms.router import auto_complete_router, expand_router
 
 
 @asynccontextmanager
@@ -60,6 +60,10 @@ def create_app() -> FastAPI:
                 'name': 'Auto Complete',
                 'description': 'Endpoints for auto-completion of biomedical terms.',
             },
+            {
+                'name': 'Expansion',
+                'description': 'Endpoints for expanding biomedical terms to their descendants.',
+            }
         ],
         root_path=CONFIG.service_root_path,
         openapi_url=CONFIG.openapi_url,
@@ -83,6 +87,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(auto_complete_router)
+    app.include_router(expand_router)
 
     @app.exception_handler(BtsError)
     async def cafe_variome_exception_handler(request: Request, exc: BtsError):

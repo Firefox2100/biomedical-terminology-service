@@ -51,6 +51,24 @@ class GraphDatabase(ABC):
         Create indexes in the graph database.
         """
 
+    @abstractmethod
+    async def expand_terms(self,
+                           prefix: ConceptPrefix,
+                           concept_ids: list[str],
+                           max_depth: int | None = None,
+                           ) -> dict[str, set[str]]:
+        """
+        Expand the given terms to retrieve their descendants up to the specified depth.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to expand.
+        :param concept_ids: The list of concept IDs to expand.
+        :param max_depth: The maximum depth to expand. If None, expand to all depths.
+        :return: A dictionary mapping each concept ID to a set of its descendant concept IDs.
+        """
+
 
 _active_graph_db: GraphDatabase | None = None
 

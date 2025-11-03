@@ -156,7 +156,7 @@ class MongoDocumentDatabase(DocumentDatabase):
             doc['nGrams'] = ngrams
             doc['searchText'] = search_text
 
-            if documents[concept.prefix] is None:
+            if concept.prefix not in documents:
                 documents[concept.prefix] = []
 
             documents[concept.prefix].append(doc)

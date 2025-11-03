@@ -2,6 +2,7 @@ import importlib
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
+from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 
 
 ALL_VOCABULARIES = {
@@ -53,3 +54,20 @@ async def load_vocabulary(prefix: ConceptPrefix,
     # Create indexes before loading data
     await vocabulary_module.create_indexes()
     await vocabulary_module.load_vocabulary_from_file()
+
+
+async def delete_vocabulary(prefix: ConceptPrefix,
+                            doc_db: DocumentDatabase | None = None,
+                            graph_db: GraphDatabase | None = None,
+                            ):
+    """
+    Delete the vocabulary specified by the prefix from the databases.
+    :param prefix: The prefix of the vocabulary to delete.
+    """
+    if doc_db is None:
+        doc_db = get_active_doc_db()
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    await doc_db.delete_all_for_label(prefix)
+    await graph_db.delete_vocabulary_graph(prefix)

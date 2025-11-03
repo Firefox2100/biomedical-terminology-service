@@ -14,6 +14,7 @@ from bioterms.model.concept import Concept
 VOCABULARY_PREFIX = ConceptPrefix.HPO
 ANNOTATIONS = []
 FILE_PATHS = ['hpo/hp.owl']
+MAPPINGS = []
 
 
 async def download_vocabulary():
@@ -113,7 +114,6 @@ async def load_vocabulary_from_file():
     graph_db = get_active_graph_db()
 
     await doc_db.save_terms(
-        label='hpo',
         terms=concepts
     )
 
@@ -133,13 +133,13 @@ async def create_indexes(overwrite: bool = False):
     graph_db = get_active_graph_db()
 
     await doc_db.create_index(
-        label='hpo',
+        prefix=ConceptPrefix.HPO,
         field='conceptId',
         unique=True,
         overwrite=overwrite,
     )
     await doc_db.create_index(
-        label='hpo',
+        prefix=ConceptPrefix.HPO,
         field='label',
         overwrite=overwrite,
     )
@@ -154,5 +154,5 @@ async def delete_vocabulary_data():
     doc_db = get_active_doc_db()
     graph_db = get_active_graph_db()
 
-    await doc_db.delete_all_for_label('hpo')
+    await doc_db.delete_all_for_label(ConceptPrefix.HPO)
     await graph_db.delete_vocabulary_graph(prefix=ConceptPrefix.HPO)

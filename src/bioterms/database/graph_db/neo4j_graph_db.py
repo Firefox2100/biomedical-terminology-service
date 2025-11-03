@@ -1,5 +1,5 @@
 import asyncio
-from typing import LiteralString, cast
+from typing import LiteralString
 import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
@@ -103,7 +103,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 UNWIND $concepts AS concept
                 WITH concept, coalesce(concept.conceptTypes, []) AS types
                 MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
-                
+
                 WITH n, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
                 CALL apoc.create.addLabels(n, labels) YIELD node
                 RETURN count(node) AS upserted
@@ -118,8 +118,8 @@ class Neo4jGraphDatabase(GraphDatabase):
             await self._execute_query_with_retry(
                 query="""
                 UNWIND $edges AS edge
-                MERGE (source:Concept {id: edge[0]})
-                MERGE (target:Concept {id: edge[1]})
+                MERGE (target:Concept {id: edge[0]})
+                MERGE (source:Concept {id: edge[1]})
                 WITH source, target, edge, coalesce(edge[2], 'related_to') as rel_label
                 CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
                 RETURN count(rel) AS created
@@ -145,21 +145,6 @@ class Neo4jGraphDatabase(GraphDatabase):
                 parameters={'prefix': prefix.value},
             )
 
-            # Delete the indexes associated with this prefix
-            # All indexes would be in the format of {prefix}_*
-            await self._execute_query_with_retry(
-                query=cast(
-                    LiteralString,
-                    f"""
-                    CALL db.indexes() YIELD name, entityType, labelsOrTypes, properties
-                    WHERE labelsOrTypes = ['Concept'] AND properties[0] STARTS WITH '{prefix.value}_'
-                    CALL apoc.schema.assert({{}}, {{name: name}}) YIELD label, key, action
-                    RETURN count(*)
-                    """,
-                ),
-                session=session,
-            )
-
     async def create_index(self):
         """
         Create indexes in Neo4J
@@ -181,3 +166,70 @@ class Neo4jGraphDatabase(GraphDatabase):
                 """,
                 session=session,
             )
+
+    async def expand_terms(self,
+                           prefix: ConceptPrefix,
+                           concept_ids: list[str],
+                           max_depth: int | None = None,
+                           ) -> dict[str, set[str]]:
+        """
+        Expand the given terms to retrieve their descendants up to the specified depth.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to expand.
+        :param concept_ids: The list of concept IDs to expand.
+        :param max_depth: The maximum depth to expand. If None, expand to all depths.
+        :return: A dictionary mapping each concept ID to a set of its descendant concept IDs.
+        """
+        async with self._client.session() as session:
+            if max_depth is None:
+                result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.id in $concept_ids
+                    OPTIONAL MATCH (n)<-[:is_a*]-(descendant:Concept)
+                    RETURN n.id AS concept_id, COALESCE(COLLECT(DISTINCT descendant.id), []) AS descendants
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'concept_ids': concept_ids,
+                    },
+                )
+            else:
+                result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.id IN $concept_ids
+                    CALL apoc.path.expandConfig(
+                      n,
+                      {
+                        relationshipFilter: 'is_a<',
+                        labelFilter: '+Concept',
+                        minLevel: 1,
+                        maxLevel: $depth,
+                        bfs: true,
+                        uniqueness: 'NODE_GLOBAL'
+                      }
+                    ) YIELD path
+                    WITH n, last(nodes(path)) AS descendant
+                    RETURN n.id AS concept_id, collect(DISTINCT descendant.id) AS descendants;
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'concept_ids': concept_ids,
+                        'depth': max_depth,
+                    },
+                )
+
+            expansion_dict: dict[str, set[str]] = {}
+
+            async for record in result:
+                concept_id = record['concept_id']
+                descendants = set(record['descendants'])
+                expansion_dict[concept_id] = descendants
+
+            return expansion_dict
