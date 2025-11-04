@@ -8,7 +8,7 @@ from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
-from bioterms.router import auto_complete_router, expand_router
+from bioterms.router import auto_complete_router, data_router, expand_router
 
 
 @asynccontextmanager
@@ -19,7 +19,7 @@ async def lifespan(_: FastAPI):
     """
     LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
 
-    doc_db = get_active_doc_db()
+    doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
     try:
@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(auto_complete_router)
+    app.include_router(data_router)
     app.include_router(expand_router)
 
     @app.exception_handler(BtsError)

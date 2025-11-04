@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import DocDatabaseDriverType, ConceptPrefix
@@ -62,6 +63,36 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
+    async def count_terms(self,
+                          prefix: ConceptPrefix,
+                          ) -> int:
+        """
+        Count the number of terms for a given prefix in the document database.
+        :param prefix: The vocabulary prefix to count documents for.
+        :return: The number of terms/documents
+        """
+
+    @abstractmethod
+    async def get_item_iter(self,
+                            prefix: ConceptPrefix,
+                            ) -> AsyncIterator[Concept]:
+        """
+        Get an asynchronous iterator over all items for a given prefix in the document database.
+        :param prefix: The vocabulary prefix to get documents for.
+        :return: An asynchronous iterator yielding Concept instances.
+        """
+
+    async def get_terms(self,
+                        prefix: ConceptPrefix,
+                        ) -> list[Concept]:
+        """
+        Get all terms for a given prefix in the document database.
+        :param prefix: The vocabulary prefix to get documents for.
+        :return: A list of Concept instances.
+        """
+        return [concept async for concept in self.get_item_iter(prefix)]
+
+    @abstractmethod
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
                                    ):
@@ -88,7 +119,7 @@ class DocumentDatabase(ABC):
 _active_doc_db: DocumentDatabase | None = None
 
 
-def get_active_doc_db() -> DocumentDatabase:
+async def get_active_doc_db() -> DocumentDatabase:
     """
     Get the active document database instance based on configuration.
     :return: The active DocumentDatabase instance.
@@ -113,6 +144,18 @@ def get_active_doc_db() -> DocumentDatabase:
         MongoDocumentDatabase.set_client(mongo_client)
 
         _active_doc_db = MongoDocumentDatabase(mongo_client)
+
+        return _active_doc_db
+
+    if CONFIG.doc_database_driver == DocDatabaseDriverType.SQLITE:
+        import aiosqlite
+        from .sqlite_doc_db import SqliteDocumentDatabase
+
+        connection = await aiosqlite.connect(CONFIG.sqlite_db_path)
+
+        SqliteDocumentDatabase.set_client(connection)
+
+        _active_doc_db = SqliteDocumentDatabase(connection)
 
         return _active_doc_db
 

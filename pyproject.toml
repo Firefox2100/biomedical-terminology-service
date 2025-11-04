@@ -22,8 +22,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "aiodataloader~=0.4.2",
+    "aiosqlite~=0.21.0",
     "ariadne~=0.26.2",
-    "fastapi~=0.117.1",
+    "fastapi~=0.121.0",
     "httpx~=0.28.1",
     "neo4j~=6.0.2",
     "networkx~=3.5",
@@ -32,13 +33,13 @@ dependencies = [
     "pandas~=2.3.3",
     "prometheus-client~=0.23.1",
     "pyyaml~=6.0.2",
-    "pydantic~=2.11.9",
+    "pydantic~=2.12.3",
     "pydantic-settings~=2.11.0",
     "pymongo~=4.15.1",
-    "redis~=6.4.0",
-    "rich~=14.1.0",
-    "typer~=0.19.2",
-    "uvicorn~=0.37.0",
+    "redis~=7.0.1",
+    "rich~=14.2.0",
+    "typer~=0.20.0",
+    "uvicorn~=0.38.0",
 ]
 dynamic = [
     "version"
@@ -50,7 +51,7 @@ test = [
     "pytest~=8.4.2",
     "pytest-asyncio~=1.2.0",
     "pytest-cov~=7.0.0",
-    "pylint~=3.3.8",
+    "pylint~=4.0.2",
 ]
 
 [project.urls]

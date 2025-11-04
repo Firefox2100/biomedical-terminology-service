@@ -1,30 +1,25 @@
-from abc import ABC, abstractmethod
+import asyncio
+from typing import LiteralString
 import networkx as nx
 
-from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
+from .graph_db import GraphDatabase
 
 
-class GraphDatabase(ABC):
+class MemoryGraphDatabase(GraphDatabase):
     """
-    An interface for operating on the graph database.
-
-    This service uses two primary databases:
-
-    - One graph database for relationships between terms.
-    - One document database for term details and metadata.
-
-    This database interface focuses on the graph database operations.
+    An implementation of the GraphDatabase interface using an in-memory graph.
     """
 
-    @abstractmethod
-    async def close(self):
-        """
-        Close the database driver/connection.
-        """
+    _graphs: dict[ConceptPrefix, nx.DiGraph] = {}
 
-    @abstractmethod
+    async def close(self) -> None:
+        """
+        Remove the in-memory graphs.
+        """
+        self._graphs.clear()
+
     async def save_vocabulary_graph(self,
                                     concepts: list[Concept],
                                     graph: nx.DiGraph,
@@ -35,8 +30,12 @@ class GraphDatabase(ABC):
             allow for any necessary term metadata to be accessed during graph saving.
         :param graph: The vocabulary graph to save.
         """
+        if not concepts:
+            return
 
-    @abstractmethod
+        prefix = concepts[0].prefix
+        self._graphs[prefix] = graph
+
     async def delete_vocabulary_graph(self,
                                       prefix: ConceptPrefix,
                                       ):
@@ -44,14 +43,14 @@ class GraphDatabase(ABC):
         Delete the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to delete.
         """
+        if prefix in self._graphs:
+            del self._graphs[prefix]
 
-    @abstractmethod
     async def create_index(self):
         """
-        Create indexes in the graph database.
+        In-memory graph does not require indexes.
         """
 
-    @abstractmethod
     async def expand_terms(self,
                            prefix: ConceptPrefix,
                            concept_ids: list[str],
@@ -68,42 +67,3 @@ class GraphDatabase(ABC):
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
         :return: A dictionary mapping each concept ID to a set of its descendant concept IDs.
         """
-
-
-_active_graph_db: GraphDatabase | None = None
-
-
-def get_active_graph_db() -> GraphDatabase:
-    """
-    Get the active graph database instance based on the configuration.
-    :return: The active GraphDatabase instance.
-    """
-    global _active_graph_db
-
-    if _active_graph_db is not None:
-        return _active_graph_db
-
-    if CONFIG.graph_database_driver == GraphDatabaseDriverType.NEO4J:
-        from neo4j import AsyncGraphDatabase
-        from .neo4j_graph_db import Neo4jGraphDatabase
-
-        neo4j_client = AsyncGraphDatabase.driver(
-            uri=CONFIG.neo4j_uri,
-            auth=(CONFIG.neo4j_username, CONFIG.neo4j_password),
-            database=CONFIG.neo4j_db_name,
-        )
-
-        Neo4jGraphDatabase.set_client(neo4j_client)
-
-        _active_graph_db = Neo4jGraphDatabase()
-        return _active_graph_db
-
-    if CONFIG.graph_database_driver == GraphDatabaseDriverType.MEMORY:
-        from .memory_graph_db import MemoryGraphDatabase
-
-        _active_graph_db = MemoryGraphDatabase()
-        return _active_graph_db
-
-    raise ValueError(
-        f'Unsupported graph database driver type: {CONFIG.graph_db.driver_type}'
-    )

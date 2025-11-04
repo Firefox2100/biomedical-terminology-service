@@ -1,41 +1,14 @@
-import asyncio
 import re
+from typing import AsyncIterator
 from pymongo import AsyncMongoClient
 from pymongo.errors import OperationFailure
 
-from bioterms.etc.consts import CONFIG, EXECUTOR
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.model.concept import Concept
 from .doc_db import DocumentDatabase
-
-
-def _generate_extra_data_for_term(concept: Concept) -> tuple[str, list[str], str]:
-    """
-    Generate extra data for search indexing from a Concept object.
-    :param concept: A Concept object
-    :return: A tuple containing the term's ID, n-grams, and search text.
-    """
-    ngrams = concept.n_grams()
-    search_text = concept.search_text()
-
-    return concept.concept_id, ngrams, search_text
-
-
-async def _generate_extra_data(concepts: list[Concept]) -> list[tuple[str, list[str], str]]:
-    """
-    Generate extra data for search indexing from a list of Concept objects.
-    :param concepts: A list of Concept objects
-    :return: A tuple containing the term's ID, n-grams, and search text.
-    """
-    loop = asyncio.get_running_loop()
-
-    futures = [
-        loop.run_in_executor(EXECUTOR, _generate_extra_data_for_term, concept)
-        for concept in concepts
-    ]
-
-    return await asyncio.gather(*futures)
+from .utils import generate_extra_data
 
 
 class MongoDocumentDatabase(DocumentDatabase):
@@ -100,13 +73,13 @@ class MongoDocumentDatabase(DocumentDatabase):
             implementation.
         :raises IndexCreationError: If there is an error creating the index.
         """
-        collection = self.db[prefix.value]
+        collection = self.db[str(prefix.value)]
         index_name = f'{field}_index'
 
         # Ensure the collection exists
         collections = await self.db.list_collection_names()
         if prefix.value not in collections:
-            await self.db.create_collection(prefix.value)
+            await self.db.create_collection(str(prefix.value))
 
         # Always create the default nGram index if they don't exist
         await collection.create_index('nGrams', name='nGrams_index')
@@ -139,7 +112,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param prefix: The vocabulary prefix to delete the index for.
         :param field: The field to delete the index on.
         """
-        await self.db[prefix.value].drop_index(f'{field}_index')
+        await self.db[str(prefix.value)].drop_index(f'{field}_index')
 
     async def save_terms(self,
                          terms: list[Concept],
@@ -148,7 +121,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         Save a list of terms into the mongodb.
         :param terms: A list of Concept instances to save.
         """
-        extra_data = await _generate_extra_data(terms)
+        extra_data = await generate_extra_data(terms)
 
         documents: dict[ConceptPrefix, list[dict]] = {}
         for concept, (term_id, ngrams, search_text) in zip(terms, extra_data):
@@ -162,9 +135,35 @@ class MongoDocumentDatabase(DocumentDatabase):
             documents[concept.prefix].append(doc)
 
         for prefix, concept_docs in documents.items():
-            collection = self.db[prefix.value]
+            collection = self.db[str(prefix.value)]
 
             await collection.insert_many(concept_docs, ordered=False)
+
+    async def count_terms(self,
+                          prefix: ConceptPrefix,
+                          ) -> int:
+        """
+        Count the number of terms for a given prefix in the document database.
+        :param prefix: The vocabulary prefix to count documents for.
+        :return: The number of terms/documents
+        """
+        collection = self.db[str(prefix.value)]
+        count = await collection.count_documents({})
+        return count
+
+    async def get_item_iter(self,
+                            prefix: ConceptPrefix,
+                            ) -> AsyncIterator[Concept]:
+        """
+        Get an asynchronous iterator over all items for a given prefix in the document database.
+        :param prefix: The vocabulary prefix to get documents for.
+        :return: An asynchronous iterator yielding Concept instances.
+        """
+        collection = self.db[str(prefix.value)]
+        cursor = collection.find({}, {'_id': 0, 'nGrams': 0, 'searchText': 0})
+
+        async for doc in cursor:
+            yield Concept.model_validate(doc)
 
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
@@ -174,10 +173,10 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param prefix: The vocabulary prefix to delete documents for.
         """
         # Drop the collection directly to avoid index and performance issues
-        await self.db.drop_collection(prefix.value)
+        await self.db.drop_collection(str(prefix.value))
 
         # Recreate the collection to ensure it exists
-        await self.db.create_collection(prefix.value)
+        await self.db.create_collection(str(prefix.value))
 
     async def auto_complete_search(self,
                                    prefix: ConceptPrefix,
@@ -198,7 +197,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         n_gram_query = [word for word in clean_query.split() if len(word) > 2]
         score_query = re.sub(r'\s', '', clean_query)
 
-        pipeline = [
+        pipeline: list[dict] = [
             # Match on the n-gram
             {
                 '$match': {
@@ -255,7 +254,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         }
 
         pipeline.append(final_projection)
-        collection = self.db[prefix.value]
+        collection = self.db[str(prefix.value)]
 
         cursor = await collection.aggregate(pipeline)
         results = await cursor.to_list(length=limit)

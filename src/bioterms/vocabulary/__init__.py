@@ -10,6 +10,36 @@ ALL_VOCABULARIES = {
 }
 
 
+def get_vocabulary_module(prefix: ConceptPrefix):
+    """
+    Get the vocabulary module for the given prefix.
+    :param prefix: The prefix of the vocabulary.
+    :return: The vocabulary module.
+    """
+    vocabulary_module_name = ALL_VOCABULARIES.get(prefix)
+    if not vocabulary_module_name:
+        raise ValueError(f'Vocabulary with prefix {prefix} not found.')
+
+    vocabulary_module = importlib.import_module(f'bioterms.vocabulary.{vocabulary_module_name}')
+
+    return vocabulary_module
+
+
+def get_vocabulary_config(prefix: ConceptPrefix) -> dict:
+    """
+    Get the vocabulary configuration for the given prefix.
+    :param prefix: The prefix of the vocabulary.
+    :return: The vocabulary configuration.
+    """
+    vocabulary_module = get_vocabulary_module(prefix)
+    return {
+        'prefix': vocabulary_module.VOCABULARY_PREFIX,
+        'annotations': vocabulary_module.ANNOTATIONS,
+        'filePaths': vocabulary_module.FILE_PATHS,
+        'conceptClass': vocabulary_module.CONCEPT_CLASS,
+    }
+
+
 async def download_vocabulary(prefix: ConceptPrefix,
                               redownload: bool = False
                               ):
@@ -18,11 +48,7 @@ async def download_vocabulary(prefix: ConceptPrefix,
     :param prefix: The prefix of the vocabulary to download.
     :param redownload: Whether to redownload the files even if they exist.
     """
-    vocabulary_module_name = ALL_VOCABULARIES.get(prefix)
-    if not vocabulary_module_name:
-        raise ValueError(f'Vocabulary with prefix {prefix} not found.')
-
-    vocabulary_module = importlib.import_module(f'bioterms.vocabulary.{vocabulary_module_name}')
+    vocabulary_module = get_vocabulary_module(prefix)
 
     if redownload:
         vocabulary_module.delete_vocabulary_files()
@@ -38,11 +64,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
     :param prefix: The prefix of the vocabulary to load.
     :param drop_existing: Whether to drop existing data before loading.
     """
-    vocabulary_module_name = ALL_VOCABULARIES.get(prefix)
-    if not vocabulary_module_name:
-        raise ValueError(f'Vocabulary with prefix {prefix} not found.')
-
-    vocabulary_module = importlib.import_module(f'bioterms.vocabulary.{vocabulary_module_name}')
+    vocabulary_module = get_vocabulary_module(prefix)
 
     if not check_files_exist(vocabulary_module.FILE_PATHS):
         raise ValueError(f'Vocabulary files for {prefix} not found. Are they downloaded?')
@@ -65,7 +87,7 @@ async def delete_vocabulary(prefix: ConceptPrefix,
     :param prefix: The prefix of the vocabulary to delete.
     """
     if doc_db is None:
-        doc_db = get_active_doc_db()
+        doc_db = await get_active_doc_db()
     if graph_db is None:
         graph_db = get_active_graph_db()
 

@@ -14,7 +14,7 @@ from bioterms.model.concept import Concept
 VOCABULARY_PREFIX = ConceptPrefix.HPO
 ANNOTATIONS = []
 FILE_PATHS = ['hpo/hp.owl']
-MAPPINGS = []
+CONCEPT_CLASS = Concept
 
 
 async def download_vocabulary():
@@ -65,7 +65,7 @@ async def load_vocabulary_from_file():
 
     for hpo_class in hpo_ontology.classes():
         if hpo_class.name.startswith('HP_'):
-            concept = Concept(
+            concept = CONCEPT_CLASS(
                 prefix=ConceptPrefix.HPO,
                 conceptTypes=[],
                 conceptId=hpo_class.name.split('_')[-1],
@@ -110,7 +110,7 @@ async def load_vocabulary_from_file():
                         label=ConceptRelationshipType.REPLACED_BY
                     )
 
-    doc_db = get_active_doc_db()
+    doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
     await doc_db.save_terms(
@@ -129,7 +129,7 @@ async def create_indexes(overwrite: bool = False):
     :param overwrite: Whether to overwrite existing indexes.
     """
 
-    doc_db = get_active_doc_db()
+    doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
     await doc_db.create_index(
@@ -151,7 +151,7 @@ async def delete_vocabulary_data():
     """
     Delete all HPO vocabulary data from the primary databases.
     """
-    doc_db = get_active_doc_db()
+    doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
     await doc_db.delete_all_for_label(ConceptPrefix.HPO)

@@ -42,12 +42,14 @@ class DocDatabaseDriverType(Enum):
     The type of document database driver.
     """
     MONGO = 'mongo'
+    SQLITE = 'sqlite'
 
 
 class GraphDatabaseDriverType(Enum):
     """
     The type of graph database driver.
     """
+    MEMORY = 'memory'
     NEO4J = 'neo4j'
 
 

@@ -95,6 +95,10 @@ class Settings(BaseSettings):
         'admin',
         description='Authentication source database for MongoDB',
     )
+    sqlite_db_path: str = Field(
+        'data/bioterms.db',
+        description='File path for the SQLite database',
+    )
 
     graph_database_driver: GraphDatabaseDriverType = Field(
         GraphDatabaseDriverType.NEO4J,
