@@ -1,6 +1,8 @@
+import importlib.resources as pkg_resources
 from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,7 +10,7 @@ from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
-from bioterms.router import auto_complete_router, data_router, expand_router
+from bioterms.router import auto_complete_router, data_router, expand_router, ui_router
 
 
 @asynccontextmanager
@@ -68,6 +70,10 @@ def create_app() -> FastAPI:
                 'name': 'Expansion',
                 'description': 'Endpoints for expanding biomedical terms to their descendants.',
             },
+            {
+                'name': 'UI',
+                'description': 'Endpoints for serving the web user interface.',
+            },
         ],
         root_path=CONFIG.service_root_path,
         openapi_url=CONFIG.openapi_url,
@@ -93,6 +99,10 @@ def create_app() -> FastAPI:
     app.include_router(auto_complete_router)
     app.include_router(data_router)
     app.include_router(expand_router)
+    app.include_router(ui_router)
+
+    static_file_path = pkg_resources.files('bioterms.data') / 'static'
+    app.mount('/static', StaticFiles(directory=str(static_file_path)), name='static')
 
     @app.exception_handler(BtsError)
     async def cafe_variome_exception_handler(request: Request, exc: BtsError):
