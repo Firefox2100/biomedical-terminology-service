@@ -13,6 +13,7 @@ class ConceptPrefix(StrEnum):
     The prefix used for concepts in the vocabularies.
     """
     HPO = 'hpo'
+    ORDO = 'ordo'
 
 
 class ConceptStatus(Enum):
@@ -27,7 +28,7 @@ class ConceptType(StrEnum):
     """
     The type of concept represented in the vocabularies.
     """
-
+    PATHWAY = 'pathway'
 
 class ConceptRelationshipType(StrEnum):
     """

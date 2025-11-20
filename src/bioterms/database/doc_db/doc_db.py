@@ -73,24 +73,34 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
-    async def get_item_iter(self,
-                            prefix: ConceptPrefix,
-                            ) -> AsyncIterator[Concept]:
+    def get_item_iter(self,
+                      prefix: ConceptPrefix,
+                      limit: int = 0,
+                      ) -> AsyncIterator[Concept]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
+        :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
         :return: An asynchronous iterator yielding Concept instances.
         """
 
     async def get_terms(self,
                         prefix: ConceptPrefix,
+                        limit: int = 0,
                         ) -> list[Concept]:
         """
         Get all terms for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
+        :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
         :return: A list of Concept instances.
         """
-        return [concept async for concept in self.get_item_iter(prefix)]
+        it = self.get_item_iter(prefix, limit=limit)
+
+        results: list[Concept] = []
+        async for concept in it:
+            results.append(concept)
+
+        return results
 
     @abstractmethod
     async def delete_all_for_label(self,
@@ -102,6 +112,19 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
+    def auto_complete_iter(self,
+                           prefix: ConceptPrefix,
+                           query: str,
+                           limit: int = None,
+                           ) -> AsyncIterator[Concept]:
+        """
+        Run an auto-complete search query against the document database and return an async iterator.
+        :param prefix: The vocabulary prefix to search within.
+        :param query: The search query string.
+        :param limit: The maximum number of results to return. If None, return all matches.
+        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
+        """
+
     async def auto_complete_search(self,
                                    prefix: ConceptPrefix,
                                    query: str,
@@ -114,6 +137,13 @@ class DocumentDatabase(ABC):
         :param limit: The maximum number of results to return. If None, return all matches.
         :return: A list of Concept instances matching the auto-complete query.
         """
+        it = self.auto_complete_iter(prefix, query, limit=limit)
+
+        results: list[Concept] = []
+        async for concept in it:
+            results.append(concept)
+
+        return results
 
 
 _active_doc_db: DocumentDatabase | None = None

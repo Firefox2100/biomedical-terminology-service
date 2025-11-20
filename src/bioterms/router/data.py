@@ -1,18 +1,19 @@
 import zlib
 from typing import AsyncIterator
 from pydantic import Field, ConfigDict
-from fastapi import APIRouter, Depends, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Request, HTTPException, Query
+from fastapi.responses import StreamingResponse, Response
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.concept import Concept
-from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary
+from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license
+from .utils import response_generator
 
 
 data_router = APIRouter(
-    tags=['Data Manipulation']
+    tags=['Data Management']
 )
 
 
@@ -31,6 +32,84 @@ class IngestResponse(JsonModel):
         description='The total number of concepts in the vocabulary after ingestion.',
         alias='conceptCount',
     )
+
+
+@data_router.get('/{prefix}')
+async def get_vocabulary_info(prefix: ConceptPrefix):
+    """
+    Get information about the specified vocabulary.
+    :param prefix:
+    :return:
+    """
+
+
+@data_router.get('/{prefix}/license', response_class=Response)
+async def get_license(prefix: ConceptPrefix):
+    """
+    Get the licence information for the specified vocabulary.
+    :param prefix: The vocabulary prefix.
+    :return: The licence information as a Markdown response.
+    """
+    license_str = get_vocabulary_license(prefix)
+    if license_str is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f'No license information found for vocabulary {prefix.value}'
+        )
+
+    return Response(
+        content=license_str,
+        media_type='text/markdown',
+    )
+
+
+@data_router.get('/{prefix}/{concept_id}', response_model=Concept)
+async def get_concept(prefix: ConceptPrefix,
+                      concept_id: str,
+                      ):
+    """
+    Get a specific concept by its ID from the specified vocabulary.
+    :param prefix:
+    :param concept_id:
+    :return:
+    """
+
+
+@data_router.get('/{prefix}/data', response_model=list[Concept])
+async def get_vocabulary_data(prefix: ConceptPrefix,
+                              limit: int = Query(
+                                  100,
+                                  ge=0,
+                                  le=10000,
+                                  description='The maximum number of documents to retrieve. '
+                                              'If 0, retrieve all documents.'
+                              ),
+                              doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                              ):
+    """
+    Get documents/records for the specified vocabulary from the document database.
+    :param prefix: The vocabulary prefix.
+    :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
+    :param doc_db: The document database instance.
+    :return: A list of Concept instances.
+    """
+    concepts_iter = doc_db.get_item_iter(prefix, limit=limit)
+
+    async def gen() -> AsyncIterator[bytes]:
+        yield b'['
+        first = True
+
+        async for concept in concepts_iter:
+            if not first:
+                yield b',\n'
+            else:
+                first = False
+
+            yield concept.model_dump_json().encode()
+
+        yield b']'
+
+    return StreamingResponse(gen(), media_type='application/json')
 
 
 @data_router.delete('/{prefix}/data')
@@ -53,8 +132,8 @@ async def delete_vocabulary_data(prefix: ConceptPrefix,
 
 @data_router.get('/{prefix}/data/documents')
 async def get_documents(prefix: ConceptPrefix,
-                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                             ):
+                        doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                        ):
     """
     Get all documents from the specified vocabulary database as a JSON list.
     :param prefix: The vocabulary prefix.
@@ -64,26 +143,14 @@ async def get_documents(prefix: ConceptPrefix,
     concepts_iter = doc_db.get_item_iter(prefix)
 
     file_name = f'{prefix.value}_documents.json'
-
-    async def gen() -> AsyncIterator[bytes]:
-        yield b'['
-        first = True
-
-        async for concept in concepts_iter:
-            if not first:
-                yield b',\n'
-            else:
-                first = False
-
-            yield concept.model_dump_json().encode('utf-8')
-
-        yield b']'
-
     headers = {
         'Content-Disposition': f'attachment; filename="{file_name}"'
     }
 
-    return StreamingResponse(gen(), media_type='application/json', headers=headers)
+    return StreamingResponse(
+        response_generator(concepts_iter),
+        media_type='application/json', headers=headers,
+    )
 
 
 @data_router.post('/{prefix}/data/documents', response_model=IngestResponse)

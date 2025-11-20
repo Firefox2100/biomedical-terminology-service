@@ -153,14 +153,19 @@ class MongoDocumentDatabase(DocumentDatabase):
 
     async def get_item_iter(self,
                             prefix: ConceptPrefix,
+                            limit: int = 0,
                             ) -> AsyncIterator[Concept]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
+        :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
         :return: An asynchronous iterator yielding Concept instances.
         """
         collection = self.db[str(prefix.value)]
-        cursor = collection.find({}, {'_id': 0, 'nGrams': 0, 'searchText': 0})
+        cursor = collection.find(
+            {},
+            {'_id': 0, 'nGrams': 0, 'searchText': 0}
+        ).limit(limit if limit > 0 else 0)
 
         async for doc in cursor:
             yield Concept.model_validate(doc)
@@ -178,17 +183,17 @@ class MongoDocumentDatabase(DocumentDatabase):
         # Recreate the collection to ensure it exists
         await self.db.create_collection(str(prefix.value))
 
-    async def auto_complete_search(self,
-                                   prefix: ConceptPrefix,
-                                   query: str,
-                                   limit: int = None,
-                                   ) -> list[Concept]:
+    async def auto_complete_iter(self,
+                                 prefix: ConceptPrefix,
+                                 query: str,
+                                 limit: int = None,
+                                 ) -> AsyncIterator[Concept]:
         """
-        Run an auto-complete search query against the document database.
+        Run an auto-complete search query against the document database and return an async iterator.
         :param prefix: The vocabulary prefix to search within.
         :param query: The search query string.
         :param limit: The maximum number of results to return. If None, return all matches.
-        :return: A list of Concept instances matching the auto-complete query.
+        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
         """
         clean_query = re.sub(r'[()"\']', '', query.lower())
 
@@ -257,6 +262,6 @@ class MongoDocumentDatabase(DocumentDatabase):
         collection = self.db[str(prefix.value)]
 
         cursor = await collection.aggregate(pipeline)
-        results = await cursor.to_list(length=limit)
 
-        return [Concept.model_validate(doc) for doc in results]
+        async for doc in cursor:
+            yield Concept.model_validate(doc)

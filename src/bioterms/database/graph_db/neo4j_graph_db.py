@@ -1,11 +1,12 @@
 import asyncio
-from typing import LiteralString
+from typing import LiteralString, AsyncIterator
 import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
+from bioterms.model.expanded_term import ExpandedTerm
 from .graph_db import GraphDatabase
 
 
@@ -167,13 +168,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                 session=session,
             )
 
-    async def expand_terms(self,
-                           prefix: ConceptPrefix,
-                           concept_ids: list[str],
-                           max_depth: int | None = None,
-                           ) -> dict[str, set[str]]:
+    async def expand_terms_iter(self,
+                                prefix: ConceptPrefix,
+                                concept_ids: list[str],
+                                max_depth: int | None = None,
+                                ) -> AsyncIterator[ExpandedTerm]:
         """
-        Expand the given terms to retrieve their descendants up to the specified depth.
+        Expand the given terms to retrieve their descendants up to the specified depth, and return
+        an asynchronous iterator over the results.
 
         This would only work on ontologies, because it relies on the IS_A relationships.
         Expanding a non-ontology or an ontology that does not have hierarchical relationships
@@ -181,7 +183,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param prefix: The prefix of the concepts to expand.
         :param concept_ids: The list of concept IDs to expand.
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
-        :return: A dictionary mapping each concept ID to a set of its descendant concept IDs.
+        :return: An asynchronous iterator yielding ExpandedTerm instances.
         """
         async with self._client.session() as session:
             if max_depth is None:
@@ -225,11 +227,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                     },
                 )
 
-            expansion_dict: dict[str, set[str]] = {}
-
             async for record in result:
-                concept_id = record['concept_id']
-                descendants = set(record['descendants'])
-                expansion_dict[concept_id] = descendants
-
-            return expansion_dict
+                yield ExpandedTerm(
+                    conceptId=record['concept_id'],
+                    descendants=list(set(record['descendants'])),
+                )

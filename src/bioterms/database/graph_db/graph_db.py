@@ -1,9 +1,11 @@
 from abc import ABC, abstractmethod
+from typing import AsyncIterator
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix
 from bioterms.model.concept import Concept
+from bioterms.model.expanded_term import ExpandedTerm
 
 
 class GraphDatabase(ABC):
@@ -52,11 +54,29 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    def expand_terms_iter(self,
+                          prefix: ConceptPrefix,
+                          concept_ids: list[str],
+                          max_depth: int | None = None,
+                          ) -> AsyncIterator[ExpandedTerm]:
+        """
+        Expand the given terms to retrieve their descendants up to the specified depth, and return
+        an asynchronous iterator over the results.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to expand.
+        :param concept_ids: The list of concept IDs to expand.
+        :param max_depth: The maximum depth to expand. If None, expand to all depths.
+        :return: An asynchronous iterator yielding ExpandedTerm instances.
+        """
+
     async def expand_terms(self,
                            prefix: ConceptPrefix,
                            concept_ids: list[str],
                            max_depth: int | None = None,
-                           ) -> dict[str, set[str]]:
+                           ) -> list[ExpandedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth.
 
@@ -68,6 +88,17 @@ class GraphDatabase(ABC):
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
         :return: A dictionary mapping each concept ID to a set of its descendant concept IDs.
         """
+        expand_iter = self.expand_terms_iter(
+            prefix=prefix,
+            concept_ids=concept_ids,
+            max_depth=max_depth,
+        )
+
+        results: list[ExpandedTerm] = []
+        async for expanded_term in expand_iter:
+            results.append(expanded_term)
+
+        return results
 
 
 _active_graph_db: GraphDatabase | None = None

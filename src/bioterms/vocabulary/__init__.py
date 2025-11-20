@@ -1,4 +1,5 @@
 import importlib
+import importlib.resources
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
@@ -7,6 +8,7 @@ from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db
 
 ALL_VOCABULARIES = {
     ConceptPrefix.HPO: 'hpo',
+    ConceptPrefix.ORDO: 'ordo',
 }
 
 
@@ -33,6 +35,7 @@ def get_vocabulary_config(prefix: ConceptPrefix) -> dict:
     """
     vocabulary_module = get_vocabulary_module(prefix)
     return {
+        'name': vocabulary_module.VOCABULARY_NAME,
         'prefix': vocabulary_module.VOCABULARY_PREFIX,
         'annotations': vocabulary_module.ANNOTATIONS,
         'filePaths': vocabulary_module.FILE_PATHS,
@@ -57,12 +60,16 @@ async def download_vocabulary(prefix: ConceptPrefix,
 
 
 async def load_vocabulary(prefix: ConceptPrefix,
-                          drop_existing: bool = True
+                          drop_existing: bool = True,
+                          doc_db: DocumentDatabase = None,
+                          graph_db: GraphDatabase = None,
                           ):
     """
     Load the vocabulary specified by the prefix.
     :param prefix: The prefix of the vocabulary to load.
     :param drop_existing: Whether to drop existing data before loading.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
     """
     vocabulary_module = get_vocabulary_module(prefix)
 
@@ -71,20 +78,31 @@ async def load_vocabulary(prefix: ConceptPrefix,
 
     if drop_existing:
         # Drop existing data before loading
-        await vocabulary_module.delete_vocabulary_data()
+        await vocabulary_module.delete_vocabulary_data(
+            doc_db=doc_db,
+            graph_db=graph_db,
+        )
 
     # Create indexes before loading data
-    await vocabulary_module.create_indexes()
-    await vocabulary_module.load_vocabulary_from_file()
+    await vocabulary_module.create_indexes(
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+    await vocabulary_module.load_vocabulary_from_file(
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
 
 
 async def delete_vocabulary(prefix: ConceptPrefix,
-                            doc_db: DocumentDatabase | None = None,
-                            graph_db: GraphDatabase | None = None,
+                            doc_db: DocumentDatabase = None,
+                            graph_db: GraphDatabase = None,
                             ):
     """
     Delete the vocabulary specified by the prefix from the databases.
     :param prefix: The prefix of the vocabulary to delete.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
     """
     if doc_db is None:
         doc_db = await get_active_doc_db()
@@ -93,3 +111,23 @@ async def delete_vocabulary(prefix: ConceptPrefix,
 
     await doc_db.delete_all_for_label(prefix)
     await graph_db.delete_vocabulary_graph(prefix)
+
+
+def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:
+    """
+    Get the licence information for the vocabulary specified by the prefix.
+    :param prefix: The prefix of the vocabulary.
+    :return: The licence information as a string, or None if not available.
+    """
+    file_name = ALL_VOCABULARIES.get(prefix)
+    if not file_name:
+        raise ValueError(f'Vocabulary with prefix {prefix} not found.')
+
+    file_name += '.md'
+
+    try:
+        file_path = importlib.resources.files('bioterms.data.licenses') / file_name
+        with importlib.resources.as_file(file_path) as license_file:
+            return license_file.read_text()
+    except FileNotFoundError:
+        return None

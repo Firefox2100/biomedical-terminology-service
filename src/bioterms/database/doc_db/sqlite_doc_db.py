@@ -339,16 +339,22 @@ class SqliteDocumentDatabase(DocumentDatabase):
 
     async def get_item_iter(self,
                             prefix: ConceptPrefix,
+                            limit: int = 0,
                             ) -> AsyncIterator[Concept]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
+        :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
         :return: An asynchronous iterator yielding Concept instances.
         """
         table_name = re.sub(r'\W+', '_', prefix.value.lower())
         await self._ensure_concept_table_exists(prefix)
 
-        cursor = await self.db.execute(f'SELECT * FROM "{table_name}"')
+        query = f'SELECT * FROM "{table_name}"'
+        if limit > 0:
+            query += f' LIMIT {limit}'
+
+        cursor = await self.db.execute(query)
         alias_cols = self._get_column_names(prefix)
 
         async for row in cursor:
@@ -394,15 +400,15 @@ class SqliteDocumentDatabase(DocumentDatabase):
         await self._ensure_ngram_table_exists(prefix)
         await self._ensure_search_text_table_exists(prefix)
 
-    async def auto_complete_search(self,
-                                   prefix: ConceptPrefix,
-                                   query: str,
-                                   limit: int = None,
-                                   ) -> list[Concept]:
+    async def auto_complete_iter(self,
+                                 prefix: ConceptPrefix,
+                                 query: str,
+                                 limit: int = None,
+                                 ) -> AsyncIterator[Concept]:
         """
-        Run an auto-complete search query against the document database.
+        Run an auto-complete search query against the document database and return an async iterator.
         :param prefix: The vocabulary prefix to search within.
         :param query: The search query string.
         :param limit: The maximum number of results to return. If None, return all matches.
-        :return: A list of Concept instances matching the auto-complete query.
+        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
         """

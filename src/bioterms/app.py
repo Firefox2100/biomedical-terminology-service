@@ -61,9 +61,13 @@ def create_app() -> FastAPI:
                 'description': 'Endpoints for auto-completion of biomedical terms.',
             },
             {
+                'name': 'Data Management',
+                'description': 'Endpoints for managing vocabulary data within the service.',
+            },
+            {
                 'name': 'Expansion',
                 'description': 'Endpoints for expanding biomedical terms to their descendants.',
-            }
+            },
         ],
         root_path=CONFIG.service_root_path,
         openapi_url=CONFIG.openapi_url,
