@@ -30,6 +30,7 @@ class ConceptType(StrEnum):
     """
     PATHWAY = 'pathway'
 
+
 class ConceptRelationshipType(StrEnum):
     """
     The type of relationship between concepts in the vocabularies.

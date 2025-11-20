@@ -7,7 +7,7 @@ from owlready2 import get_ontology, ThingClass
 from bioterms.etc.consts import CONFIG, DOWNLOAD_CLIENT
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -31,18 +31,11 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
     owl_url = 'https://github.com/obophenotype/human-phenotype-ontology/releases/latest/download/hp.owl'
 
-    if download_client is None:
-        download_client = DOWNLOAD_CLIENT
-
-    async with download_client.stream('GET', owl_url, follow_redirects=True) as response:
-        response.raise_for_status()
-
-        owl_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
-        os.makedirs(os.path.dirname(owl_file_path), exist_ok=True)
-
-        async with anyio.open_file(owl_file_path, 'wb') as owl_file:
-            async for chunk in response.aiter_bytes():
-                await owl_file.write(chunk)
+    await download_file(
+        url=owl_url,
+        file_path=FILE_PATHS[0],
+        download_client=download_client,
+    )
 
 
 def delete_vocabulary_files():

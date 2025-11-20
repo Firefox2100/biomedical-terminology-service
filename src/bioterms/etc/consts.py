@@ -134,6 +134,11 @@ class Settings(BaseSettings):
         description='Redis port for the cache',
     )
 
+    bioportal_api_key: Optional[str] = Field(
+        None,
+        description='API key for accessing the BioPortal services',
+    )
+
 
 CONFIG = Settings(_env_file=os.getenv('BTS_ENV_FILE', 'conf/.env'))     # type: ignore
 LOGGER = logging.getLogger('bioterms')
