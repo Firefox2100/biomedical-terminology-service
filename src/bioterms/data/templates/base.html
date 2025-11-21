@@ -1,55 +1,61 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8"/>
   <title>{{ page_title or "BioMedical Terminology Service UI" }}</title>
-  <meta name="description" content="{{ meta_description or 'A service for using with biomedical terminologies, such as ontologies or vocabularies.' }}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="{{ url_for('static', path='vendor/bootstrap/5.3.8/css/bootstrap.min.css') }}" rel="stylesheet" />
-  <link rel="stylesheet" href="{{ url_for('static', path='css/custom.css') }}" />
+  <meta name="description"
+        content="{{ meta_description or 'A service for using with biomedical terminologies, such as ontologies or vocabularies.' }}"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link href="{{ url_for('static', path='vendor/bootstrap/5.3.8/css/bootstrap.min.css') }}" rel="stylesheet"/>
+  <link href="{{ url_for('static', path='vendor/bootstrap-icons/1.13.1/bootstrap-icons.css') }}" rel="stylesheet"/>
+  <link rel="stylesheet" href="{{ url_for('static', path='css/custom.css') }}"/>
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-light bg-body-tertiary">
-    <div class="container">
-      <a class="navbar-brand" href="/">BioMedical Terminology Service</a>
+<nav class="navbar navbar-expand-lg navbar-light bg-body-tertiary">
+  <div class="container">
+    <a class="navbar-brand" href="/">BioMedical Terminology Service</a>
 
-      <!-- Mobile toggler -->
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav"
-              aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
-        <span class="navbar-toggler-icon"></span>
-      </button>
+    <!-- Mobile toggler -->
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav"
+            aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
 
-      <div id="mainNav" class="collapse navbar-collapse">
-        <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
-          {% block nav_links %}
-            {% if nav_links %}
-              {% for link in nav_links %}
-                <li class="nav-item">
-                  {% if link.active %}
-                    <a class="nav-link active disabled" aria-current="page" aria-disabled="true"
-                       href="{{ link.url }}">{{ link.label }}</a>
-                  {% else %}
-                    <a class="nav-link" href="{{ link.url }}">{{ link.label }}</a>
-                  {% endif %}
-                </li>
-              {% endfor %}
-            {% endif %}
-          {% endblock %}
-        </ul>
-      </div>
+    <div id="mainNav" class="collapse navbar-collapse">
+      <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+        {% block nav_links %}
+          {% if nav_links %}
+            {% for link in nav_links %}
+              <li class="nav-item">
+                {% if link.active %}
+                  <a class="nav-link active disabled" aria-current="page" aria-disabled="true"
+                     href="{{ link.url }}">{{ link.label }}</a>
+                {% else %}
+                  <a class="nav-link" href="{{ link.url }}"
+                     target="{% if link.external %}_blank{% else %}_self{% endif %}">
+                    {{ link.label }}{% if link.external %}&nbsp;<i class="bi bi-box-arrow-up-right"></i>{% endif %}
+                  </a>
+                {% endif %}
+              </li>
+            {% endfor %}
+          {% endif %}
+        {% endblock %}
+      </ul>
     </div>
-  </nav>
+  </div>
+</nav>
 
-  <main class="container py-5">
-    {% block content %}{% endblock %}
-  </main>
+<main class="container py-5">
+  {% block content %}{% endblock %}
+</main>
 
-  <footer class="border-top py-4">
-    <div class="container text-muted small">
-      © {{ 2025 }} BioMedical Terminology Service — by Firefox2100
-    </div>
-  </footer>
+<footer class="border-top py-4">
+  <div class="container text-muted small">
+    © {{ 2025 }} BioMedical Terminology Service — by Firefox2100
+  </div>
+</footer>
 
-  <script nonce="{{ request.state.csp_nonce }}" src="{{ url_for('static', path='vendor/bootstrap/5.3.8/js/bootstrap.bundle.min.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}"
+        src="{{ url_for('static', path='vendor/bootstrap/5.3.8/js/bootstrap.bundle.min.js') }}"></script>
 </body>
 </html>

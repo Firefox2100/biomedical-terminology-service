@@ -1,10 +1,10 @@
-from uuid import UUID
-from fastapi import APIRouter, Query, Depends, Request, HTTPException
+from markdown import markdown
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import HTMLResponse
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, get_active_doc_db
-from bioterms.vocabulary import get_vocabulary_status
+from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
 from .utils import TEMPLATES, build_nav_links
 
 
@@ -99,3 +99,29 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
     :param doc_db: Document database instance.
     :return: An HTML response with the vocabulary information.
     """
+    try:
+        vocab_status = await get_vocabulary_status(
+            prefix,
+            doc_db=doc_db,
+        )
+        nav_links = await build_nav_links(request, doc_db)
+        license_str = get_vocabulary_license(prefix)
+        license_html = None
+        if license_str:
+            license_html = markdown(
+                license_str,
+                extensions=["extra", "sane_lists", "toc"]
+            )
+
+        return TEMPLATES.TemplateResponse(
+            'vocabulary_detail.html',
+            {
+                'request': request,
+                'page_title': f'{vocab_status.name} | BioMedical Terminology Service',
+                'vocabulary': vocab_status,
+                'nav_links': nav_links,
+                'license_html': license_html,
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h1 class="h4 mb-1">{{ vocabulary.name }}</h1>
+      <div class="text-muted small">Vocabulary details</div>
+    </div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('list_vocabularies') }}">&laquo; Back to Vocabularies</a>
+  </div>
+
+  <div class="card mb-3 shadow-sm">
+    <div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-3">Prefix</dt>
+        <dd class="col-sm-9"><code class="small">{{ vocabulary.prefix }}</code></dd>
+
+        <dt class="col-sm-3">Status</dt>
+        <dd class="col-sm-9">
+          {% if vocabulary.loaded %}
+            <span class="badge text-bg-success">Loaded</span>
+          {% else %}
+            <span class="badge text-bg-warning">Not Loaded</span>
+          {% endif %}
+        </dd>
+
+        <dt class="col-sm-3">Name</dt>
+        <dd class="col-sm-9">{{ vocabulary.name }}</dd>
+
+        <dt class="col-sm-3">Concept count</dt>
+        <dd class="col-sm-9">{{ vocabulary.concept_count }}</dd>
+      </dl>
+    </div>
+  </div>
+
+  {% if actions and actions|length > 0 %}
+    <div class="card mb-4 border-0">
+      <div class="card-body pt-2 pb-0">
+        <h2 class="h6 mb-3">Actions</h2>
+        <div class="d-flex flex-wrap gap-2">
+          {% for action in actions %}
+            {% set btn_color = action.color or 'secondary' %}
+            <form method="post" action="{{ action.post_url }}" class="d-inline">
+              <input type="hidden" name="csrftoken" value="{{ request.scope.csrftoken() }}">
+              <button
+                type="submit"
+                class="btn btn-{{ btn_color }} btn-sm"
+                {% if btn_color in ['danger','warning'] %}
+                onclick="return confirm('Are you sure?');"
+                {% endif %}
+              >
+                {{ action.label }}
+              </button>
+            </form>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if license_html %}
+    <div class="card mb-4 shadow-sm">
+      <div class="card-header">
+        <h2 class="h6 mb-0">License</h2>
+      </div>
+      <div class="card-body">
+        <div class="markdown-body small">
+          {{ license_html | safe }}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

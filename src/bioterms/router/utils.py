@@ -48,12 +48,20 @@ async def build_nav_links(request: Request, db: DocumentDatabase) -> list[dict]:
             'label': 'Home',
             'url': request.url_for('get_home_page'),
             'active': path == '/',
+            'external': False,
         },
         {
             'label': 'Vocabularies',
             'url': request.url_for('list_vocabularies'),
             'active': path.startswith('/vocabularies'),
-        }
+            'external': False,
+        },
+        {
+            'label': 'OpenAPI',
+            'url': '/docs',
+            'active': False,
+            'external': True,
+        },
     ]
 
     # if username:
