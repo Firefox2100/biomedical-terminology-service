@@ -12,7 +12,8 @@ from .utils import response_generator
 
 
 auto_complete_router = APIRouter(
-    tags=['Auto Complete']
+    prefix='/api',
+    tags=['Auto Complete'],
 )
 
 

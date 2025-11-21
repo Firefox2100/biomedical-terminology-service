@@ -15,7 +15,8 @@ from .utils import response_generator
 
 
 data_router = APIRouter(
-    tags=['Data Management']
+    prefix='/api',
+    tags=['Data Management'],
 )
 
 

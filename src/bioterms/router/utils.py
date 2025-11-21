@@ -1,7 +1,10 @@
 import importlib.resources as pkg_resources
 from typing import AsyncIterator
 from pydantic import BaseModel
+from fastapi import Request
 from fastapi.templating import Jinja2Templates
+
+from bioterms.database import DocumentDatabase
 
 
 async def response_generator(data_iter: AsyncIterator[BaseModel],
@@ -23,6 +26,49 @@ async def response_generator(data_iter: AsyncIterator[BaseModel],
         yield concept.model_dump_json().encode()
 
     yield b']'
+
+
+async def build_nav_links(request: Request, db: DocumentDatabase) -> list[dict]:
+    """
+    Build the navigation links in the nav bar for the UI.
+    :return: A list of navigation link dictionaries.
+    """
+    path = request.url.path
+    username = request.session.get('username')
+
+    if username:
+        user = await db.users.get(username)
+
+        if not user:
+            username = None
+            request.session['username'] = None
+
+    nav_links = [
+        {
+            'label': 'Home',
+            'url': request.url_for('get_home_page'),
+            'active': path == '/',
+        },
+        {
+            'label': 'Vocabularies',
+            'url': request.url_for('list_vocabularies'),
+            'active': path.startswith('/vocabularies'),
+        }
+    ]
+
+    # if username:
+    #     nav_links.append({
+    #         'label': f'Logout ({username})',
+    #         'url': request.url_for('admin_logout'),
+    #         'active': False
+    #     })
+    # else:
+    #     nav_links.append({
+    #         'label': 'Login',
+    #         'url': str(request.url_for('get_admin_login_page')) + f'?next={path}',
+    #     })
+
+    return nav_links
 
 
 def get_templates() -> Jinja2Templates:

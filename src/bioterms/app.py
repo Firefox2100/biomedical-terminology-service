@@ -1,4 +1,5 @@
 import secrets
+import traceback
 import importlib.resources as pkg_resources
 from contextlib import asynccontextmanager
 import uvicorn
@@ -15,7 +16,7 @@ from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
 from bioterms.router import auto_complete_router, data_router, expand_router, ui_router
-from bioterms.router.utils import TEMPLATES
+from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
 @asynccontextmanager
@@ -48,13 +49,6 @@ def create_app() -> FastAPI:
     FastAPI application factory function.
     :return: An instance of FastAPI application.
     """
-    html_paths = [
-        '',
-    ]
-    html_start_with = [
-        '/vocabularies',
-    ]
-
     app = FastAPI(
         title='BioMedical Terminology Service',
         version=__version__,
@@ -110,19 +104,12 @@ def create_app() -> FastAPI:
 
     @app.middleware('http')
     async def disable_cors_for_api(request, call_next):
-        request_path = request.url.path
-        is_html = False
-
-        if any(request_path == path for path in html_paths) or \
-            any(request_path.startswith(path) for path in html_start_with):
-            is_html = True
-
-        if not is_html:
+        if request.url.path.startswith('/api'):
             request.scope['cors_exempt'] = True
 
         response = await call_next(request)
 
-        if not is_html:
+        if request.url.path.startswith('/api'):
             response.headers['Access-Control-Allow-Origin'] = '*'
 
         return response
@@ -134,14 +121,12 @@ def create_app() -> FastAPI:
 
         response = await call_next(request)
 
-        request_path = request.url.path
-        is_html = False
-
-        if any(request_path == path for path in html_paths) or \
-            any(request_path.startswith(path) for path in html_start_with):
-            is_html = True
-
-        if not is_html:
+        if any([
+            request.url.path.startswith('/static/'),
+            request.url.path.startswith('/api/'),
+            request.url.path.startswith('/docs'),
+            request.url.path.startswith('/redoc'),
+        ]):
             return response
 
         # Build a strict policy (adjust as you add features)
@@ -213,41 +198,36 @@ def create_app() -> FastAPI:
     async def http_exception_handler(request, exc):
         LOGGER.error('HTTP Exception: %s', exc)
 
-        request_path = request.url.path
-        if any(request_path == path for path in html_paths) or \
-            any(request_path.startswith(path) for path in html_start_with):
-            # For UI endpoints, render HTML error page
-            context = {
-                'request': request,
-                'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
-                'detail': getattr(exc, 'detail', None),
-                'return_url': '/',
-                'return_label': 'Back to Home',
-            }
+        if request.url.path.startswith('/api'):
+            return await fastapi_http_exception_handler(request, exc)
 
-            if exc.status_code == 404:
-                return TEMPLATES.TemplateResponse(
-                    '404.html',
-                    context=context,
-                    status_code=404
-                )
+        doc_db = await get_active_doc_db()
+        nav_links = await build_nav_links(request, doc_db)
 
+        context = {
+            'request': request,
+            'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
+            'detail': getattr(exc, 'detail', None),
+            'nav_links': nav_links,
+            'return_url': '/',
+            'return_label': 'Back to Home',
+        }
+
+        if exc.status_code == 404:
             return TEMPLATES.TemplateResponse(
-                '500.html',
+                '404.html',
                 context=context,
-                status_code=exc.status_code
+                status_code=404
             )
 
-        return await fastapi_http_exception_handler(request, exc)
+        return TEMPLATES.TemplateResponse(
+            '500.html',
+            context=context,
+            status_code=exc.status_code
+        )
 
     def skip_paths(scope):
-        request_path = scope['path']
-
-        if any(request_path == path for path in html_paths) or \
-            any(request_path.startswith(path) for path in html_start_with):
-            return False
-
-        return True
+        return scope['path'].startswith('/api/')
 
     app = asgi_csrf(
         app,
