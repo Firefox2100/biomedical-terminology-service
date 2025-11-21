@@ -1,16 +1,21 @@
+import secrets
 import importlib.resources as pkg_resources
 from contextlib import asynccontextmanager
 import uvicorn
-from fastapi import FastAPI, Request
+from starlette.middleware.sessions import SessionMiddleware
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
+from asgi_csrf import asgi_csrf
 
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
 from bioterms.router import auto_complete_router, data_router, expand_router, ui_router
+from bioterms.router.utils import TEMPLATES
 
 
 @asynccontextmanager
@@ -43,6 +48,13 @@ def create_app() -> FastAPI:
     FastAPI application factory function.
     :return: An instance of FastAPI application.
     """
+    html_paths = [
+        '',
+    ]
+    html_start_with = [
+        '/vocabularies',
+    ]
+
     app = FastAPI(
         title='BioMedical Terminology Service',
         version=__version__,
@@ -85,15 +97,80 @@ def create_app() -> FastAPI:
     # Backend-only service, CORS set to allow all origins by default
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=['*'],
+        allow_origins=(),
         allow_credentials=True,
-        allow_methods=('GET', 'POST', 'OPTIONS'),
+        allow_methods=('GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'),
         allow_headers=(
             'Authorization',
             'Content-Type',
             'Accept',
             'X-Requested-With',
         ),
+    )
+
+    @app.middleware('http')
+    async def disable_cors_for_api(request, call_next):
+        request_path = request.url.path
+        is_html = False
+
+        if any(request_path == path for path in html_paths) or \
+            any(request_path.startswith(path) for path in html_start_with):
+            is_html = True
+
+        if not is_html:
+            request.scope['cors_exempt'] = True
+
+        response = await call_next(request)
+
+        if not is_html:
+            response.headers['Access-Control-Allow-Origin'] = '*'
+
+        return response
+
+    @app.middleware('http')
+    async def csp_headers(request, call_next):
+        nonce = secrets.token_urlsafe(16)
+        request.state.csp_nonce = nonce
+
+        response = await call_next(request)
+
+        request_path = request.url.path
+        is_html = False
+
+        if any(request_path == path for path in html_paths) or \
+            any(request_path.startswith(path) for path in html_start_with):
+            is_html = True
+
+        if not is_html:
+            return response
+
+        # Build a strict policy (adjust as you add features)
+        policy = "; ".join([
+            "default-src 'self'",
+            "base-uri 'self'",
+            "object-src 'none'",
+            "frame-ancestors 'self'",
+            "form-action 'self'",
+            "img-src 'self' data:",
+            "font-src 'self'",
+            "style-src 'self'",
+            f"script-src 'self' 'nonce-{nonce}'",
+            "upgrade-insecure-requests",
+        ])
+
+        response.headers['Content-Security-Policy'] = policy
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+
+        return response
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=CONFIG.secret_key,
+        same_site='lax',
+        https_only=CONFIG.use_https,
     )
 
     app.include_router(auto_complete_router)
@@ -104,8 +181,16 @@ def create_app() -> FastAPI:
     static_file_path = pkg_resources.files('bioterms.data') / 'static'
     app.mount('/static', StaticFiles(directory=str(static_file_path)), name='static')
 
+    @app.get('/health', include_in_schema=False)
+    async def health_check():
+        """
+        Health check endpoint to verify the application is running.
+        :return: A JSON response indicating the application status.
+        """
+        return {'status': 'ok'}
+
     @app.exception_handler(BtsError)
-    async def cafe_variome_exception_handler(request: Request, exc: BtsError):
+    async def bioterms_exception_handler(request: Request, exc: BtsError):
         """
         Custom exception handler for BtsError exceptions.
         :param request: The request object.
@@ -123,6 +208,54 @@ def create_app() -> FastAPI:
                 }
             }
         )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request, exc):
+        LOGGER.error('HTTP Exception: %s', exc)
+
+        request_path = request.url.path
+        if any(request_path == path for path in html_paths) or \
+            any(request_path.startswith(path) for path in html_start_with):
+            # For UI endpoints, render HTML error page
+            context = {
+                'request': request,
+                'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
+                'detail': getattr(exc, 'detail', None),
+                'return_url': '/',
+                'return_label': 'Back to Home',
+            }
+
+            if exc.status_code == 404:
+                return TEMPLATES.TemplateResponse(
+                    '404.html',
+                    context=context,
+                    status_code=404
+                )
+
+            return TEMPLATES.TemplateResponse(
+                '500.html',
+                context=context,
+                status_code=exc.status_code
+            )
+
+        return await fastapi_http_exception_handler(request, exc)
+
+    def skip_paths(scope):
+        request_path = scope['path']
+
+        if any(request_path == path for path in html_paths) or \
+            any(request_path.startswith(path) for path in html_start_with):
+            return False
+
+        return True
+
+    app = asgi_csrf(
+        app,
+        signing_secret=CONFIG.secret_key,
+        always_protect={},
+        cookie_secure=CONFIG.use_https,
+        skip_if_scope=skip_paths,
+    )
 
     return app
 

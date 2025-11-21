@@ -4,6 +4,7 @@ from typing import AsyncIterator
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import DocDatabaseDriverType, ConceptPrefix
 from bioterms.model.concept import Concept
+from bioterms.model.user import UserRepository
 
 
 class DocumentDatabase(ABC):
@@ -17,6 +18,14 @@ class DocumentDatabase(ABC):
 
     This database interface focuses on the document database operations.
     """
+
+    @property
+    @abstractmethod
+    def users(self) -> UserRepository:
+        """
+        Get the user repository for managing admin users in the document database.
+        :return: UserRepository instance.
+        """
 
     @abstractmethod
     async def close(self):

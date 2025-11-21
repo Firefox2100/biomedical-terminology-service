@@ -1,7 +1,9 @@
 import os
 import logging
+import secrets
 from concurrent.futures import ProcessPoolExecutor
 from typing import Optional, Literal
+from argon2 import PasswordHasher
 from httpx import AsyncClient
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,6 +39,15 @@ class Settings(BaseSettings):
     logging_level: Literal['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'] = Field(
         'INFO',
         description='Logging level for the application'
+    )
+    secret_key: str = Field(
+        default_factory=secrets.token_urlsafe,
+        description='Secret key for the application',
+    )
+    use_https: bool = Field(
+        False,
+        description='Whether this application is behind an HTTPS proxy. This affects cookie settings, '
+                    'redirect URLs, and security headers.',
     )
     enable_metrics: bool = Field(
         True,
@@ -159,3 +170,5 @@ if not LOGGER.hasHandlers():
 
 EXECUTOR = ProcessPoolExecutor(max_workers=CONFIG.process_limit)
 DOWNLOAD_CLIENT = AsyncClient()
+
+PH = PasswordHasher()
