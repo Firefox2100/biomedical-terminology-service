@@ -7,5 +7,52 @@
           This service contains data for various biomedical terminologies, ontologies, and vocabularies.
       </p>
     </div>
+
+    <div class="col-sm-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center">
+          <div class="display-4 fw-bold">{{ vocabulary_count }}</div>
+          <div class="text-secondary">Vocabularies</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-sm-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center">
+          <div class="display-4 fw-bold">{{ concept_count }}</div>
+          <div class="text-secondary">Concepts</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <section class="mt-4">
+        <h2 class="h5">About</h2>
+        <p>
+          The BioMedical Terminology Service is designed to facilitate access to and usage of biomedical
+          terminologies, ontologies, and vocabularies. It offers a centralised API service that allows users
+          to query, retrieve and interact with a wide range of biomedical terminological resources in various
+          use cases, including research, clinical applications, and data analysis.
+        </p>
+      </section>
+
+      <section>
+        <h2 class="h5">Features</h2>
+        <p>
+          On top of the normal searching and querying functionalities on biomedical terminologies, this service also
+          provides advanced features:
+        </p>
+        <ul>
+          <li>Parent-Child traversal for use in external queries.</li>
+          <li>Inter- and intra-vocabulary mapping for normalising subject tagging.</li>
+          <li>Semantic similarity based searches and translations in between term sets.</li>
+          <li>Support for multiple terminologies, ontologies, and vocabularies.</li>
+          <li>RESTful API for easy integration with other applications and services.</li>
+          <li>Regular updates to ensure access to the latest versions of terminological resources.</li>
+          <li>Comprehensive documentation and usage examples.</li>
+        </ul>
+      </section>
+    </div>
   </div>
 {% endblock %}

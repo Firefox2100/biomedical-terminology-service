@@ -4,6 +4,7 @@ import importlib.resources
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
+from bioterms.model.vocabulary_status import VocabularyStatus
 
 
 ALL_VOCABULARIES = {
@@ -131,3 +132,29 @@ def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:
             return license_file.read_text()
     except FileNotFoundError:
         return None
+
+
+async def get_vocabulary_status(prefix: ConceptPrefix,
+                                doc_db: DocumentDatabase = None,
+                                ) -> VocabularyStatus:
+    """
+    Get the status of the vocabulary specified by the prefix.
+    :param prefix: The prefix of the vocabulary.
+    :param doc_db: The document database instance.
+    :return: The vocabulary status.
+    """
+    vocabulary_module = get_vocabulary_module(prefix)
+
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+
+    concept_count = await doc_db.count_terms(prefix)
+    annotations = vocabulary_module.ANNOTATIONS
+
+    return VocabularyStatus(
+        prefix=prefix,
+        name=vocabulary_module.VOCABULARY_NAME,
+        loaded=concept_count > 0,
+        conceptCount=concept_count,
+        annotations=annotations,
+    )

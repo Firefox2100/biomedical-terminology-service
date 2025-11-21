@@ -8,7 +8,9 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.concept import Concept
-from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license
+from bioterms.model.vocabulary_status import VocabularyStatus
+from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license, \
+    get_vocabulary_status
 from .utils import response_generator
 
 
@@ -34,19 +36,24 @@ class IngestResponse(JsonModel):
     )
 
 
-@data_router.get('/{prefix}')
-async def get_vocabulary_info(prefix: ConceptPrefix):
+@data_router.get('/{prefix}', response_model=VocabularyStatus)
+async def get_vocabulary_status_info(prefix: ConceptPrefix):
     """
-    Get information about the specified vocabulary.
-    :param prefix:
-    :return:
+    Get status about the specified vocabulary.
+    \f
+    :param prefix: The vocabulary prefix.
+    :return: The vocabulary status information.
     """
+    vocab_status = await get_vocabulary_status(prefix)
+
+    return vocab_status
 
 
 @data_router.get('/{prefix}/license', response_class=Response)
 async def get_license(prefix: ConceptPrefix):
     """
     Get the licence information for the specified vocabulary.
+    \f
     :param prefix: The vocabulary prefix.
     :return: The licence information as a Markdown response.
     """
@@ -66,12 +73,14 @@ async def get_license(prefix: ConceptPrefix):
 @data_router.get('/{prefix}/{concept_id}', response_model=Concept)
 async def get_concept(prefix: ConceptPrefix,
                       concept_id: str,
+                      doc_db: DocumentDatabase = Depends(get_active_doc_db),
                       ):
     """
     Get a specific concept by its ID from the specified vocabulary.
-    :param prefix:
-    :param concept_id:
-    :return:
+    \f
+    :param prefix: The vocabulary prefix.
+    :param concept_id: The ID of the concept to retrieve.
+    :return: The Concept instance.
     """
 
 
@@ -88,6 +97,7 @@ async def get_vocabulary_data(prefix: ConceptPrefix,
                               ):
     """
     Get documents/records for the specified vocabulary from the document database.
+    \f
     :param prefix: The vocabulary prefix.
     :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
     :param doc_db: The document database instance.
@@ -119,6 +129,7 @@ async def delete_vocabulary_data(prefix: ConceptPrefix,
                                  ):
     """
     Delete all documents/records for the specified vocabulary from the document database.
+    \f
     :param prefix: The vocabulary prefix.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
@@ -136,6 +147,7 @@ async def get_documents(prefix: ConceptPrefix,
                         ):
     """
     Get all documents from the specified vocabulary database as a JSON list.
+    \f
     :param prefix: The vocabulary prefix.
     :param doc_db: The document database instance.
     :return: A stream response containing all documents in JSON format.
@@ -164,6 +176,7 @@ async def ingest_documents(prefix: ConceptPrefix,
     This endpoint is used to upload the vocabulary directly into the database, without the need
     to download and parse the original upstream release files, or in case of modified vocabulary files.
     The server expects a stream upload with one document per line in JSON format.
+    \f
     :param prefix: The vocabulary prefix.
     :param request: The FastAPI request object.
     :param doc_db: The document database instance.
