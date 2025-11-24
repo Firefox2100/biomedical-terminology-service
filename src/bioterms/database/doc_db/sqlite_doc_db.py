@@ -373,6 +373,39 @@ class SqliteDocumentDatabase(DocumentDatabase):
             concept = Concept.model_validate(doc)
             yield concept
 
+    async def get_terms_by_ids_iter(self,
+                                    prefix: ConceptPrefix,
+                                    concept_ids: list[str],
+                                    ) -> AsyncIterator[Concept]:
+        """
+        Get terms by their IDs for a given prefix in the document database as an async iterator.
+        :param prefix: The vocabulary prefix to get documents for.
+        :param concept_ids: A list of concept IDs to retrieve.
+        :return: An asynchronous iterator yielding Concept instances.
+        """
+        table_name = re.sub(r'\W+', '_', prefix.value.lower())
+        await self._ensure_concept_table_exists(prefix)
+        alias_cols = self._get_column_names(prefix)
+
+        placeholders = ', '.join(['?'] * len(concept_ids))
+        query = f'SELECT * FROM "{table_name}" WHERE "termId" IN ({placeholders})'
+        cursor = await self.db.execute(query, tuple(concept_ids))
+
+        async for row in cursor:
+            doc = {}
+            for col, value in zip(alias_cols, row):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, (dict, list)):
+                        doc[col] = parsed
+                    else:
+                        doc[col] = value
+                except (json.JSONDecodeError, TypeError):
+                    doc[col] = value
+
+            concept = Concept.model_validate(doc)
+            yield concept
+
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
                                    ):

@@ -12,7 +12,7 @@ from .utils import response_generator
 
 
 auto_complete_router = APIRouter(
-    prefix='/api',
+    prefix='/api/vocabularies',
     tags=['Auto Complete'],
 )
 

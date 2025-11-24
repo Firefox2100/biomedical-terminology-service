@@ -1,0 +1,28 @@
+type HpoConcept implements Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    comment: String
+    status: ConceptStatus!
+
+    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationshipType!]!
+}
+
+type HpoConceptResponse {
+    error: QueryError
+    data: HpoConcept
+}
+
+type HpoConceptListResponse {
+    error: QueryError
+    data: [HpoConcept]
+}
+
+type HpoQuery {
+    hpoConcept(conceptId: String!): HpoConceptResponse
+}
+
+extend type Query {
+    hpo: HpoQuery
+}

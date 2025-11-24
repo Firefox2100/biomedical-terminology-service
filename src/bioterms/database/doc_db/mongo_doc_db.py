@@ -249,6 +249,25 @@ class MongoDocumentDatabase(DocumentDatabase):
         async for doc in cursor:
             yield Concept.model_validate(doc)
 
+    async def get_terms_by_ids_iter(self,
+                                    prefix: ConceptPrefix,
+                                    concept_ids: list[str],
+                                    ) -> AsyncIterator[Concept]:
+        """
+        Get terms by their IDs for a given prefix in the document database as an async iterator.
+        :param prefix: The vocabulary prefix to get documents for.
+        :param concept_ids: A list of concept IDs to retrieve.
+        :return: An asynchronous iterator yielding Concept instances.
+        """
+        collection = self.db[str(prefix.value)]
+        cursor = collection.find(
+            {'conceptId': {'$in': concept_ids}},
+            {'_id': 0, 'nGrams': 0, 'searchText': 0}
+        )
+
+        async for doc in cursor:
+            yield Concept.model_validate(doc)
+
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
                                    ):

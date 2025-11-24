@@ -1,0 +1,40 @@
+enum ConceptPrefix {
+    hpo
+}
+
+enum ConceptStatus {
+    active
+    deprecated
+}
+
+enum ConceptRelationshipType {
+    isA
+    replacedBy
+    annotation
+    similarity
+}
+
+interface ConceptRelationship {
+    from: Concept!
+    to: Concept!
+    kind: ConceptRelationshipType!
+}
+
+interface Concept {
+    prefix: ConceptPrefix!
+    conceptId: String
+    label: String
+    definition: String
+    status: ConceptStatus!
+
+    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationshipType!]!
+}
+
+type QueryError {
+  code: String!
+  message: String!
+}
+
+type Query {
+    loadedPrefixes: [ConceptPrefix!]!
+}

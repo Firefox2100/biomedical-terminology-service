@@ -1,0 +1,28 @@
+type OrdoConcept implements Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    synonyms: [String!]
+    status: ConceptStatus!
+
+    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationshipType!]!
+}
+
+type OrdoConceptResponse {
+    error: QueryError
+    data: OrdoConcept
+}
+
+type OrdoConceptListResponse {
+    error: QueryError
+    data: [OrdoConcept]
+}
+
+type OrdoQuery {
+    hpoConcept(conceptId: String!): OrdoConceptResponse
+}
+
+extend type Query {
+    ordo: OrdoQuery
+}

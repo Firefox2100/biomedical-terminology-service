@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 import traceback
 import importlib.resources as pkg_resources
@@ -15,22 +16,26 @@ from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
+from bioterms.graphql_api import create_graphql_app
 from bioterms.router import auto_complete_router, data_router, expand_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     """
     Lifespan context manager for the FastAPI application.
-    :param _: The FastAPI application instance.
+    :param app: The FastAPI application instance.
     """
     LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
 
     doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
+    graphql_app = await create_graphql_app()
+
     try:
+        app.mount('/api/graphql', graphql_app)
         yield
     except Exception as e:
         LOGGER.critical(f'Fatal error during application lifespan: {e}', exc_info=True)

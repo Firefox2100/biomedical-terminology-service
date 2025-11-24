@@ -112,6 +112,35 @@ class DocumentDatabase(ABC):
         return results
 
     @abstractmethod
+    def get_terms_by_ids_iter(self,
+                              prefix: ConceptPrefix,
+                              concept_ids: list[str],
+                              ) -> AsyncIterator[Concept]:
+        """
+        Get terms by their IDs for a given prefix in the document database as an async iterator.
+        :param prefix: The vocabulary prefix to get documents for.
+        :param concept_ids: A list of concept IDs to retrieve.
+        :return: An asynchronous iterator yielding Concept instances.
+        """
+
+    async def get_terms_by_ids(self,
+                               prefix: ConceptPrefix,
+                               concept_ids: list[str],
+                               ) -> list[Concept]:
+        """
+        Get terms by their IDs for a given prefix in the document database.
+        :param prefix: The vocabulary prefix to get documents for.
+        :param concept_ids: A list of concept IDs to retrieve.
+        :return: A list of Concept instances.
+        """
+        it = self.get_terms_by_ids_iter(prefix, concept_ids)
+        results: list[Concept] = []
+        async for concept in it:
+            results.append(concept)
+
+        return results
+
+    @abstractmethod
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
                                    ):

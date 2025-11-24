@@ -11,7 +11,7 @@ from .utils import response_generator
 
 
 expand_router = APIRouter(
-    prefix='/api',
+    prefix='/api/vocabularies',
     tags=['Expansion'],
 )
 

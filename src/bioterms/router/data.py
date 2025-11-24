@@ -15,7 +15,7 @@ from .utils import response_generator
 
 
 data_router = APIRouter(
-    prefix='/api',
+    prefix='/api/vocabularies',
     tags=['Data Management'],
 )
 
@@ -147,7 +147,7 @@ async def get_documents(prefix: ConceptPrefix,
                         doc_db: DocumentDatabase = Depends(get_active_doc_db),
                         ):
     """
-    Get all documents from the specified vocabulary database as a JSON list.
+    Download all documents from the specified vocabulary database as a JSON list.
     \f
     :param prefix: The vocabulary prefix.
     :param doc_db: The document database instance.
