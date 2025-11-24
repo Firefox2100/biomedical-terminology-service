@@ -1,10 +1,9 @@
 import os
-import anyio
 import httpx
 import networkx as nx
 from owlready2 import get_ontology, ThingClass
 
-from bioterms.etc.consts import CONFIG, DOWNLOAD_CLIENT
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
@@ -14,7 +13,7 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'Human Phenotype Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.HPO
-ANNOTATIONS = []
+ANNOTATIONS = [ConceptPrefix.ORDO]
 FILE_PATHS = ['hpo/hp.owl']
 CONCEPT_CLASS = Concept
 

@@ -1,6 +1,16 @@
 from enum import Enum, StrEnum
 
 
+class AnnotationType(Enum):
+    """
+    The type of annotation.
+    """
+    EXACT = 'exact'
+    BROAD = 'broad'
+    NARROW = 'narrow'
+    RELATED = 'related'
+
+
 class CacheDriverType(Enum):
     """
     The type of cache driver.

@@ -5,6 +5,7 @@ import networkx as nx
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix
 from bioterms.model.concept import Concept
+from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
 
 
@@ -39,12 +40,64 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    async def get_vocabulary_graph(self,
+                                   prefix: ConceptPrefix,
+                                   ) -> nx.DiGraph:
+        """
+        Retrieve the vocabulary graph from the graph database.
+        :param prefix: The node prefix of the vocabulary to retrieve.
+        :return: The vocabulary graph.
+        """
+
+    @abstractmethod
     async def delete_vocabulary_graph(self,
                                       prefix: ConceptPrefix,
                                       ):
         """
         Delete the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to delete.
+        """
+
+    @abstractmethod
+    async def count_terms(self,
+                          prefix: ConceptPrefix,
+                          ) -> int:
+        """
+        Count the number of nodes for a given prefix in the graph database.
+        :param prefix: The vocabulary prefix to count nodes for.
+        :return: The number of nodes with the given prefix.
+        """
+
+    @abstractmethod
+    async def save_annotations(self,
+                               annotations: list[Annotation],
+                               ):
+        """
+        Save a list of annotations into the graph database.
+        :param annotations: A list of Annotation instances to save.
+        """
+
+    @abstractmethod
+    async def delete_annotations(self,
+                                 prefix_1: ConceptPrefix,
+                                 prefix_2: ConceptPrefix,
+                                 ):
+        """
+        Delete annotations between two vocabularies from the graph database.
+        :param prefix_1: The first vocabulary prefix.
+        :param prefix_2: The second vocabulary prefix.
+        """
+
+    @abstractmethod
+    async def count_annotations(self,
+                                prefix_1: ConceptPrefix,
+                                prefix_2: ConceptPrefix,
+                                ) -> int:
+        """
+        Count the number of annotations between two vocabularies in the graph database.
+        :param prefix_1: The first vocabulary prefix.
+        :param prefix_2: The second vocabulary prefix.
+        :return: The number of annotations between the two vocabularies.
         """
 
     @abstractmethod

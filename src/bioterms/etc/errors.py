@@ -29,3 +29,12 @@ class IndexCreationError(BtsError):
                  status_code: int = 500
                  ):
         super().__init__(message, status_code)
+
+
+class VocabularyNotLoaded(BtsError):
+    """Raised when a vocabulary is not loaded."""
+    def __init__(self,
+                 message: str = 'Vocabulary not loaded',
+                 status_code: int = 400
+                 ):
+        super().__init__(message, status_code)

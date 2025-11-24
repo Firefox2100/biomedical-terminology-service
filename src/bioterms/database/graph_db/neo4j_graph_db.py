@@ -6,6 +6,7 @@ from neo4j.exceptions import TransientError
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
+from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
 from .graph_db import GraphDatabase
 
@@ -129,6 +130,49 @@ class Neo4jGraphDatabase(GraphDatabase):
                 parameters={'edges': edges},
             )
 
+    async def get_vocabulary_graph(self,
+                                   prefix: ConceptPrefix,
+                                   ) -> nx.DiGraph:
+        """
+        Retrieve the vocabulary graph from the graph database.
+        :param prefix: The node prefix of the vocabulary to retrieve.
+        :return: The vocabulary graph.
+        """
+        vocabulary_graph = nx.DiGraph()
+
+        async with self._client.session() as session:
+            # Retrieve all nodes first from neo4j
+            nodes_result = await self._execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                RETURN n.id AS concept_id
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+
+            async for record in nodes_result:
+                concept_id = record['concept_id']
+                vocabulary_graph.add_node(concept_id)
+
+            # Retrieve all edges that connects WITHIN the vocabulary
+            edges_result = await self._execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                RETURN source.id AS source_id, target.id AS target_id, type(r) AS rel_label
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+
+            async for record in edges_result:
+                source_id = record['source_id']
+                target_id = record['target_id']
+                rel_label = record['rel_label']
+                vocabulary_graph.add_edge(source_id, target_id, label=rel_label)
+
+        return vocabulary_graph
+
     async def delete_vocabulary_graph(self,
                                       prefix: ConceptPrefix,
                                       ):
@@ -145,6 +189,99 @@ class Neo4jGraphDatabase(GraphDatabase):
                 session=session,
                 parameters={'prefix': prefix.value},
             )
+
+    async def count_terms(self,
+                          prefix: ConceptPrefix,
+                          ) -> int:
+        """
+        Count the number of nodes for a given prefix in the graph database.
+        :param prefix: The vocabulary prefix to count nodes for.
+        :return: The number of nodes with the given prefix.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                RETURN count(n) AS term_count
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+
+            record = await result.single()
+            return record['term_count'] if record is not None else 0
+
+    async def save_annotations(self,
+                               annotations: list[Annotation],
+                               ):
+        """
+        Save a list of annotations into the graph database.
+        :param annotations: A list of Annotation instances to save.
+        """
+        async with self._client.session() as session:
+            await self._execute_query_with_retry(
+                query="""
+                UNWIND $annotations AS annotation
+                MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
+                MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                WITH source,
+                    target,
+                    coalesce(annotation, 'annotatedWith') AS rel_type,
+                    coalesce(annotation.properties, {}) AS props
+                CALL apoc.merge.relationship(source, rel_type, {}, props, target) YIELD rel
+                RETURN count(rel) AS created
+                """,
+                session=session,
+                parameters={'annotations': [annotation.model_dump() for annotation in annotations]},
+            )
+
+    async def delete_annotations(self,
+                                 prefix_1: ConceptPrefix,
+                                 prefix_2: ConceptPrefix,
+                                 ):
+        """
+        Delete annotations between two vocabularies from the graph database.
+        :param prefix_1: The first vocabulary prefix.
+        :param prefix_2: The second vocabulary prefix.
+        """
+        async with self._client.session() as session:
+            await self._execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
+                DELETE r
+                """,
+                session=session,
+                parameters={
+                    'prefix_1': prefix_1.value,
+                    'prefix_2': prefix_2.value,
+                },
+            )
+
+    async def count_annotations(self,
+                                prefix_1: ConceptPrefix,
+                                prefix_2: ConceptPrefix,
+                                ) -> int:
+        """
+        Count the number of annotations between two vocabularies in the graph database.
+        :param prefix_1: The first vocabulary prefix.
+        :param prefix_2: The second vocabulary prefix.
+        :return: The number of annotations between the two vocabularies.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
+                RETURN count(r) AS annotation_count
+                """,
+                session=session,
+                parameters={
+                    'prefix_1': prefix_1.value,
+                    'prefix_2': prefix_2.value,
+                },
+            )
+
+            record = await result.single()
+            return record['annotation_count'] if record is not None else 0
 
     async def create_index(self):
         """
