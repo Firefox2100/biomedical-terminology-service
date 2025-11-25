@@ -40,6 +40,7 @@ def assemble_response(data: dict = None,
 @GRAPHQL_QUERY_TYPE.field('loadedPrefixes')
 async def resolve_loaded_prefixes(_, info) -> list[str]:
     doc_db = info.context['doc_db']
+    graph_db = info.context['graph_db']
 
     loaded_prefixes = []
 
@@ -47,6 +48,7 @@ async def resolve_loaded_prefixes(_, info) -> list[str]:
         vocab_status = await get_vocabulary_status(
             prefix,
             doc_db=doc_db,
+            graph_db=graph_db,
         )
         if vocab_status.loaded:
             loaded_prefixes.append(prefix.value)

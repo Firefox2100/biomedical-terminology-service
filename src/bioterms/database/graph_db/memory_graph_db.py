@@ -72,6 +72,21 @@ class MemoryGraphDatabase(GraphDatabase):
 
         return graph.number_of_nodes()
 
+    async def count_internal_relationships(self,
+                                           prefix: ConceptPrefix,
+                                           ) -> int:
+        """
+        Count the number of internal relationships within a vocabulary in the graph database.
+        :param prefix: The vocabulary prefix to count relationships for
+        :return: The number of internal relationships within the vocabulary.
+        """
+        graph = self._graphs.get(prefix)
+
+        if graph is None:
+            return 0
+
+        return graph.number_of_edges()
+
     async def save_annotations(self,
                                annotations: list[Annotation],
                                ):

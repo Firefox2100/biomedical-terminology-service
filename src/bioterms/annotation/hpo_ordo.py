@@ -40,7 +40,7 @@ async def download_annotation(download_client: httpx.AsyncClient = None):
     )
 
 
-def delete_vocabulary_files():
+def delete_annotation_files():
     """
     Delete the HOOM files.
     """

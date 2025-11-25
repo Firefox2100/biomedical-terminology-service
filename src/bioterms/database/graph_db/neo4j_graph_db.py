@@ -211,6 +211,27 @@ class Neo4jGraphDatabase(GraphDatabase):
             record = await result.single()
             return record['term_count'] if record is not None else 0
 
+    async def count_internal_relationships(self,
+                                           prefix: ConceptPrefix,
+                                           ) -> int:
+        """
+        Count the number of internal relationships within a vocabulary in the graph database.
+        :param prefix: The vocabulary prefix to count relationships for
+        :return: The number of internal relationships within the vocabulary.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                RETURN count(r) AS relationship_count
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+
+            record = await result.single()
+            return record['relationship_count'] if record is not None else 0
+
     async def save_annotations(self,
                                annotations: list[Annotation],
                                ):
@@ -226,7 +247,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
                 WITH source,
                     target,
-                    coalesce(annotation, 'annotatedWith') AS rel_type,
+                    coalesce(annotation.annotationType, 'annotatedWith') AS rel_type,
                     coalesce(annotation.properties, {}) AS props
                 CALL apoc.merge.relationship(source, rel_type, {}, props, target) YIELD rel
                 RETURN count(rel) AS created

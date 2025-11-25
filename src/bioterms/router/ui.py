@@ -5,8 +5,9 @@ from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, sta
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import DocumentDatabase, get_active_doc_db
+from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
+from bioterms.annotation import get_annotation_status
 from .utils import TEMPLATES, build_nav_links, sanitise_next_url
 
 
@@ -18,10 +19,14 @@ ui_router = APIRouter(
 @ui_router.get('/', response_class=HTMLResponse)
 async def get_home_page(request: Request,
                         doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                        graph_db: GraphDatabase = Depends(get_active_graph_db),
                         ):
     """
     Serve the home page of the BioMedical Terminology Service.
     \f
+    :param request: Request object.
+    :param doc_db: Document database instance.
+    :param graph_db: Graph database instance.
     :return: An HTML response with the home page content.
     """
     try:
@@ -31,6 +36,7 @@ async def get_home_page(request: Request,
             vocab_status = await get_vocabulary_status(
                 prefix,
                 doc_db=doc_db,
+                graph_db=graph_db,
             )
 
             if vocab_status.loaded:
@@ -92,12 +98,14 @@ async def get_login_page(request: Request,
 @ui_router.get('/vocabularies', response_class=HTMLResponse)
 async def list_vocabularies(request: Request,
                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                            graph_db: GraphDatabase = Depends(get_active_graph_db),
                             ):
     """
     List all available vocabularies.
     \f
     :param request: Request object.
     :param doc_db: Document database instance.
+    :param graph_db: Graph database instance.
     :return: An HTML response with the list of vocabularies.
     """
     try:
@@ -106,6 +114,7 @@ async def list_vocabularies(request: Request,
             vocab_status = await get_vocabulary_status(
                 prefix,
                 doc_db=doc_db,
+                graph_db=graph_db,
             )
             vocab_statuses.append(vocab_status)
 
@@ -201,6 +210,7 @@ async def handle_logout(request: Request):
 async def get_vocabulary_info(prefix: ConceptPrefix,
                               request: Request,
                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                              graph_db: GraphDatabase = Depends(get_active_graph_db),
                               ):
     """
     Get information about the specified vocabulary.
@@ -208,12 +218,14 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
     :param prefix: The vocabulary prefix.
     :param request: Request object.
     :param doc_db: Document database instance.
+    :param graph_db: Graph database instance.
     :return: An HTML response with the vocabulary information.
     """
     try:
         vocab_status = await get_vocabulary_status(
             prefix,
             doc_db=doc_db,
+            graph_db=graph_db,
         )
         nav_links = await build_nav_links(request, doc_db)
         license_str = get_vocabulary_license(prefix)
@@ -221,8 +233,18 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
         if license_str:
             license_html = markdown(
                 license_str,
-                extensions=["extra", "sane_lists", "toc"]
+                extensions=['extra', 'sane_lists', 'toc']
             )
+
+        annotation_statuses = []
+        for annotation in vocab_status.annotations:
+            annotation_status = await get_annotation_status(
+                prefix_1=vocab_status.prefix,
+                prefix_2=annotation,
+                graph_db=graph_db,
+            )
+
+            annotation_statuses.append(annotation_status)
 
         return TEMPLATES.TemplateResponse(
             'vocabulary_detail.html',
@@ -230,6 +252,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
                 'request': request,
                 'page_title': f'{vocab_status.name} | BioMedical Terminology Service',
                 'vocabulary': vocab_status,
+                'annotations': annotation_statuses,
                 'nav_links': nav_links,
                 'license_html': license_html,
             }

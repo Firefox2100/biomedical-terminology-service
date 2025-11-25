@@ -29,9 +29,52 @@
 
         <dt class="col-sm-3">Concept count</dt>
         <dd class="col-sm-9">{{ vocabulary.concept_count }}</dd>
+
+        <dt class="col-sm-3">Relationship count</dt>
+        <dd class="col-sm-9">{{ vocabulary.relationship_count }}</dd>
       </dl>
     </div>
   </div>
+
+  {% if annotations and annotations|length > 0 %}
+    <div class="card mb-4 shadow-sm">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Annotation Status</h2>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead class="table-light">
+              <tr>
+                <th scope="col">Source</th>
+                <th scope="col">Target</th>
+                <th scope="col">Name</th>
+                <th scope="col">Status</th>
+                <th scope="col">Relationship Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ann in annotations %}
+                <tr>
+                  <td><code class="small">{{ ann.prefix_source }}</code></td>
+                  <td><code class="small">{{ ann.prefix_target }}</code></td>
+                  <td>{{ ann.name }}</td>
+                  <td>
+                    {% if ann.loaded %}
+                      <span class="badge text-bg-success">Loaded</span>
+                    {% else %}
+                      <span class="badge text-bg-warning">Not Loaded</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ ann.relationship_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  {% endif %}
 
   {% if actions and actions|length > 0 %}
     <div class="card mb-4 border-0">

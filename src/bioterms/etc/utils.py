@@ -37,6 +37,6 @@ async def download_file(url: str,
         owl_file_path = os.path.join(CONFIG.data_dir, file_path)
         os.makedirs(os.path.dirname(owl_file_path), exist_ok=True)
 
-        async with anyio.open_file(owl_file_path, 'wb') as owl_file:
+        async with await anyio.open_file(owl_file_path, 'wb') as owl_file:
             async for chunk in response.aiter_bytes():
                 await owl_file.write(chunk)

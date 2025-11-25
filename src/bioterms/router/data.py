@@ -38,14 +38,23 @@ class IngestResponse(JsonModel):
 
 
 @data_router.get('/{prefix}', response_model=VocabularyStatus)
-async def get_vocabulary_status_info(prefix: ConceptPrefix):
+async def get_vocabulary_status_info(prefix: ConceptPrefix,
+                                     doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                     graph_db: GraphDatabase = Depends(get_active_graph_db),
+                                     ):
     """
     Get status about the specified vocabulary.
     \f
     :param prefix: The vocabulary prefix.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
     :return: The vocabulary status information.
     """
-    vocab_status = await get_vocabulary_status(prefix)
+    vocab_status = await get_vocabulary_status(
+        prefix=prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
 
     return vocab_status
 

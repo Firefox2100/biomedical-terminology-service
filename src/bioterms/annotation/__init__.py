@@ -2,6 +2,8 @@ import importlib
 import importlib.resources
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.database import GraphDatabase, get_active_graph_db
+from bioterms.model.annotation_status import AnnotationStatus
 
 
 def get_annotation_module(prefix_1: ConceptPrefix,
@@ -22,3 +24,113 @@ def get_annotation_module(prefix_1: ConceptPrefix,
     annotation_module = importlib.import_module(f'bioterms.annotation.{annotation_module_name}')
 
     return annotation_module
+
+
+def get_annotation_config(prefix_1: ConceptPrefix,
+                          prefix_2: ConceptPrefix,
+                          ) -> dict:
+    """
+    Get the annotation configuration for the given pair of prefixes.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :return: The annotation configuration.
+    """
+    annotation_module = get_annotation_module(prefix_1, prefix_2)
+    return {
+        'name': annotation_module.ANNOTATION_NAME,
+        'prefix1': annotation_module.VOCABULARY_PREFIX_1,
+        'prefix2': annotation_module.VOCABULARY_PREFIX_2,
+        'filePaths': annotation_module.FILE_PATHS,
+    }
+
+
+async def download_annotation(prefix_1: ConceptPrefix,
+                              prefix_2: ConceptPrefix,
+                              redownload: bool = False,
+                              download_client=None,
+                              ):
+    """
+    Download the annotation specified by the pair of prefixes.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :param redownload: Whether to redownload the files even if they exist.
+    :param download_client: Optional httpx.AsyncClient to use for downloading.
+    """
+    annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+    if redownload:
+        annotation_module.delete_annotation_files()
+
+    await annotation_module.download_annotation(download_client=download_client)
+
+
+async def load_annotation(prefix_1: ConceptPrefix,
+                          prefix_2: ConceptPrefix,
+                          overwrite: bool = True,
+                          graph_db: GraphDatabase = None,
+                          ):
+        """
+        Load the annotation specified by the pair of prefixes.
+        :param prefix_1: The first prefix.
+        :param prefix_2: The second prefix.
+        :param overwrite: Whether to overwrite existing annotation data.
+        :param graph_db: Optional GraphDatabase instance to use.
+        """
+        annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+        await annotation_module.load_annotation_from_file(
+            overwrite=overwrite,
+            graph_db=graph_db,
+        )
+
+
+async def delete_annotation(prefix_1: ConceptPrefix,
+                            prefix_2: ConceptPrefix,
+                            graph_db: GraphDatabase = None,
+                            ):
+    """
+    Delete the annotation specified by the pair of prefixes from the database.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :param graph_db: Optional GraphDatabase instance to use.
+    """
+    annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+    if graph_db is None:
+        from bioterms.database.graph_db import get_active_graph_db
+        graph_db = get_active_graph_db()
+
+    await graph_db.delete_annotations(
+        prefix_1=annotation_module.VOCABULARY_PREFIX_1,
+        prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+    )
+
+
+async def get_annotation_status(prefix_1: ConceptPrefix,
+                                prefix_2: ConceptPrefix,
+                                graph_db: GraphDatabase = None,
+                                ) -> AnnotationStatus:
+    """
+    Get the annotation status for the given pair of prefixes.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :param graph_db: Optional GraphDatabase instance to use.
+    :return: The AnnotationStatus instance.
+    """
+    annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    annotation_count = await graph_db.count_annotations(
+        prefix_1=annotation_module.VOCABULARY_PREFIX_1,
+        prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+    )
+
+    return AnnotationStatus(
+        prefixSource=annotation_module.VOCABULARY_PREFIX_1,
+        prefixTarget=annotation_module.VOCABULARY_PREFIX_2,
+        name=annotation_module.ANNOTATION_NAME,
+        loaded=annotation_count > 0,
+        relationshipCount=annotation_count,
+    )

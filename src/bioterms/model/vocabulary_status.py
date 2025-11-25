@@ -24,13 +24,18 @@ class VocabularyStatus(JsonModel):
         description='The name of the vocabulary.',
     )
     loaded: bool = Field(
-        ...,
+        False,
         description='Indicates whether the vocabulary is loaded in the system.',
     )
     concept_count: int = Field(
-        ...,
+        0,
         description='The number of concepts in the vocabulary.',
         alias='conceptCount',
+    )
+    relationship_count: int = Field(
+        0,
+        description='The number of relationships in the vocabulary.',
+        alias='relationshipCount',
     )
     annotations: List[ConceptPrefix] = Field(
         default_factory=list,

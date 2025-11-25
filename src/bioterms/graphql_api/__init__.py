@@ -62,19 +62,20 @@ async def create_graphql_app() -> GraphQL:
     :return: An instance of GraphQL ASGI application.
     """
     doc_db = await get_active_doc_db()
+    graph_db = get_active_graph_db()
 
     graphql_schemas = []
     graphql_objects = []
     graphql_queries = []
 
-    if (await get_vocabulary_status(ConceptPrefix.HPO, doc_db)).loaded:
+    if (await get_vocabulary_status(ConceptPrefix.HPO, doc_db, graph_db)).loaded:
         from .schemas import HPO_SCHEMA
         from .resolver.hpo import HPO_CONCEPT, HPO_QUERY
 
         graphql_schemas.append(HPO_SCHEMA)
         graphql_objects.append(HPO_CONCEPT)
         graphql_queries.append(HPO_QUERY)
-    if (await get_vocabulary_status(ConceptPrefix.ORDO, doc_db)).loaded:
+    if (await get_vocabulary_status(ConceptPrefix.ORDO, doc_db, graph_db)).loaded:
         from .schemas import ORDO_SCHEMA
         from .resolver.ordo import ORDO_CONCEPT, ORDO_QUERY
 

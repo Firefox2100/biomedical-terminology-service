@@ -1,10 +1,10 @@
 import traceback
-from typing import Annotated
+from typing import Annotated, Optional
 from rich.table import Table
 import typer
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary
+from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, get_vocabulary_status
 from .utils import CONSOLE, run_async
 
 
@@ -59,3 +59,40 @@ async def delete_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(hel
     except Exception as e:
         CONSOLE.print(f'[red]Failed to delete vocabulary {vocabulary.value} from the database: {e}[/red]')
         traceback.print_exc()
+
+
+@app.command(name='status', help='Get the status of a vocabulary.')
+@run_async
+async def status_command(vocabulary: Annotated[
+                             Optional[ConceptPrefix],
+                             typer.Argument(help='The vocabulary to check. Omit to check all vocabularies.')
+                         ] = None):
+    if vocabulary:
+        vocabularies = [vocabulary]
+    else:
+        vocabularies = list(ConceptPrefix)
+
+    statuses = []
+    for vocab in vocabularies:
+        status = await get_vocabulary_status(vocab)
+        statuses.append(status)
+
+    table = Table(
+        'Prefix',
+        'Name',
+        'Loaded in DB',
+        'Concept Count',
+        'Relationship Count',
+        'Annotations',
+    )
+    for status in statuses:
+        table.add_row(
+            status.prefix.value,
+            status.name,
+            'Yes' if status.loaded else 'No',
+            str(status.concept_count),
+            str(status.relationship_count),
+            ', '.join([anno.value for anno in status.annotations]),
+        )
+
+    CONSOLE.print(table)

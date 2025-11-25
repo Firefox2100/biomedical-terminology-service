@@ -136,11 +136,13 @@ def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:
 
 async def get_vocabulary_status(prefix: ConceptPrefix,
                                 doc_db: DocumentDatabase = None,
+                                graph_db: GraphDatabase = None,
                                 ) -> VocabularyStatus:
     """
     Get the status of the vocabulary specified by the prefix.
     :param prefix: The prefix of the vocabulary.
     :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
     :return: The vocabulary status.
     """
     vocabulary_module = get_vocabulary_module(prefix)
@@ -148,7 +150,11 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
     if doc_db is None:
         doc_db = await get_active_doc_db()
 
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
     concept_count = await doc_db.count_terms(prefix)
+    relationship_count = await graph_db.count_internal_relationships(prefix)
     annotations = vocabulary_module.ANNOTATIONS
 
     return VocabularyStatus(
@@ -156,5 +162,6 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
         name=vocabulary_module.VOCABULARY_NAME,
         loaded=concept_count > 0,
         conceptCount=concept_count,
+        relationshipCount=relationship_count,
         annotations=annotations,
     )

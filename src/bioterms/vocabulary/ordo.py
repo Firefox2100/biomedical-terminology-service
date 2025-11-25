@@ -14,7 +14,7 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'Orphanet Rare Disease Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.ORDO
-ANNOTATIONS = []
+ANNOTATIONS = [ConceptPrefix.HPO]
 FILE_PATHS = ['ordo/ordo_orphanet.owl']
 CONCEPT_CLASS = Concept
 

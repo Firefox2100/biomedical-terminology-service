@@ -20,7 +20,7 @@ type OrdoConceptListResponse {
 }
 
 type OrdoQuery {
-    hpoConcept(conceptId: String!): OrdoConceptResponse
+    ordoConcept(conceptId: String!): OrdoConceptResponse
 }
 
 extend type Query {
