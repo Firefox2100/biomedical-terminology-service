@@ -120,14 +120,17 @@ class Neo4jGraphDatabase(GraphDatabase):
             await self._execute_query_with_retry(
                 query="""
                 UNWIND $edges AS edge
-                MERGE (target:Concept {id: edge[0]})
-                MERGE (source:Concept {id: edge[1]})
+                MERGE (source:Concept {id: edge[0], prefix: $concept_prefix})
+                MERGE (target:Concept {id: edge[1], prefix: $concept_prefix})
                 WITH source, target, edge, coalesce(edge[2], 'related_to') as rel_label
                 CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
                 RETURN count(rel) AS created
                 """,
                 session=session,
-                parameters={'edges': edges},
+                parameters={
+                    'edges': edges,
+                    'concept_prefix': concepts[0].prefix if concepts else '',
+                },
             )
 
     async def get_vocabulary_graph(self,

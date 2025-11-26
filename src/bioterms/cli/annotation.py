@@ -4,7 +4,7 @@ from rich.table import Table
 import typer
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_config
+from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import download_annotation, load_annotation, delete_annotation, get_annotation_status, \
     get_annotation_config
 from .utils import CONSOLE, run_async

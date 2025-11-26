@@ -59,7 +59,7 @@ async def get_home_page(request: Request,
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@ui_router.get('/login', response_class=Union[HTMLResponse, RedirectResponse])
+@ui_router.get('/login', response_class=HTMLResponse)
 async def get_login_page(request: Request,
                          next_url: str | None = Query(None, alias='next'),
                          error: str | None = Query(None),

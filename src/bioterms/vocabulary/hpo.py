@@ -88,8 +88,8 @@ def _process_hpo_class(hpo_class: ThingClass,
     if hasattr(hpo_class, 'subclasses'):
         for child in hpo_class.subclasses():
             relationships.append((
-                concept.concept_id,
                 child.name.split('_')[-1],
+                concept.concept_id,
                 ConceptRelationshipType.IS_A
             ))
 
