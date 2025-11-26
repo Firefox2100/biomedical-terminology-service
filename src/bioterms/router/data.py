@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse, Response
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.base import JsonModel
-from bioterms.model.concept import Concept
+from bioterms.model.concept import ConceptUnion
 from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license, \
     get_vocabulary_status
@@ -80,7 +80,7 @@ async def get_license(prefix: ConceptPrefix):
     )
 
 
-@data_router.get('/{prefix}/{concept_id}', response_model=Concept)
+@data_router.get('/{prefix}/{concept_id}', response_model=ConceptUnion)
 async def get_concept(prefix: ConceptPrefix,
                       concept_id: str,
                       doc_db: DocumentDatabase = Depends(get_active_doc_db),
@@ -94,7 +94,7 @@ async def get_concept(prefix: ConceptPrefix,
     """
 
 
-@data_router.get('/{prefix}/data', response_model=list[Concept])
+@data_router.get('/{prefix}/data', response_model=list[ConceptUnion])
 async def get_vocabulary_data(prefix: ConceptPrefix,
                               limit: int = Query(
                                   100,
@@ -195,10 +195,10 @@ async def ingest_documents(prefix: ConceptPrefix,
     decomp = zlib.decompressobj(16 + zlib.MAX_WBITS) if is_gz else None
 
     buffer: bytes = b''
-    batch: list[Concept] = []
+    batch: list[ConceptUnion] = []
     batch_size = 1000
     vocabulary_config = get_vocabulary_config(prefix)
-    concept_class: type[Concept] = vocabulary_config['conceptClass']
+    concept_class: ConceptUnion = vocabulary_config['conceptClass']
 
     async def flush_batch():
         nonlocal buffer

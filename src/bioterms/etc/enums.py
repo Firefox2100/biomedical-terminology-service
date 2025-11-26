@@ -26,6 +26,7 @@ class ConceptPrefix(StrEnum):
     NCIT = 'ncit'
     OMIM = 'omim'
     ORDO = 'ordo'
+    SNOMED = 'snomed'
 
 
 class ConceptStatus(Enum):

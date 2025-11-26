@@ -13,7 +13,7 @@ class BtsError(Exception):
         self.status_code = status_code
 
 
-class FilesNotFound(BtsError):
+class FilesNotFound(BtsError, FileNotFoundError):
     """Raised when required data files are not found."""
     def __init__(self,
                  message: str = 'Required data files not found',

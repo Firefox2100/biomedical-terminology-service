@@ -69,7 +69,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     :param graph_db: Optional GraphDatabase instance to use.
     """
     if not check_files_exist(FILE_PATHS):
-        raise FilesNotFound('HPO owl file not found')
+        raise FilesNotFound('OMIM CSV file not found')
 
     csv_path = str(os.path.join(CONFIG.data_dir, FILE_PATHS[0]))
 

@@ -7,7 +7,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, get_active_doc_db
 from bioterms.model.base import JsonModel
-from bioterms.model.concept import Concept
+from bioterms.model.concept import ConceptUnion
 from .utils import response_generator
 
 
@@ -135,7 +135,7 @@ async def auto_complete_v2(prefix: ConceptPrefix,
     return v2_concepts
 
 
-@auto_complete_router.get('/{prefix}/auto-complete/v3', response_model=List[Concept])
+@auto_complete_router.get('/{prefix}/auto-complete/v3', response_model=List[ConceptUnion])
 async def auto_complete_v3(prefix: ConceptPrefix,
                            query: str = Query(
                                ...,

@@ -3,7 +3,7 @@ from typing import Optional
 from pydantic import Field, ConfigDict
 
 from bioterms.etc.enums import ConceptType, ConceptPrefix, ConceptStatus
-from .base import JsonModel
+from ..base import JsonModel
 
 
 class Concept(JsonModel):

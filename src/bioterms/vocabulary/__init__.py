@@ -12,6 +12,7 @@ ALL_VOCABULARIES = {
     ConceptPrefix.NCIT: 'ncit',
     ConceptPrefix.OMIM: 'omim',
     ConceptPrefix.ORDO: 'ordo',
+    ConceptPrefix.SNOMED: 'snomed',
 }
 
 

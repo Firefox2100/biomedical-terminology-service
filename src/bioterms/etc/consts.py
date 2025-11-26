@@ -149,6 +149,10 @@ class Settings(BaseSettings):
         None,
         description='API key for accessing the BioPortal services',
     )
+    nhs_trud_api_key: Optional[str] = Field(
+        None,
+        description='API key for accessing the NHS TRUD services',
+    )
 
 
 CONFIG = Settings(_env_file=os.getenv('BTS_ENV_FILE', 'conf/.env'))     # type: ignore
@@ -170,5 +174,6 @@ if not LOGGER.hasHandlers():
 
 EXECUTOR = ProcessPoolExecutor(max_workers=CONFIG.process_limit)
 DOWNLOAD_CLIENT = AsyncClient()
+QUERY_CLIENT = AsyncClient()
 
 PH = PasswordHasher()
