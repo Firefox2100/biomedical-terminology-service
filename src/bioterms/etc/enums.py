@@ -73,3 +73,10 @@ class ServiceEnvironment(Enum):
     STAGING = 'staging'
     DEVELOPMENT = 'dev'
     TESTING = 'test'
+
+
+class SimilarityMethod(Enum):
+    """
+    The method used for calculating similarity between concepts.
+    """
+    RELEVANCE = 'relevance'

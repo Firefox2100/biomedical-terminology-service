@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import AsyncIterator
 import networkx as nx
+import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix
@@ -88,6 +89,18 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    async def get_annotation_graph(self,
+                                   prefix_1: ConceptPrefix,
+                                   prefix_2: ConceptPrefix,
+                                   ) -> nx.DiGraph:
+        """
+        Retrieve the annotation graph between two vocabularies from the graph database.
+        :param prefix_1: The first vocabulary prefix.
+        :param prefix_2: The second vocabulary prefix.
+        :return: The annotation graph between the two vocabularies.
+        """
+
+    @abstractmethod
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,
                                  prefix_2: ConceptPrefix,
@@ -108,6 +121,23 @@ class GraphDatabase(ABC):
         :param prefix_1: The first vocabulary prefix.
         :param prefix_2: The second vocabulary prefix.
         :return: The number of annotations between the two vocabularies.
+        """
+
+    @abstractmethod
+    async def save_similarity_scores(self,
+                                     prefix_from: ConceptPrefix,
+                                     prefix_to: ConceptPrefix,
+                                     similarity_df: pd.DataFrame,
+                                     similarity_method: str,
+                                     ):
+        """
+        Save similarity scores between two vocabularies into the graph database.
+        :param prefix_from: The source vocabulary prefix. Correspond to 'concept_from' in similarity_df.
+        :param prefix_to: The target vocabulary prefix. Correspond to 'concept_to' in similarity_df.
+        :param similarity_df: A DataFrame containing similarity scores. In the format of:
+            | concept_from | concept_to | similarity |
+        :param similarity_method: The similarity method used to generate the scores. Stored as
+            property name on the relationship.
         """
 
     @abstractmethod

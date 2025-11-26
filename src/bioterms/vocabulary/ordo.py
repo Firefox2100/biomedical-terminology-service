@@ -4,8 +4,8 @@ import httpx
 import networkx as nx
 from owlready2 import get_ontology, ThingClass, PropertyClass, Restriction
 
-from bioterms.etc.consts import CONFIG, DOWNLOAD_CLIENT
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType
+from bioterms.etc.consts import CONFIG
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
@@ -15,6 +15,7 @@ from bioterms.model.concept import Concept
 VOCABULARY_NAME = 'Orphanet Rare Disease Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.ORDO
 ANNOTATIONS = [ConceptPrefix.HPO]
+SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
 FILE_PATHS = ['ordo/ordo_orphanet.owl']
 CONCEPT_CLASS = Concept
 

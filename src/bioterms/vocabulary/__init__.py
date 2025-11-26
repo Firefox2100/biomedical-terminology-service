@@ -39,6 +39,7 @@ def get_vocabulary_config(prefix: ConceptPrefix) -> dict:
         'name': vocabulary_module.VOCABULARY_NAME,
         'prefix': vocabulary_module.VOCABULARY_PREFIX,
         'annotations': vocabulary_module.ANNOTATIONS,
+        'similarityMethods': vocabulary_module.SIMILARITY_METHODS,
         'filePaths': vocabulary_module.FILE_PATHS,
         'conceptClass': vocabulary_module.CONCEPT_CLASS,
     }
@@ -164,4 +165,5 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
         conceptCount=concept_count,
         relationshipCount=relationship_count,
         annotations=annotations,
+        similarityMethods=vocabulary_module.SIMILARITY_METHODS,
     )

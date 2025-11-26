@@ -1,7 +1,7 @@
 from typing import List
 from pydantic import Field, ConfigDict
 
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from .base import JsonModel
 
 
@@ -40,4 +40,9 @@ class VocabularyStatus(JsonModel):
     annotations: List[ConceptPrefix] = Field(
         default_factory=list,
         description='A list of annotation vocabularies associated with this vocabulary.',
+    )
+    similarity_methods: List[SimilarityMethod] = Field(
+        default_factory=list,
+        description='A list of similarity methods available for this vocabulary.',
+        alias='similarityMethods',
     )

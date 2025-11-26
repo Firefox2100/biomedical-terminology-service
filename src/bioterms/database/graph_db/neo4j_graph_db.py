@@ -1,6 +1,7 @@
 import asyncio
 from typing import LiteralString, AsyncIterator
 import networkx as nx
+import pandas as pd
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
@@ -259,6 +260,46 @@ class Neo4jGraphDatabase(GraphDatabase):
                 parameters={'annotations': [annotation.model_dump() for annotation in annotations]},
             )
 
+    async def get_annotation_graph(self,
+                                   prefix_1: ConceptPrefix,
+                                   prefix_2: ConceptPrefix,
+                                   ) -> nx.DiGraph:
+        """
+        Retrieve the annotation graph between two vocabularies from the graph database.
+        :param prefix_1: The first vocabulary prefix.
+        :param prefix_2: The second vocabulary prefix.
+        :return: The annotation graph between the two vocabularies.
+        """
+        annotation_graph = nx.DiGraph()
+
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
+                RETURN source.id AS source_id, target.id AS target_id, type(r) AS rel_label, properties(r) AS rel_props
+                """,
+                session=session,
+                parameters={
+                    'prefix_1': prefix_1.value,
+                    'prefix_2': prefix_2.value,
+                },
+            )
+
+            async for record in result:
+                source_id = record['source_id']
+                target_id = record['target_id']
+                rel_label = record['rel_label']
+                rel_props = record['rel_props']
+
+                annotation_graph.add_edge(
+                    source_id,
+                    target_id,
+                    label=rel_label,
+                    **rel_props
+                )
+
+        return annotation_graph
+
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,
                                  prefix_2: ConceptPrefix,
@@ -306,6 +347,62 @@ class Neo4jGraphDatabase(GraphDatabase):
 
             record = await result.single()
             return record['annotation_count'] if record is not None else 0
+
+    async def save_similarity_scores(self,
+                                     prefix_from: ConceptPrefix,
+                                     prefix_to: ConceptPrefix,
+                                     similarity_df: pd.DataFrame,
+                                     similarity_method: str,
+                                     ):
+        """
+        Save similarity scores between two vocabularies into the graph database.
+        :param prefix_from: The source vocabulary prefix. Correspond to 'concept_from' in similarity_df.
+        :param prefix_to: The target vocabulary prefix. Correspond to 'concept_to' in similarity_df.
+        :param similarity_df: A DataFrame containing similarity scores. In the format of:
+            | concept_from | concept_to | similarity |
+        :param similarity_method: The similarity method used to generate the scores. Stored as
+            property name on the relationship.
+        """
+        async with self._client.session() as session:
+            # Similarity data can be millions of rows, so need to batch the inserts
+            batch_size = 1000
+
+            for start_idx in range(0, len(similarity_df), batch_size):
+                end_idx = start_idx + batch_size
+                batch_df = similarity_df.iloc[start_idx:end_idx]
+
+                similarities = [
+                    {
+                        'concept_from': row['concept_from'],
+                        'concept_to': row['concept_to'],
+                        'similarity': row['similarity'],
+                    }
+                    for _, row in batch_df.iterrows()
+                ]
+
+                await self._execute_query_with_retry(
+                    query="""
+                    UNWIND $similarities AS sim
+                    MATCH (source:Concept {id: sim.concept_from, prefix: $prefix_from})
+                    MATCH (target:Concept {id: sim.concept_to, prefix: $prefix_to})
+                    WITH source, target, sim.similarity AS sim_score
+                    CALL apoc.merge.relationship(
+                        source,
+                        'similar_to',
+                        {},
+                        { $similarity_method: sim_score },
+                        target
+                    ) YIELD rel
+                    RETURN count(rel) AS created
+                    """,
+                    session=session,
+                    parameters={
+                        'similarities': similarities,
+                        'prefix_from': prefix_from.value,
+                        'prefix_to': prefix_to.value,
+                        'similarity_method': similarity_method,
+                    },
+                )
 
     async def create_index(self):
         """
