@@ -48,14 +48,14 @@ def delete_vocabulary_files():
         pass
 
 
-def _construct_hpo_concept(hpo_class: ThingClass) -> Concept:
+def _construct_hpo_concept(hpo_class: ThingClass) -> CONCEPT_CLASS:
     """
     Construct a Concept instance from an HPO class.
     :param hpo_class: The HPO class to convert.
     :return: A Concept instance.
     """
     concept = CONCEPT_CLASS(
-        prefix=ConceptPrefix.HPO,
+        prefix=VOCABULARY_PREFIX,
         conceptTypes=[],
         conceptId=hpo_class.name.split('_')[-1],
         label=hpo_class.label[0]
@@ -77,7 +77,7 @@ def _construct_hpo_concept(hpo_class: ThingClass) -> Concept:
 
 
 def _process_hpo_class(hpo_class: ThingClass,
-                       ) -> tuple[Concept, list[tuple[str, str, ConceptRelationshipType]]]:
+                       ) -> tuple[CONCEPT_CLASS, list[tuple[str, str, ConceptRelationshipType]]]:
     """
     Process an HPO class and extract the corresponding Concept and relationships.
     :param hpo_class: The HPO class to process.
@@ -175,13 +175,13 @@ async def create_indexes(overwrite: bool = False,
         graph_db = get_active_graph_db()
 
     await doc_db.create_index(
-        prefix=ConceptPrefix.HPO,
+        prefix=VOCABULARY_PREFIX,
         field='conceptId',
         unique=True,
         overwrite=overwrite,
     )
     await doc_db.create_index(
-        prefix=ConceptPrefix.HPO,
+        prefix=VOCABULARY_PREFIX,
         field='label',
         overwrite=overwrite,
     )
@@ -200,5 +200,5 @@ async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
     if graph_db is None:
         graph_db = get_active_graph_db()
 
-    await doc_db.delete_all_for_label(ConceptPrefix.HPO)
-    await graph_db.delete_vocabulary_graph(prefix=ConceptPrefix.HPO)
+    await doc_db.delete_all_for_label(VOCABULARY_PREFIX)
+    await graph_db.delete_vocabulary_graph(prefix=VOCABULARY_PREFIX)

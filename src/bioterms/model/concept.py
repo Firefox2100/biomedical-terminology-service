@@ -16,7 +16,7 @@ class Concept(JsonModel):
     )
 
     concept_types: list[ConceptType] = Field(
-        ...,
+        default_factory=list,
         description='The types of the concept. Marking the node type in the ontology graph or vocabulary.',
         alias='conceptTypes',
     )

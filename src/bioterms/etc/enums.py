@@ -23,6 +23,7 @@ class ConceptPrefix(StrEnum):
     The prefix used for concepts in the vocabularies.
     """
     HPO = 'hpo'
+    NCIT = 'ncit'
     ORDO = 'ordo'
 
 

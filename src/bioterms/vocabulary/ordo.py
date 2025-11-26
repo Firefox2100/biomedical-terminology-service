@@ -1,5 +1,4 @@
 import os
-import anyio
 import httpx
 import networkx as nx
 from owlready2 import get_ontology, ThingClass, PropertyClass, Restriction
@@ -209,7 +208,7 @@ async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
                                  graph_db: GraphDatabase = None,
                                  ):
     """
-    Delete all HPO vocabulary data from the primary databases.
+    Delete all ORDO vocabulary data from the primary databases.
     """
     if doc_db is None:
         doc_db = await get_active_doc_db()
