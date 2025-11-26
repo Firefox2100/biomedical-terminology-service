@@ -10,6 +10,7 @@ from bioterms.model.vocabulary_status import VocabularyStatus
 ALL_VOCABULARIES = {
     ConceptPrefix.HPO: 'hpo',
     ConceptPrefix.NCIT: 'ncit',
+    ConceptPrefix.OMIM: 'omim',
     ConceptPrefix.ORDO: 'ordo',
 }
 

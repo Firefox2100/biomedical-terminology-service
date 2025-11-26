@@ -59,7 +59,7 @@ def _construct_ordo_concept(ordo_class: ThingClass) -> Concept:
     :return: A Concept instance.
     """
     concept = CONCEPT_CLASS(
-        prefix=ConceptPrefix.ORDO,
+        prefix=VOCABULARY_PREFIX,
         conceptTypes=[],
         conceptId=ordo_class.name.split('_')[-1],
         label=ordo_class.label[0]
@@ -190,13 +190,13 @@ async def create_indexes(overwrite: bool = False,
         graph_db = get_active_graph_db()
 
     await doc_db.create_index(
-        prefix=ConceptPrefix.ORDO,
+        prefix=VOCABULARY_PREFIX,
         field='conceptId',
         unique=True,
         overwrite=overwrite,
     )
     await doc_db.create_index(
-        prefix=ConceptPrefix.ORDO,
+        prefix=VOCABULARY_PREFIX,
         field='label',
         overwrite=overwrite,
     )
@@ -215,5 +215,5 @@ async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
     if graph_db is None:
         graph_db = get_active_graph_db()
 
-    await doc_db.delete_all_for_label(ConceptPrefix.ORDO)
-    await graph_db.delete_vocabulary_graph(prefix=ConceptPrefix.ORDO)
+    await doc_db.delete_all_for_label(VOCABULARY_PREFIX)
+    await graph_db.delete_vocabulary_graph(prefix=VOCABULARY_PREFIX)

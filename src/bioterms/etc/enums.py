@@ -24,6 +24,7 @@ class ConceptPrefix(StrEnum):
     """
     HPO = 'hpo'
     NCIT = 'ncit'
+    OMIM = 'omim'
     ORDO = 'ordo'
 
 

@@ -1,5 +1,5 @@
 import os
-import anyio
+import aiofiles
 import httpx
 
 from .consts import CONFIG, DOWNLOAD_CLIENT
@@ -34,9 +34,9 @@ async def download_file(url: str,
     ) as response:
         response.raise_for_status()
 
-        owl_file_path = os.path.join(CONFIG.data_dir, file_path)
-        os.makedirs(os.path.dirname(owl_file_path), exist_ok=True)
+        absolute_file_path = os.path.join(CONFIG.data_dir, file_path)
+        os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
 
-        async with await anyio.open_file(owl_file_path, 'wb') as owl_file:
+        async with aiofiles.open(absolute_file_path, 'wb') as data_file:
             async for chunk in response.aiter_bytes():
-                await owl_file.write(chunk)
+                await data_file.write(chunk)

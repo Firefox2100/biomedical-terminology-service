@@ -411,17 +411,25 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             await self._execute_query_with_retry(
                 query="""
-                CREATE CONSTRAINT concept_id_unique IF NOT EXISTS
+                CREATE INDEX concept_prefix_index IF NOT EXISTS
                 FOR (n:Concept)
-                REQUIRE n.id IS UNIQUE
+                ON (n.prefix)
                 """,
                 session=session,
             )
             await self._execute_query_with_retry(
                 query="""
-                CREATE INDEX concept_prefix_index IF NOT EXISTS
+                CREATE INDEX concept_id_index IF NOT EXISTS
                 FOR (n:Concept)
-                ON (n.prefix)
+                ON (n.id)
+                """,
+                session=session,
+            )
+            await self._execute_query_with_retry(
+                query="""
+                CREATE CONSTRAINT concept_prefix_id_unique IF NOT EXISTS
+                FOR (n:Concept)
+                REQUIRE (n.prefix, n.id) IS UNIQUE
                 """,
                 session=session,
             )

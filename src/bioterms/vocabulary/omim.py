@@ -1,6 +1,5 @@
 import os
-import io
-import zipfile
+import gzip
 import aiofiles
 import aiofiles.os
 import httpx
@@ -14,17 +13,17 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
-VOCABULARY_NAME = 'National Cancer Institute Thesaurus'
-VOCABULARY_PREFIX = ConceptPrefix.NCIT
+VOCABULARY_NAME = 'Online Mendelian Inheritance in Man'
+VOCABULARY_PREFIX = ConceptPrefix.OMIM
 ANNOTATIONS = []
 SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
-FILE_PATHS = ['ncit/Thesaurus.txt']
+FILE_PATHS = ['omim/omim.csv']
 CONCEPT_CLASS = Concept
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
     """
-    Download the NCIT vocabulary files.
+    Download the OMIM vocabulary files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
     if check_files_exist(FILE_PATHS):
@@ -32,50 +31,31 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
     ensure_data_directory()
 
-    flat_file_url = 'https://evs.nci.nih.gov/ftp1/NCI_Thesaurus/Thesaurus.FLAT.zip'
-    flat_file_path = 'ncit/Thesaurus.FLAT.zip'
+    csv_url = 'https://data.bioontology.org/ontologies/OMIM/download?download_format=csv'
+    csv_path = 'omim/omim.gz'
+
+    if not CONFIG.bioportal_api_key:
+        raise ValueError('BioPortal API key is required to download OMIM ontology.')
 
     await download_file(
-        url=flat_file_url,
-        file_path=flat_file_path,
+        url=csv_url,
+        file_path=csv_path,
+        headers={'Authorization': f'apikey token={CONFIG.bioportal_api_key}'},
         download_client=download_client,
     )
 
-    zip_full_path = os.path.join(CONFIG.data_dir, flat_file_path)
-    target_dir = os.path.abspath(os.path.join(CONFIG.data_dir, 'ncit'))
+    gz_full_path = os.path.join(CONFIG.data_dir, csv_path)
+    out_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
 
-    async with aiofiles.open(zip_full_path, 'rb') as f:
-        zip_bytes = await f.read()
-
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zip_ref:
-        for member in zip_ref.infolist():
-            # Skip directories
-            if member.is_dir():
-                continue
-
-            member_name = member.filename
-            dest_path = os.path.abspath(os.path.join(target_dir, member_name))
-            if not dest_path.startswith(target_dir + os.sep):
-                continue
-
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-            file_data = zip_ref.read(member)
-            async with aiofiles.open(dest_path, 'wb') as out_f:
-                await out_f.write(file_data)
+    # Read the gz file asynchronously, decompress in memory, then write output asynchronously
+    async with aiofiles.open(gz_full_path, 'rb') as f_in:
+        gz_data = await f_in.read()
+    decompressed = gzip.decompress(gz_data)
+    async with aiofiles.open(out_path, 'wb') as f_out:
+        await f_out.write(decompressed)
 
     try:
-        await aiofiles.os.remove(zip_full_path)
-    except Exception:
-        pass
-
-
-def delete_vocabulary_files():
-    """
-    Delete the NCIT vocabulary files.
-    """
-    try:
-        os.remove(os.path.join(CONFIG.data_dir, FILE_PATHS[0]))
+        await aiofiles.os.remove(gz_full_path)
     except Exception:
         pass
 
@@ -84,57 +64,49 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     ):
     """
-    Load the NCIT vocabulary from a file into the primary databases.
+    Load the OMIM vocabulary from a file into the primary databases.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
     """
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HPO owl file not found')
 
-    flat_file_path = str(os.path.join(CONFIG.data_dir, FILE_PATHS[0]))
+    csv_path = str(os.path.join(CONFIG.data_dir, FILE_PATHS[0]))
 
-    ncit_df = pd.read_csv(
-        flat_file_path,
-        sep='\t',
-        names=[
-            'code',
-            'concept_iri',
-            'parents',
-            'synonyms',
-            'definition',
-            'display_name',
-            'concept_status',
-            'semantic_type',
-            'concept_in_subset',
-        ],
-        dtype=str,
+    omim_df = pd.read_csv(
+        csv_path,
     )
 
-    ncit_graph = nx.DiGraph()
+    omim_graph = nx.DiGraph()
     concepts = []
 
-    for _, row in ncit_df.iterrows():
-        synonyms = row['synonyms'].split('|')
-
+    for _, row in omim_df.iterrows():
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
-            conceptId=row['code'],
-            label=synonyms[0],
-            synonyms=synonyms[1:] if len(synonyms) > 1 else None,
-            definition=row['definition'] if not pd.isna(row['definition']) else None,
-            status=ConceptStatus.DEPRECATED if row['concept_status'] == 'Obsolete_Concept' else ConceptStatus.ACTIVE,
+            conceptTypes=[],
+            conceptId=row['Class ID'].split('/')[-1],
+            label=row['Preferred Label'] if not pd.isna(row['Preferred Label']) else None,
+            synonyms=row['Synonyms'].split('|') if not pd.isna(row['Synonyms']) else None,
+            status=ConceptStatus.DEPRECATED if not pd.isna(row['Obsolete']) and bool(row['Obsolete']) else ConceptStatus.ACTIVE,
         )
 
         concepts.append(concept)
-        ncit_graph.add_node(row['code'])
+        omim_graph.add_node(concept.concept_id)
 
-        if not pd.isna(row['parents']):
-            for parent in row['parents'].split('|'):
-                ncit_graph.add_edge(
-                    row['code'],
+        if not pd.isna(row['Parents']):
+            for parent in row['Parents'].split('|'):
+                omim_graph.add_edge(
+                    concept.concept_id,
                     parent,
                     label=ConceptRelationshipType.IS_A
                 )
+
+        if not pd.isna(row['Moved from']):
+            omim_graph.add_edge(
+                row['Moved from'],
+                concept.concept_id,
+                label=ConceptRelationshipType.REPLACED_BY
+            )
 
     if doc_db is None:
         doc_db = await get_active_doc_db()
@@ -147,7 +119,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     await graph_db.save_vocabulary_graph(
         concepts=concepts,
-        graph=ncit_graph,
+        graph=omim_graph,
     )
 
 
@@ -156,7 +128,7 @@ async def create_indexes(overwrite: bool = False,
                          graph_db: GraphDatabase = None,
                          ):
     """
-    Create indexes for the NCIT vocabulary in the primary databases.
+    Create indexes for the OMIM vocabulary in the primary databases.
     :param overwrite: Whether to overwrite existing indexes.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
@@ -185,7 +157,7 @@ async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
                                  graph_db: GraphDatabase = None,
                                  ):
     """
-    Delete all NCIT vocabulary data from the primary databases.
+    Delete all OMIM vocabulary data from the primary databases.
     """
     if doc_db is None:
         doc_db = await get_active_doc_db()
@@ -194,3 +166,4 @@ async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
 
     await doc_db.delete_all_for_label(VOCABULARY_PREFIX)
     await graph_db.delete_vocabulary_graph(prefix=VOCABULARY_PREFIX)
+
