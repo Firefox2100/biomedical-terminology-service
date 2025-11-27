@@ -107,7 +107,7 @@ async def extract_file_from_zip(zip_path: str,
 
             if not matches:
                 raise FilesNotFound(
-                    f'No files matching pattern "{pattern}" found in the RF2 archive.'
+                    f'No files matching pattern "{pattern}" found in the ZIP archive.'
                 )
 
             member = matches[0]

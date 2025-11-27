@@ -22,6 +22,7 @@ class ConceptPrefix(StrEnum):
     """
     The prefix used for concepts in the vocabularies.
     """
+    CTV3 = 'ctv3'
     HPO = 'hpo'
     NCIT = 'ncit'
     OMIM = 'omim'

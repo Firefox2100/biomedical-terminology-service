@@ -8,6 +8,7 @@ from bioterms.model.vocabulary_status import VocabularyStatus
 
 
 ALL_VOCABULARIES = {
+    ConceptPrefix.CTV3: 'ctv3',
     ConceptPrefix.HPO: 'hpo',
     ConceptPrefix.NCIT: 'ncit',
     ConceptPrefix.OMIM: 'omim',
