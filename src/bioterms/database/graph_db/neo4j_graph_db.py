@@ -251,7 +251,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
                 WITH source,
                     target,
-                    coalesce(annotation.annotationType, 'annotatedWith') AS rel_type,
+                    coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
                     coalesce(annotation.properties, {}) AS props
                 CALL apoc.merge.relationship(source, rel_type, {}, props, target) YIELD rel
                 RETURN count(rel) AS created

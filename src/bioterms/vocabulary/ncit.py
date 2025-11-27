@@ -1,6 +1,4 @@
 import os
-import io
-import zipfile
 import aiofiles
 import aiofiles.os
 import httpx
@@ -10,7 +8,7 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_zip
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -18,7 +16,7 @@ VOCABULARY_NAME = 'National Cancer Institute Thesaurus'
 VOCABULARY_PREFIX = ConceptPrefix.NCIT
 ANNOTATIONS = []
 SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
-FILE_PATHS = ['ncit/Thesaurus.txt']
+FILE_PATHS = ['ncit/thesaurus.txt']
 CONCEPT_CLASS = Concept
 
 
@@ -33,41 +31,27 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     ensure_data_directory()
 
     flat_file_url = 'https://evs.nci.nih.gov/ftp1/NCI_Thesaurus/Thesaurus.FLAT.zip'
-    flat_file_path = 'ncit/Thesaurus.FLAT.zip'
-
-    await download_file(
-        url=flat_file_url,
-        file_path=flat_file_path,
-        download_client=download_client,
-    )
-
-    zip_full_path = os.path.join(CONFIG.data_dir, flat_file_path)
-    target_dir = os.path.abspath(os.path.join(CONFIG.data_dir, 'ncit'))
-
-    async with aiofiles.open(zip_full_path, 'rb') as f:
-        zip_bytes = await f.read()
-
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zip_ref:
-        for member in zip_ref.infolist():
-            # Skip directories
-            if member.is_dir():
-                continue
-
-            member_name = member.filename
-            dest_path = os.path.abspath(os.path.join(target_dir, member_name))
-            if not dest_path.startswith(target_dir + os.sep):
-                continue
-
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-            file_data = zip_ref.read(member)
-            async with aiofiles.open(dest_path, 'wb') as out_f:
-                await out_f.write(file_data)
+    zip_path = 'ncit/Thesaurus.FLAT.zip'
+    zip_full_path = os.path.join(CONFIG.data_dir, zip_path)
 
     try:
-        await aiofiles.os.remove(zip_full_path)
-    except Exception:
-        pass
+        await download_file(
+            url=flat_file_url,
+            file_path=zip_path,
+            download_client=download_client,
+        )
+
+        await extract_file_from_zip(
+            zip_path=zip_full_path,
+            file_mapping=[
+                ('Thesaurus.txt', os.path.join(CONFIG.data_dir, FILE_PATHS[0])),
+            ],
+        )
+    finally:
+        try:
+            await aiofiles.os.remove(zip_full_path)
+        except Exception:
+            pass
 
 
 def delete_vocabulary_files():

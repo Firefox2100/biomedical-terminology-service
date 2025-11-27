@@ -35,8 +35,8 @@ class Annotation(JsonModel):
         description='The identifier of the target concept in the annotation.',
         alias='conceptIdTo',
     )
-    annotation_type: Optional[AnnotationType] = Field(
-        None,
+    annotation_type: AnnotationType = Field(
+        AnnotationType.ANNOTATED_WITH,
         description='The type of the annotation relationship.',
         alias='annotationType',
     )

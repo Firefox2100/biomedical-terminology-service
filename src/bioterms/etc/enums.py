@@ -9,6 +9,8 @@ class AnnotationType(Enum):
     BROAD = 'broad'
     NARROW = 'narrow'
     RELATED = 'related'
+    HAS_SYMBOL = 'has_symbol'
+    ANNOTATED_WITH = 'annotated_with'
 
 
 class CacheDriverType(Enum):
@@ -23,6 +25,8 @@ class ConceptPrefix(StrEnum):
     The prefix used for concepts in the vocabularies.
     """
     CTV3 = 'ctv3'
+    HGNC = 'hgnc'
+    HGNC_SYMBOL = 'gene'
     HPO = 'hpo'
     NCIT = 'ncit'
     OMIM = 'omim'
