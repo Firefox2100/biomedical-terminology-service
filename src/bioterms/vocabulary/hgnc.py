@@ -1,15 +1,10 @@
 import os
-import io
-import zipfile
-import aiofiles
-import aiofiles.os
 import httpx
 import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, ConceptRelationshipType, \
-    SimilarityMethod
+from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, ConceptRelationshipType
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
@@ -225,4 +220,3 @@ async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
 
     await doc_db.delete_all_for_label(VOCABULARY_PREFIX)
     await graph_db.delete_vocabulary_graph(prefix=VOCABULARY_PREFIX)
-

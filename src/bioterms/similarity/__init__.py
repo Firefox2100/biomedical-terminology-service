@@ -101,4 +101,5 @@ async def calculate_similarity(method: SimilarityMethod,
         prefix_to=target_prefix,
         similarity_df=similarity_df,
         similarity_method=method.value,
+        corpus_prefix=corpus_prefix,
     )

@@ -172,6 +172,7 @@ class MemoryGraphDatabase(GraphDatabase):
                                      prefix_to: ConceptPrefix,
                                      similarity_df: pd.DataFrame,
                                      similarity_method: str,
+                                     corpus_prefix: ConceptPrefix | None = None,
                                      ):
         """
         Save similarity scores between two vocabularies into the graph database.
@@ -181,6 +182,7 @@ class MemoryGraphDatabase(GraphDatabase):
             | concept_from | concept_to | similarity |
         :param similarity_method: The similarity method used to generate the scores. Stored as
             property name on the relationship.
+        :param corpus_prefix: The corpus vocabulary prefix, if applicable.
         """
         raise NotImplementedError
 

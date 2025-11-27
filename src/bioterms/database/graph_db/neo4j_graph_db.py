@@ -353,6 +353,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                                      prefix_to: ConceptPrefix,
                                      similarity_df: pd.DataFrame,
                                      similarity_method: str,
+                                     corpus_prefix: ConceptPrefix | None = None,
                                      ):
         """
         Save similarity scores between two vocabularies into the graph database.
@@ -362,6 +363,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             | concept_from | concept_to | similarity |
         :param similarity_method: The similarity method used to generate the scores. Stored as
             property name on the relationship.
+        :param corpus_prefix: The corpus vocabulary prefix, if applicable.
         """
         async with self._client.session() as session:
             # Similarity data can be millions of rows, so need to batch the inserts
@@ -390,7 +392,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                         source,
                         'similar_to',
                         {},
-                        { $similarity_method: sim_score },
+                        { $similarity_property: sim_score },
                         target
                     ) YIELD rel
                     RETURN count(rel) AS created
@@ -400,7 +402,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'similarities': similarities,
                         'prefix_from': prefix_from.value,
                         'prefix_to': prefix_to.value,
-                        'similarity_method': similarity_method,
+                        'similarity_property': f'{similarity_method}:{corpus_prefix}'
+                            if corpus_prefix else similarity_method,
                     },
                 )
 

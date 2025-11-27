@@ -27,7 +27,7 @@ interface Concept {
     definition: String
     status: ConceptStatus!
 
-    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationshipType!]!
+    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationship!]!
 }
 
 type QueryError {

@@ -6,7 +6,7 @@ type OrdoConcept implements Concept {
     synonyms: [String!]
     status: ConceptStatus!
 
-    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationshipType!]!
+    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationship!]!
 }
 
 type OrdoConceptResponse {

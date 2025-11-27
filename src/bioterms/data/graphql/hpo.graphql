@@ -6,7 +6,7 @@ type HpoConcept implements Concept {
     comment: String
     status: ConceptStatus!
 
-    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationshipType!]!
+    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationship!]!
 }
 
 type HpoConceptResponse {

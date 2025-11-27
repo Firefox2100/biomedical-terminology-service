@@ -1,16 +1,11 @@
 import os
-import io
-import zipfile
-import aiofiles
-import aiofiles.os
-import httpx
 import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 from .hgnc import download_vocabulary
