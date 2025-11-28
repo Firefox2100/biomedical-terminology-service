@@ -1,17 +1,12 @@
 import os
-import io
-import zipfile
-import aiofiles
-import aiofiles.os
 import httpx
 import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, \
-    get_trud_release_url, extract_file_from_zip
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -73,3 +68,63 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     pathway_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[0])))
     reaction_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[1])))
     mapping_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[2])))
+
+    concepts = []
+    reactome_graph = nx.DiGraph()
+
+    for _, row in pathway_df.iterrows():
+        if pd.notna(row['synonyms']):
+            synonyms = row['synonyms'].split('|')
+        else:
+            synonyms = None
+
+        concept = CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX,
+            conceptId=row['st_id'],
+            conceptTypes=[ConceptType.PATHWAY],
+            label=row['display_name'] if not pd.isna(row['display_name']) else None,
+            synonyms=synonyms,
+            status=ConceptStatus.ACTIVE,
+        )
+
+        concepts.append(concept)
+        reactome_graph.add_node(row['st_id'])
+
+    for _, row in reaction_df.iterrows():
+        if pd.notna(row['synonyms']):
+            synonyms = row['synonyms'].split('|')
+        else:
+            synonyms = None
+
+        concept = CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX,
+            conceptId=row['st_id'],
+            conceptTypes=[ConceptType.REACTION],
+            label=row['display_name'] if not pd.isna(row['display_name']) else None,
+            synonyms=synonyms,
+            status=ConceptStatus.ACTIVE,
+        )
+
+        concepts.append(concept)
+        reactome_graph.add_node(row['st_id'])
+
+    for _, row in mapping_df.iterrows():
+        reactome_graph.add_edge(
+            row['reaction'],
+            row['pathway'],
+            label=ConceptRelationshipType.PART_OF,
+        )
+
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    await doc_db.save_terms(
+        terms=concepts
+    )
+
+    await graph_db.save_vocabulary_graph(
+        concepts=concepts,
+        graph=reactome_graph,
+    )

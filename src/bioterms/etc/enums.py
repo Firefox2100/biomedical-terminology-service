@@ -48,6 +48,7 @@ class ConceptType(StrEnum):
     The type of concept represented in the vocabularies.
     """
     PATHWAY = 'pathway'
+    REACTION = 'reaction'
 
 
 class ConceptRelationshipType(StrEnum):
@@ -55,6 +56,7 @@ class ConceptRelationshipType(StrEnum):
     The type of relationship between concepts in the vocabularies.
     """
     IS_A = 'is_a'
+    PART_OF = 'part_of'
     REPLACED_BY = 'replaced_by'
 
 
