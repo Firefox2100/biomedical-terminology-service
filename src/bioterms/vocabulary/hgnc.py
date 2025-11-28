@@ -9,7 +9,8 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
-from bioterms.model.concept import GeneConcept
+from bioterms.model.concept import HgncConcept
+from .utils import ensure_gene_symbol_loaded
 
 
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee'
@@ -20,7 +21,7 @@ FILE_PATHS = [
     'hgnc/symbol.txt',
     'hgnc/withdrawn.txt',
 ]
-CONCEPT_CLASS = GeneConcept
+CONCEPT_CLASS = HgncConcept
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -58,6 +59,11 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     """
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HGNC release files not found')
+
+    await ensure_gene_symbol_loaded(
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
 
     symbol_df = pd.read_csv(
         str(os.path.join(CONFIG.data_dir, FILE_PATHS[0])),

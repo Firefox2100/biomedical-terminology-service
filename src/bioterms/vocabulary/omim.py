@@ -1,5 +1,4 @@
 import os
-import gzip
 import aiofiles
 import aiofiles.os
 import httpx
@@ -9,7 +8,7 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -33,32 +32,28 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     ensure_data_directory()
 
     csv_url = 'https://data.bioontology.org/ontologies/OMIM/download?download_format=csv'
-    csv_path = 'omim/omim.gz'
+    gzip_path = os.path.join(CONFIG.data_dir, 'omim/omim.gz')
 
     if not CONFIG.bioportal_api_key:
         raise ValueError('BioPortal API key is required to download OMIM ontology.')
 
-    await download_file(
-        url=csv_url,
-        file_path=csv_path,
-        headers={'Authorization': f'apikey token={CONFIG.bioportal_api_key}'},
-        download_client=download_client,
-    )
-
-    gz_full_path = os.path.join(CONFIG.data_dir, csv_path)
-    out_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
-
-    # Read the gz file asynchronously, decompress in memory, then write output asynchronously
-    async with aiofiles.open(gz_full_path, 'rb') as f_in:
-        gz_data = await f_in.read()
-    decompressed = gzip.decompress(gz_data)
-    async with aiofiles.open(out_path, 'wb') as f_out:
-        await f_out.write(decompressed)
-
     try:
-        await aiofiles.os.remove(gz_full_path)
-    except Exception:
-        pass
+        await download_file(
+            url=csv_url,
+            file_path='omim/omim.gz',
+            headers={'Authorization': f'apikey token={CONFIG.bioportal_api_key}'},
+            download_client=download_client,
+        )
+
+        await extract_file_from_gzip(
+            gzip_path=gzip_path,
+            output_path=os.path.join(CONFIG.data_dir, FILE_PATHS[0])
+        )
+    finally:
+        try:
+            await aiofiles.os.remove(gzip_path)
+        except Exception:
+            pass
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,

@@ -4,6 +4,7 @@ import zipfile
 import uuid
 import tempfile
 import fnmatch
+import gzip
 from pathlib import Path
 import aiofiles
 import aiofiles.os
@@ -120,6 +121,24 @@ async def extract_file_from_zip(zip_path: str,
 
             async with aiofiles.open(dest, 'wb') as dest_f:
                 await dest_f.write(data)
+
+
+async def extract_file_from_gzip(gzip_path: str,
+                                 output_path: str,
+                                 ):
+    """
+    Extract a gzip compressed file.
+    :param gzip_path: The path to the gzip file.
+    :param output_path: The path to save the decompressed output file.
+    """
+    # Read the gz file asynchronously, decompress in memory, then write output asynchronously
+    async with aiofiles.open(gzip_path, 'rb') as f_in:
+        gz_data = await f_in.read()
+
+    decompressed = gzip.decompress(gz_data)
+
+    async with aiofiles.open(output_path, 'wb') as f_out:
+        await f_out.write(decompressed)
 
 
 async def download_rf2(release_url: str,

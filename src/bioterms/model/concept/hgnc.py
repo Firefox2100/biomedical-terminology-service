@@ -4,9 +4,9 @@ from pydantic import Field, ConfigDict
 from .concept import Concept
 
 
-class GeneConcept(Concept):
+class HgncConcept(Concept):
     """
-    A model for a gene concept in a vocabulary.
+    A model for a HGNC gene concept in a vocabulary.
     """
 
     model_config = ConfigDict(

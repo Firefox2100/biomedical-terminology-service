@@ -25,6 +25,7 @@ class ConceptPrefix(StrEnum):
     The prefix used for concepts in the vocabularies.
     """
     CTV3 = 'ctv3'
+    ENSEMBL = 'ensembl'
     HGNC = 'hgnc'
     HGNC_SYMBOL = 'gene'
     HPO = 'hpo'
@@ -49,6 +50,10 @@ class ConceptType(StrEnum):
     """
     PATHWAY = 'pathway'
     REACTION = 'reaction'
+    GENE = 'gene'
+    TRANSCRIPT = 'transcript'
+    EXON = 'exon'
+    PROTEIN = 'protein'
 
 
 class ConceptRelationshipType(StrEnum):
