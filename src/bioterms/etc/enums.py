@@ -31,6 +31,7 @@ class ConceptPrefix(StrEnum):
     NCIT = 'ncit'
     OMIM = 'omim'
     ORDO = 'ordo'
+    REACTOME = 'reactome'
     SNOMED = 'snomed'
 
 

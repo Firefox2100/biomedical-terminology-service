@@ -12,6 +12,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
+
 VOCABULARY_NAME = 'National Cancer Institute Thesaurus'
 VOCABULARY_PREFIX = ConceptPrefix.NCIT
 ANNOTATIONS = []
@@ -52,16 +53,6 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             await aiofiles.os.remove(zip_full_path)
         except Exception:
             pass
-
-
-def delete_vocabulary_files():
-    """
-    Delete the NCIT vocabulary files.
-    """
-    try:
-        os.remove(os.path.join(CONFIG.data_dir, FILE_PATHS[0]))
-    except Exception:
-        pass
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
@@ -133,48 +124,3 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         concepts=concepts,
         graph=ncit_graph,
     )
-
-
-async def create_indexes(overwrite: bool = False,
-                         doc_db: DocumentDatabase = None,
-                         graph_db: GraphDatabase = None,
-                         ):
-    """
-    Create indexes for the NCIT vocabulary in the primary databases.
-    :param overwrite: Whether to overwrite existing indexes.
-    :param doc_db: Optional DocumentDatabase instance to use.
-    :param graph_db: Optional GraphDatabase instance to use.
-    """
-    if doc_db is None:
-        doc_db = await get_active_doc_db()
-    if graph_db is None:
-        graph_db = get_active_graph_db()
-
-    await doc_db.create_index(
-        prefix=VOCABULARY_PREFIX,
-        field='conceptId',
-        unique=True,
-        overwrite=overwrite,
-    )
-    await doc_db.create_index(
-        prefix=VOCABULARY_PREFIX,
-        field='label',
-        overwrite=overwrite,
-    )
-
-    await graph_db.create_index()
-
-
-async def delete_vocabulary_data(doc_db: DocumentDatabase = None,
-                                 graph_db: GraphDatabase = None,
-                                 ):
-    """
-    Delete all NCIT vocabulary data from the primary databases.
-    """
-    if doc_db is None:
-        doc_db = await get_active_doc_db()
-    if graph_db is None:
-        graph_db = get_active_graph_db()
-
-    await doc_db.delete_all_for_label(VOCABULARY_PREFIX)
-    await graph_db.delete_vocabulary_graph(prefix=VOCABULARY_PREFIX)
