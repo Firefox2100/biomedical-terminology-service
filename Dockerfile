@@ -28,7 +28,7 @@ COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
 RUN pip install --upgrade pip && \
-    pip install . && \
+    pip install .[test] && \
     chown -R appuser:appgroup /app
 
 USER appuser

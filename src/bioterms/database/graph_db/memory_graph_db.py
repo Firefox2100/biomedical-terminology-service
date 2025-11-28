@@ -2,10 +2,11 @@ from typing import AsyncIterator
 import networkx as nx
 import pandas as pd
 
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
+from bioterms.model.similar_term import SimilarTerm
 from .graph_db import GraphDatabase
 
 
@@ -195,6 +196,7 @@ class MemoryGraphDatabase(GraphDatabase):
                                 prefix: ConceptPrefix,
                                 concept_ids: list[str],
                                 max_depth: int | None = None,
+                                limit: int | None = None,
                                 ) -> AsyncIterator[ExpandedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
@@ -206,5 +208,28 @@ class MemoryGraphDatabase(GraphDatabase):
         :param prefix: The prefix of the concepts to expand.
         :param concept_ids: The list of concept IDs to expand.
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
+        :param limit: The maximum number of descendants to return for each term. If None, return all descendants.
         :return: An asynchronous iterator yielding ExpandedTerm instances.
+        """
+
+    async def get_similar_terms_iter(self,
+                                     prefix: ConceptPrefix,
+                                     concept_ids: list[str],
+                                     threshold: float = 1.0,
+                                     same_prefix: bool = True,
+                                     corpus_prefix: ConceptPrefix | None = None,
+                                     method: SimilarityMethod | None = None,
+                                     limit: int | None = None,
+                                     ) -> AsyncIterator[SimilarTerm]:
+        """
+        Get similar terms for the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param concept_ids: The list of concept IDs to find similar terms for.
+        :param threshold: The similarity threshold to filter similar terms.
+        :param same_prefix: Whether to only consider similar terms within the same prefix.
+        :param corpus_prefix: The corpus prefix that was used to calculate the similarity score,
+            if applicable.
+        :param method: The similarity method to use.
+        :param limit: The maximum number of similar terms to return for each concept ID.
+        :return: An asynchronous iterator yielding SimilarTerm instances.
         """

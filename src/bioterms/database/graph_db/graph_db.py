@@ -4,10 +4,11 @@ import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix
+from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
+from bioterms.model.similar_term import SimilarTerm
 
 
 class GraphDatabase(ABC):
@@ -153,6 +154,7 @@ class GraphDatabase(ABC):
                           prefix: ConceptPrefix,
                           concept_ids: list[str],
                           max_depth: int | None = None,
+                          limit: int | None = None,
                           ) -> AsyncIterator[ExpandedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
@@ -164,6 +166,7 @@ class GraphDatabase(ABC):
         :param prefix: The prefix of the concepts to expand.
         :param concept_ids: The list of concept IDs to expand.
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
+        :param limit: The maximum number of descendants to return for each term. If None, return all.
         :return: An asynchronous iterator yielding ExpandedTerm instances.
         """
 
@@ -171,6 +174,7 @@ class GraphDatabase(ABC):
                            prefix: ConceptPrefix,
                            concept_ids: list[str],
                            max_depth: int | None = None,
+                           limit: int | None = None,
                            ) -> list[ExpandedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth.
@@ -181,17 +185,75 @@ class GraphDatabase(ABC):
         :param prefix: The prefix of the concepts to expand.
         :param concept_ids: The list of concept IDs to expand.
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
-        :return: A dictionary mapping each concept ID to a set of its descendant concept IDs.
+        :param limit: The maximum number of descendants to return for each term. If None, return all.
+        :return: A list of ExpandedTerm instances.
         """
         expand_iter = self.expand_terms_iter(
             prefix=prefix,
             concept_ids=concept_ids,
             max_depth=max_depth,
+            limit=limit,
         )
 
         results: list[ExpandedTerm] = []
         async for expanded_term in expand_iter:
             results.append(expanded_term)
+
+        return results
+
+    @abstractmethod
+    def get_similar_terms_iter(self,
+                               prefix: ConceptPrefix,
+                               concept_ids: list[str],
+                               threshold: float = 1.0,
+                               same_prefix: bool = True,
+                               corpus_prefix: ConceptPrefix | None = None,
+                               method: SimilarityMethod | None = None,
+                               limit: int | None = None,
+                               ) -> AsyncIterator[SimilarTerm]:
+        """
+        Get similar terms for the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param concept_ids: The list of concept IDs to find similar terms for.
+        :param threshold: The similarity threshold to filter similar terms.
+        :param same_prefix: Whether to only consider similar terms within the same prefix.
+        :param corpus_prefix: The corpus prefix that was used to calculate the similarity score,
+            if applicable.
+        :param method: The similarity method to use.
+        :param limit: The maximum number of similar terms to return for each concept ID.
+        :return: An asynchronous iterator yielding SimilarTerm instances.
+        """
+
+    async def get_similar_terms(self,
+                                prefix: ConceptPrefix,
+                                concept_ids: list[str],
+                                threshold: float = 1.0,
+                                same_prefix: bool = True,
+                                method: SimilarityMethod | None = None,
+                                limit: int | None = None,
+                                ) -> list[SimilarTerm]:
+        """
+        Get similar terms for the given concept IDs.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param concept_ids: The list of concept IDs to find similar terms for.
+        :param threshold: The similarity threshold to filter similar terms.
+        :param same_prefix: Whether to only consider similar terms within the same prefix.
+        :param method: The similarity method to use.
+        :param limit: The maximum number of similar terms to return for each concept ID.
+        :return: A list of SimilarTerm instances.
+        """
+        similar_iter = self.get_similar_terms_iter(
+            prefix=prefix,
+            concept_ids=concept_ids,
+            threshold=threshold,
+            same_prefix=same_prefix,
+            method=method,
+            limit=limit,
+        )
+
+        results: list[SimilarTerm] = []
+        async for similar_term in similar_iter:
+            results.append(similar_term)
 
         return results
 

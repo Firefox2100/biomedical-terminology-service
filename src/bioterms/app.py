@@ -17,7 +17,7 @@ from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_doc_db, get_active_graph_db
 from bioterms.graphql_api import create_graphql_app
-from bioterms.router import auto_complete_router, data_router, expand_router, ui_router
+from bioterms.router import auto_complete_router, data_router, expand_router, similarity_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
@@ -80,6 +80,10 @@ def create_app() -> FastAPI:
             {
                 'name': 'Expansion',
                 'description': 'Endpoints for expanding biomedical terms to their descendants.',
+            },
+            {
+                'name': 'Similarity',
+                'description': 'Endpoints for retrieving similar biomedical terms.',
             },
             {
                 'name': 'UI',
@@ -166,6 +170,7 @@ def create_app() -> FastAPI:
     app.include_router(auto_complete_router)
     app.include_router(data_router)
     app.include_router(expand_router)
+    app.include_router(similarity_router)
     app.include_router(ui_router)
 
     static_file_path = pkg_resources.files('bioterms.data') / 'static'

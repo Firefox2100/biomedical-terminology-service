@@ -1,14 +1,15 @@
 import asyncio
-from typing import LiteralString, AsyncIterator
+from typing import LiteralString, AsyncIterator, Any
 import networkx as nx
 import pandas as pd
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
+from bioterms.model.similar_term import SimilarTermByPrefix, SimilarTerm
 from .graph_db import GraphDatabase
 
 
@@ -441,6 +442,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                                 prefix: ConceptPrefix,
                                 concept_ids: list[str],
                                 max_depth: int | None = None,
+                                limit: int | None = None,
                                 ) -> AsyncIterator[ExpandedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
@@ -452,6 +454,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param prefix: The prefix of the concepts to expand.
         :param concept_ids: The list of concept IDs to expand.
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
+        :param limit: The maximum number of descendants to return for each term. If None, return all.
         :return: An asynchronous iterator yielding ExpandedTerm instances.
         """
         async with self._client.session() as session:
@@ -459,14 +462,21 @@ class Neo4jGraphDatabase(GraphDatabase):
                 result = await self._execute_query_with_retry(
                     query="""
                     MATCH (n:Concept {prefix: $prefix})
-                    WHERE n.id in $concept_ids
+                    WHERE n.id IN $concept_ids
                     OPTIONAL MATCH (n)<-[:is_a*]-(descendant:Concept)
-                    RETURN n.id AS concept_id, COALESCE(COLLECT(DISTINCT descendant.id), []) AS descendants
+                    WITH n, [d IN collect(DISTINCT descendant.id) WHERE d IS NOT NULL] AS all_desc
+                    WITH n,
+                        CASE
+                            WHEN $limit IS NULL THEN all_desc
+                            ELSE all_desc[0..$limit]
+                        END AS descendants
+                    RETURN n.id AS concept_id, descendants
                     """,
                     session=session,
                     parameters={
                         'prefix': prefix.value,
                         'concept_ids': concept_ids,
+                        'limit': limit,
                     },
                 )
             else:
@@ -475,23 +485,29 @@ class Neo4jGraphDatabase(GraphDatabase):
                     MATCH (n:Concept {prefix: $prefix})
                     WHERE n.id IN $concept_ids
                     CALL apoc.path.expandConfig(
-                      n,
-                      {
-                        relationshipFilter: 'is_a<',
-                        labelFilter: '+Concept',
-                        minLevel: 1,
-                        maxLevel: $depth,
-                        bfs: true,
-                        uniqueness: 'NODE_GLOBAL'
-                      }
+                        n,
+                        {
+                            relationshipFilter: 'is_a<',
+                            labelFilter: '+Concept',
+                            minLevel: 1,
+                            maxLevel: $depth,
+                            bfs: true,
+                            uniqueness: 'NODE_GLOBAL'
+                        }
                     ) YIELD path
-                    WITH n, last(nodes(path)) AS descendant
-                    RETURN n.id AS concept_id, collect(DISTINCT descendant.id) AS descendants;
+                    WITH n, [d IN collect(DISTINCT last(nodes(path)).id) WHERE d IS NOT NULL] AS all_desc
+                    WITH n,
+                        CASE
+                            WHEN $limit IS NULL THEN all_desc
+                            ELSE all_desc[0..$limit]
+                        END AS descendants
+                    RETURN n.id AS concept_id, descendants
                     """,
                     session=session,
                     parameters={
                         'prefix': prefix.value,
                         'concept_ids': concept_ids,
+                        'limit': limit,
                         'depth': max_depth,
                     },
                 )
@@ -500,4 +516,127 @@ class Neo4jGraphDatabase(GraphDatabase):
                 yield ExpandedTerm(
                     conceptId=record['concept_id'],
                     descendants=list(set(record['descendants'])),
+                )
+
+    async def get_similar_terms_iter(self,
+                                     prefix: ConceptPrefix,
+                                     concept_ids: list[str],
+                                     threshold: float = 1.0,
+                                     same_prefix: bool = True,
+                                     corpus_prefix: ConceptPrefix | None = None,
+                                     method: SimilarityMethod | None = None,
+                                     limit: int | None = None,
+                                     ) -> AsyncIterator[SimilarTerm]:
+        """
+        Get similar terms for the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param concept_ids: The list of concept IDs to find similar terms for.
+        :param threshold: The similarity threshold to filter similar terms.
+        :param same_prefix: Whether to only consider similar terms within the same prefix.
+        :param corpus_prefix: The corpus prefix that was used to calculate the similarity score,
+            if applicable.
+        :param method: The similarity method to use.
+        :param limit: The maximum number of similar terms to return for each concept ID.
+        :return: An asynchronous iterator yielding SimilarTerm instances.
+        """
+        async with self._client.session() as session:
+            if same_prefix:
+                target_prefixes = [prefix.value]
+            else:
+                target_prefixes = [p.value for p in ConceptPrefix]
+
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                WHERE n.id IN $concept_ids
+                MATCH (n)-[r:similar_to]-(m:Concept)
+                WHERE m.prefix IN $target_prefixes
+                WITH n, m, apoc.convert.toMap(r) AS props
+                WITH
+                    n,
+                    m,
+                    props,
+                    [
+                        k IN keys(props)
+                        WHERE props[k] >= $threshold AND
+                        (
+                            ($corpus_prefix IS NULL AND $method IS NULL)
+                            OR ($corpus_prefix IS NULL AND $method IS NOT NULL
+                                AND (k = $method OR k STARTS WITH $method + ':'))
+                            OR ($corpus_prefix IS NOT NULL AND k ENDS WITH ':' + $corpus_prefix)
+                        )
+                    ] AS valid_keys
+                WHERE size(valid_keys) > 0
+                WITH
+                    n,
+                    m,
+                    apoc.coll.max([k IN valid_keys | props[k]]) AS score
+                ORDER BY n.id, score DESC
+                WITH
+                    n,
+                    collect({id: m.id, prefix: m.prefix}) AS sims
+                WITH
+                    n,
+                    CASE
+                        WHEN $limit IS NULL THEN sims
+                        ELSE sims[0..$limit]
+                    END AS limited_sims
+                UNWIND limited_sims AS sim
+                WITH
+                    n,
+                    sim.prefix AS similar_prefix,
+                    sim.id AS similar_id
+                WITH
+                    n,
+                    similar_prefix,
+                    collect(similar_id) AS similar_ids
+                RETURN
+                    n.id AS concept_id,
+                    similar_prefix AS similar_prefix,
+                    similar_ids AS similar_ids
+                
+                ORDER BY concept_id, similar_prefix
+                """,
+                session=session,
+                parameters={
+                    'prefix': prefix.value,
+                    'concept_ids': concept_ids,
+                    'target_prefixes': target_prefixes,
+                    'threshold': threshold,
+                    'method': method.value if method else None,
+                    'corpus_prefix': corpus_prefix.value if corpus_prefix else None,
+                    'limit': limit,
+                }
+            )
+
+            current_concept_id = None
+            current_groups: list[SimilarTermByPrefix] = []
+
+            async for record in result:
+                concept_id = record['concept_id']
+                similar_prefix = ConceptPrefix(record['similar_prefix'])
+                similar_ids = record['similar_ids']
+
+                group = SimilarTermByPrefix(
+                    prefix=similar_prefix,
+                    similarConcepts=similar_ids,
+                )
+
+                if current_concept_id is None:
+                    current_concept_id = concept_id
+                    current_groups = [group]
+                elif current_concept_id == concept_id:
+                    current_groups.append(group)
+                else:
+                    yield SimilarTerm(
+                        conceptId=current_concept_id,
+                        similarGroups=current_groups,
+                    )
+                    current_concept_id = concept_id
+                    current_groups = [group]
+
+            if current_concept_id is not None:
+                yield SimilarTerm(
+                    conceptId=current_concept_id,
+                    similarGroups=current_groups,
                 )

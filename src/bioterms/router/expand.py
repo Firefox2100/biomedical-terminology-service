@@ -86,17 +86,19 @@ async def expand_terms_v1(prefix: ConceptPrefix,
         prefix=prefix,
         concept_ids=requested_terms.term_ids,
         max_depth=depth,
+        limit=result_threshold if result_threshold > 0 else None,
     )
 
     v1_expanded_terms = []
     async for expanded_term in expand_iter:
         v1_expanded_term = ExpandedTermV1(
             termId=expanded_term.concept_id,
-            children=expanded_term.descendants[:result_threshold]
-                if result_threshold > 0 else expanded_term.descendants,
+            children=expanded_term.descendants,
             depth=depth,
         )
         v1_expanded_terms.append(v1_expanded_term)
+
+    return v1_expanded_terms
 
 
 @expand_router.get('/{prefix}/expand/v2', response_model=List[ExpandedTerm])
@@ -109,6 +111,10 @@ async def expand_terms_v2(prefix: ConceptPrefix,
                               None,
                               description='Maximum depth for expansion.'
                           ),
+                          limit: int | None = Query(
+                              None,
+                              description='Maximum number of descendants to return for each term.'
+                          ),
                           graph_db: GraphDatabase = Depends(get_active_graph_db),
                           ):
     """
@@ -118,12 +124,14 @@ async def expand_terms_v2(prefix: ConceptPrefix,
     :param prefix: The vocabulary prefix.
     :param concept_ids: List of concept IDs to expand.
     :param depth: Maximum depth for expansion.
+    :param limit: Maximum number of descendants to return for each term.
     :param graph_db: The graph database instance.
     """
     expand_iter = graph_db.expand_terms_iter(
         prefix=prefix,
         concept_ids=concept_ids,
         max_depth=depth,
+        limit=limit,
     )
 
     return StreamingResponse(
