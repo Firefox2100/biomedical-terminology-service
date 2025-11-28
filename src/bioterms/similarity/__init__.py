@@ -7,6 +7,7 @@ from bioterms.annotation import get_annotation_status
 
 
 ALL_SIMILARITY_METHODS = {
+    SimilarityMethod.CO_ANNOTATION: 'co_annotation',
     SimilarityMethod.RELEVANCE: 'relevance',
 }
 
@@ -42,7 +43,7 @@ def get_similarity_method_config(method: SimilarityMethod) -> dict:
 
 async def calculate_similarity(method: SimilarityMethod,
                                target_prefix: ConceptPrefix,
-                               corpus_prefix: ConceptPrefix,
+                               corpus_prefix: ConceptPrefix = None,
                                similarity_threshold: float | None = None,
                                doc_db: DocumentDatabase = None,
                                graph_db: GraphDatabase = None,
@@ -80,18 +81,22 @@ async def calculate_similarity(method: SimilarityMethod,
         )
 
     target_graph = await graph_db.get_vocabulary_graph(target_prefix)
-    corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
-    annotation_graph = await graph_db.get_annotation_graph(
-        prefix_1=target_prefix,
-        prefix_2=corpus_prefix,
-    )
+    if corpus_prefix is not None:
+        corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
+        annotation_graph = await graph_db.get_annotation_graph(
+            prefix_1=target_prefix,
+            prefix_2=corpus_prefix,
+        )
+    else:
+        corpus_graph = None
+        annotation_graph = None
 
     similarity_df = await similarity_module.calculate_similarity(
         target_graph=target_graph,
-        corpus_graph=corpus_graph,
-        annotation_graph=annotation_graph,
         target_prefix=target_prefix,
+        corpus_graph=corpus_graph,
         corpus_prefix=corpus_prefix,
+        annotation_graph=annotation_graph,
     )
 
     similarity_df = similarity_df[similarity_df['similarity'] >= similarity_threshold]

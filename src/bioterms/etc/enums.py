@@ -88,4 +88,5 @@ class SimilarityMethod(Enum):
     """
     The method used for calculating similarity between concepts.
     """
+    CO_ANNOTATION = 'co-annotation'
     RELEVANCE = 'relevance'

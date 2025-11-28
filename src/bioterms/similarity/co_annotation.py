@@ -1,0 +1,185 @@
+import asyncio
+import math
+import itertools
+from concurrent.futures import ProcessPoolExecutor
+import networkx as nx
+import pandas as pd
+
+from bioterms.etc.consts import CONFIG
+from bioterms.etc.enums import ConceptPrefix
+from .utils import count_annotation_for_graph
+
+
+METHOD_NAME = 'Co-Annotation Vector Method'
+DEFAULT_SIMILARITY_THRESHOLD = 0.2
+
+
+_pruned_target_graph: nx.DiGraph | None = None
+_annotation_graph: nx.DiGraph | None = None
+_corpus_prefix: ConceptPrefix | None = None
+_total_annotation_count: int | None = None
+
+
+def _calculate_co_annotation(node_1: str,
+                             node_2: str,
+                             target_graph: nx.DiGraph,
+                             corpus_prefix: ConceptPrefix,
+                             annotation_graph: nx.DiGraph,
+                             total_annotation_count: int,
+                             ) -> float | None:
+    """
+    Calculate the co-annotation similarity between two nodes.
+
+    This function uses a modified Jaccard index, which is a combination of Jaccard distance
+    and the lift of the co-annotation.
+    :param node_1: The first node.
+    :param node_2: The second node.
+    :param target_graph: The directed graph of the target vocabulary.
+    :param corpus_prefix: The prefix of the corpus vocabulary.
+    :param annotation_graph: The directed graph of the annotation between target and corpus.
+    :param total_annotation_count: The total number of annotations in the annotation graph.
+    :return: The co-annotation similarity score, or None if either node has zero annotations.
+    """
+    # Get all descendants including the node itself
+    descendants_1 = set(nx.ancestors(target_graph, node_1)) | {node_1}
+    descendants_2 = set(nx.ancestors(target_graph, node_2)) | {node_2}
+
+    # Find their annotation sets
+    annotation_set_1 = set()
+    for desc in descendants_1:
+        annotation_name = f'{corpus_prefix.value}:{desc}'
+        if annotation_name in annotation_graph:
+            annotation_set_1.update(
+                neighbor for neighbor in annotation_graph.neighbors(annotation_name)
+                if neighbor.startswith(f'{corpus_prefix.value}:')
+            )
+    annotation_set_2 = set()
+    for desc in descendants_2:
+        annotation_name = f'{corpus_prefix.value}:{desc}'
+        if annotation_name in annotation_graph:
+            annotation_set_2.update(
+                neighbor for neighbor in annotation_graph.neighbors(annotation_name)
+                if neighbor.startswith(f'{corpus_prefix.value}:')
+            )
+
+    if len(annotation_set_1) == 0 or len(annotation_set_2) == 0:
+        return None
+
+    similarity = (len(annotation_set_1.intersection(annotation_set_2))
+                  / len(annotation_set_1.union(annotation_set_2))) / \
+                 ((len(annotation_set_1) / total_annotation_count) *
+                  (len(annotation_set_2) / total_annotation_count))
+
+    return similarity
+
+
+def _co_annotation_worker(node_pair: tuple[str, str]) -> tuple[str, str, float | None]:
+    """
+    Worker function to calculate co-annotation similarity for a pair of nodes.
+    :param node_pair: A tuple of two node IDs.
+    :return: A tuple containing the two node IDs and their co-annotation similarity score.
+    """
+    node_1, node_2 = node_pair
+
+    similarity = _calculate_co_annotation(
+        node_1=node_1,
+        node_2=node_2,
+        target_graph=_pruned_target_graph,
+        corpus_prefix=_corpus_prefix,
+        annotation_graph=_annotation_graph,
+        total_annotation_count=_total_annotation_count,
+    )
+
+    return node_1, node_2, similarity
+
+
+def _worker_init(target_graph: nx.DiGraph,
+                 corpus_prefix: ConceptPrefix,
+                 annotation_graph: nx.DiGraph,
+                 total_annotation_count: int
+                 ):
+    """
+    Initialise global variables for worker processes.
+    :param target_graph: The directed graph of the target vocabulary.
+    :param corpus_prefix: The prefix of the corpus vocabulary.
+    :param annotation_graph: The directed graph of the annotation between target and corpus.
+    :param total_annotation_count: The total number of annotations in the annotation graph.
+    """
+    global _pruned_target_graph, _annotation_graph, _corpus_prefix, _total_annotation_count
+
+    _pruned_target_graph = target_graph
+    _annotation_graph = annotation_graph
+    _corpus_prefix = corpus_prefix
+    _total_annotation_count = total_annotation_count
+
+
+async def calculate_similarity(target_graph: nx.DiGraph,
+                               target_prefix: ConceptPrefix,
+                               corpus_graph: nx.DiGraph = None,
+                               corpus_prefix: ConceptPrefix = None,
+                               annotation_graph: nx.DiGraph = None,
+                               ) -> pd.DataFrame:
+    """
+    Calculate semantic similarity scores between terms in the target graph with co-annotation vectors.
+
+    The similarity between two terms is calculated based on the overlap of their annotation vectors
+    in the annotation graph, using a modified Jaccard index.
+    :param target_graph: The directed graph of the target vocabulary.
+    :param target_prefix: The prefix of the target vocabulary.
+    :param corpus_graph: The directed graph of the corpus vocabulary.
+    :param corpus_prefix: The prefix of the corpus vocabulary.
+    :param annotation_graph: The directed graph of the annotation between target and corpus.
+    :return: A pandas DataFrame with similarity scores.
+    """
+    # Count the annotations for each node in the target graph
+    count_annotation_for_graph(
+        target_graph=target_graph,
+        annotation_graph=annotation_graph,
+        target_prefix=target_prefix,
+    )
+
+    # Prune the graph to only include nodes with annotations
+    pruned_target_graph = target_graph.copy()
+    nodes_to_remove = [
+        node for node in pruned_target_graph.nodes
+        if pruned_target_graph.nodes[node].get('annotation_count', 0) == 0
+    ]
+    pruned_target_graph.remove_nodes_from(nodes_to_remove)
+
+    total_annotation_count = sum(
+        1 for node in annotation_graph.nodes
+        if node.startswith(f'{corpus_prefix.value}:')
+    )
+
+    nodes = list(pruned_target_graph.nodes)
+    node_pairs = itertools.combinations(nodes, 2)
+
+    # asyncio compatible multiprocessing
+    loop = asyncio.get_running_loop()
+
+    with ProcessPoolExecutor(
+        max_workers=CONFIG.process_limit,
+        initializer=_worker_init,
+        initargs=(pruned_target_graph, corpus_prefix, annotation_graph, total_annotation_count),
+    ) as executor:
+        tasks = [
+            loop.run_in_executor(
+                executor,
+                _co_annotation_worker,
+                node_pair,
+            ) for node_pair in node_pairs
+        ]
+
+        results = await asyncio.gather(*tasks)
+
+        # Compile results into a DataFrame
+        sim_data = [
+            {
+                'concept_from': n1,
+                'concept_to': n2,
+                'similarity': similarity,
+            } for n1, n2, similarity in results if similarity is not None
+        ]
+
+        similarity_df = pd.DataFrame(sim_data)
+        return similarity_df
