@@ -30,8 +30,8 @@ def _calculate_co_annotation(node_1: str,
     """
     Calculate the co-annotation similarity between two nodes.
 
-    This function uses a modified Jaccard index, which is a combination of Jaccard distance
-    and the lift of the co-annotation.
+    This function uses a combination of normalised pairwise mutual information and Jaccard index
+    to compute the similarity based on their annotation sets.
     :param node_1: The first node.
     :param node_2: The second node.
     :param target_graph: The directed graph of the target vocabulary.
@@ -62,13 +62,19 @@ def _calculate_co_annotation(node_1: str,
                 if neighbor.startswith(f'{corpus_prefix.value}:')
             )
 
+    annotation_intersection = annotation_set_1 & annotation_set_2
+    annotation_union = annotation_set_1 | annotation_set_2
+
     if len(annotation_set_1) == 0 or len(annotation_set_2) == 0:
         return None
 
-    similarity = (len(annotation_set_1.intersection(annotation_set_2))
-                  / len(annotation_set_1.union(annotation_set_2))) / \
-                 ((len(annotation_set_1) / total_annotation_count) *
-                  (len(annotation_set_2) / total_annotation_count))
+    npmi = (1 +
+            math.log(len(annotation_intersection) * total_annotation_count /
+                     (len(annotation_set_1) * len(annotation_set_2))) /
+            math.log(total_annotation_count / len(annotation_intersection))
+            ) / 2
+    jaccard_index = len(annotation_intersection) / len(annotation_union)
+    similarity = npmi * jaccard_index
 
     return similarity
 
