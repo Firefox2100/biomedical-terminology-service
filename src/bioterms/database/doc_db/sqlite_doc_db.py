@@ -337,10 +337,10 @@ class SqliteDocumentDatabase(DocumentDatabase):
 
         return count
 
-    async def get_item_iter(self,
-                            prefix: ConceptPrefix,
-                            limit: int = 0,
-                            ) -> AsyncIterator[Concept]:
+    async def get_terms_iter(self,
+                             prefix: ConceptPrefix,
+                             limit: int = 0,
+                             ) -> AsyncIterator[Concept]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.

@@ -1,0 +1,123 @@
+from uuid import uuid4
+from typing import AsyncIterator
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+
+from bioterms.model.concept import Concept
+from .vector_db import VectorDatabase
+
+
+class QdrantVectorDatabase(VectorDatabase):
+    """
+    Qdrant vector database implementation.
+    """
+
+    _client: AsyncQdrantClient | None = None
+
+    def __init__(self,
+                 client: AsyncQdrantClient | None = None,
+                 embedding_dimension: int = 768,
+                 ):
+        """
+        Initialise the Qdrant vector database.
+        :param client: Optional Qdrant client instance or None to use class variable
+        :param embedding_dimension: Dimension of the embedding vectors, defaults to 768 (for BGE)
+        """
+        if client is not None:
+            self._client = client
+
+        self._embedding_dimension = embedding_dimension
+
+    @property
+    def client(self) -> AsyncQdrantClient:
+        """
+        Return the Qdrant client instance.
+        :return: The Qdrant client
+        """
+        if self._client is None:
+            raise ValueError(
+                'Qdrant client is not set. Please set it using set_client method or pass it '
+                'during initialization.'
+            )
+
+        return self._client
+
+    @classmethod
+    def set_client(cls, client: AsyncQdrantClient):
+        """
+        Set the Qdrant client for the class.
+        :param client: The Qdrant client instance
+        """
+        cls._client = client
+
+    async def close(self):
+        """
+        Close the Qdrant client connection.
+        """
+        if self._client is not None:
+            await self._client.close()
+
+    async def create_collection(self,
+                                collection_name: str,
+                                distance: Distance = Distance.COSINE,
+                                ):
+        """
+        Create a Qdrant collection with the specified name and distance metric.
+        :param collection_name: The name of the collection to create
+        :param distance: The distance metric to use for the collection
+        """
+        await self.client.create_collection(
+            collection_name=collection_name,
+            vector_params=VectorParams(
+                size=self._embedding_dimension,
+                distance=distance,
+            )
+        )
+
+    async def delete_collection(self,
+                                collection_name: str,
+                                ):
+        """
+        Delete a Qdrant collection by name.
+        :param collection_name: The name of the collection to delete
+        """
+        await self.client.delete_collection(collection_name=collection_name)
+
+    async def insert_concepts(self,
+                              concepts: list[Concept] | AsyncIterator[Concept],
+                              ) -> dict[str, str]:
+        """
+        Insert concepts into the Qdrant collection. All concepts must have the same prefix.
+        :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
+        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
+        """
+        if not concepts:
+            return {}
+
+        id_map = {}
+        collection_name = concepts[0].prefix.value
+
+        # Check if the collection exists
+        collection_list = await self.client.get_collections()
+        collection_items = collection_list.model_dump().get('collections', [])
+        if collection_name not in [item.get('name') for item in collection_items]:
+            await self.create_collection(collection_name=collection_name)
+
+        async for embedded_batch in self.embed_concepts(concepts):
+            points = []
+            for concept_id, vector in embedded_batch:
+                point_id = str(uuid4())
+                points.append(PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={'conceptId': concept_id}
+                ))
+
+                id_map[concept_id] = point_id
+
+            await self.client.upsert(
+                collection_name=collection_name,
+                points=points,
+            )
+
+        return id_map

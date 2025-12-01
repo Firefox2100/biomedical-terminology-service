@@ -9,7 +9,8 @@ import aiofiles.os
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
-from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
+from bioterms.database import DocumentDatabase, GraphDatabase, VectorDatabase, get_active_doc_db, \
+    get_active_graph_db, get_active_vector_db
 from .utils import ALL_VOCABULARIES, get_vocabulary_module, get_vocabulary_status
 
 
@@ -204,6 +205,37 @@ async def load_vocabulary(prefix: ConceptPrefix,
     )
     if inspect.iscoroutine(result):
         await result
+
+
+async def embed_vocabulary(prefix: ConceptPrefix,
+                           doc_db: DocumentDatabase = None,
+                           graph_db: GraphDatabase = None,
+                           vector_db: VectorDatabase = None,
+                           ):
+    """
+    Embed the vocabulary specified by the prefix.
+    :param prefix: The prefix of the vocabulary to embed.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
+    :param vector_db: The vector database instance.
+    """
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+    if vector_db is None:
+        vector_db = get_active_vector_db()
+
+    status = await get_vocabulary_status(
+        prefix=prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+
+    if not status.loaded:
+        raise RuntimeError(f'Vocabulary {prefix} is not loaded. Cannot embed.')
+
+    concept_iter = doc_db.get_terms_iter(prefix)
+
+    await vector_db.insert_concepts(concept_iter)
 
 
 def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:

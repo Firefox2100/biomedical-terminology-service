@@ -10,9 +10,13 @@ import aiofiles
 import aiofiles.os
 import httpx
 import pandas as pd
+from sentence_transformers import SentenceTransformer
 
 from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT
 from .errors import FilesNotFound
+
+
+_transformer: SentenceTransformer | None = None
 
 
 def check_files_exist(files: list[str]) -> bool:
@@ -186,3 +190,16 @@ def rf2_dataframe_deduplicate(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     return unique_df
+
+
+def get_transformer() -> SentenceTransformer:
+    """
+    Get the global SentenceTransformer instance, initializing it if necessary.
+    :return: The SentenceTransformer instance
+    """
+    global _transformer
+
+    if _transformer is None:
+        _transformer = SentenceTransformer(CONFIG.transformer_model_name)
+
+    return _transformer

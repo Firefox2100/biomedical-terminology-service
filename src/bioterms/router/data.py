@@ -113,7 +113,7 @@ async def get_vocabulary_data(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of Concept instances.
     """
-    concepts_iter = doc_db.get_item_iter(prefix, limit=limit)
+    concepts_iter = doc_db.get_terms_iter(prefix, limit=limit)
 
     async def gen() -> AsyncIterator[bytes]:
         yield b'['
@@ -162,7 +162,7 @@ async def get_documents(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A stream response containing all documents in JSON format.
     """
-    concepts_iter = doc_db.get_item_iter(prefix)
+    concepts_iter = doc_db.get_terms_iter(prefix)
 
     file_name = f'{prefix.value}_documents.json'
     headers = {

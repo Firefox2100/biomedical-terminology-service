@@ -57,7 +57,7 @@ class MongoUserRepository(UserRepository):
         Save a User entity to the database.
         :param user: An instance of User to be saved.
         """
-        data = user.model_dump(by_alias=True)
+        data = user.model_dump(exclude_none=True)
         await self._collection.update_one(
             {'username': user.username},
             {'$set': data},
@@ -69,7 +69,7 @@ class MongoUserRepository(UserRepository):
         Update an existing User entity in the database.
         :param user: An instance of User to be updated.
         """
-        data = user.model_dump(by_alias=True)
+        data = user.model_dump(exclude_none=True)
         await self._collection.update_one(
             {'username': user.username},
             {'$set': data}
@@ -235,7 +235,7 @@ class MongoDocumentDatabase(DocumentDatabase):
 
         documents: dict[ConceptPrefix, list[dict]] = {}
         for concept, (term_id, ngrams, search_text) in zip(terms, extra_data):
-            doc = concept.model_dump()
+            doc = concept.model_dump(exclude_none=True)
             doc['nGrams'] = ngrams
             doc['searchText'] = search_text
 
@@ -261,10 +261,10 @@ class MongoDocumentDatabase(DocumentDatabase):
         count = await collection.count_documents({})
         return count
 
-    async def get_item_iter(self,
-                            prefix: ConceptPrefix,
-                            limit: int = 0,
-                            ) -> AsyncIterator[Concept]:
+    async def get_terms_iter(self,
+                             prefix: ConceptPrefix,
+                             limit: int = 0,
+                             ) -> AsyncIterator[Concept]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.

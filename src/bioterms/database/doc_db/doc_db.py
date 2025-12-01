@@ -82,10 +82,10 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
-    def get_item_iter(self,
-                      prefix: ConceptPrefix,
-                      limit: int = 0,
-                      ) -> AsyncIterator[Concept]:
+    def get_terms_iter(self,
+                       prefix: ConceptPrefix,
+                       limit: int = 0,
+                       ) -> AsyncIterator[Concept]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
@@ -103,7 +103,7 @@ class DocumentDatabase(ABC):
         :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
         :return: A list of Concept instances.
         """
-        it = self.get_item_iter(prefix, limit=limit)
+        it = self.get_terms_iter(prefix, limit=limit)
 
         results: list[Concept] = []
         async for concept in it:

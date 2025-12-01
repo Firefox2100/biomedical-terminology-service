@@ -9,7 +9,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from bioterms.etc.enums import DocDatabaseDriverType, GraphDatabaseDriverType, CacheDriverType, \
-    ServiceEnvironment
+    ServiceEnvironment, VectorDatabaseDriverType
 
 
 SECRETS_DIR = '/run/secrets' if os.path.isdir('/run/secrets') else None
@@ -161,6 +161,20 @@ class Settings(BaseSettings):
         None,
         description='API key for accessing the NHS TRUD services',
     )
+
+    transformer_model_name: str = Field(
+        'BAAI/bge-base-en-v1.5',
+        description='Name of the transformer model to use for embeddings',
+    )
+    vector_database_driver: VectorDatabaseDriverType = Field(
+        VectorDatabaseDriverType.QDRANT,
+        description='Vector database driver to use for the service',
+    )
+    qdrant_location: str = Field(
+        'http://localhost:6333',
+        description='Location of the Qdrant vector database',
+    )
+
 
 
 CONFIG = Settings(_env_file=os.getenv('BTS_ENV_FILE', 'conf/.env'))     # type: ignore

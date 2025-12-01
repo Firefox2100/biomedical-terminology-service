@@ -97,3 +97,10 @@ class SimilarityMethod(Enum):
     """
     CO_ANNOTATION = 'co-annotation'
     RELEVANCE = 'relevance'
+
+
+class VectorDatabaseDriverType(Enum):
+    """
+    The type of vector database driver.
+    """
+    QDRANT = 'qdrant'

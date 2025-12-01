@@ -40,6 +40,8 @@ dependencies = [
     "pydantic~=2.12.5",
     "pydantic-settings~=2.12.0",
     "rich~=14.2.0",
+    "sentence-transformers~=5.1.2",
+    "transformers~=4.57.3",
     "tqdm~=4.67.1",
     "typer~=0.20.0",
     "uvicorn~=0.38.0",
@@ -58,6 +60,7 @@ test = [
     "pytest-cov~=7.0.0",
     "pylint~=4.0.4",
     "pymongo~=4.15.4",
+    "qdrant-client~=1.16.1",
     "redis~=7.1.0",
 ]
 aiosqlite = [
@@ -69,12 +72,16 @@ pymongo = [
 neo4j = [
     "neo4j~=6.0.3",
 ]
+qdrant = [
+    "qdrant-client~=1.16.1",
+]
 redis = [
     "redis~=7.1.0",
 ]
 all = [
     "pymongo~=4.15.4",
     "neo4j~=6.0.3",
+    "qdrant-client~=1.16.1",
     "redis~=7.1.0",
 ]
 
