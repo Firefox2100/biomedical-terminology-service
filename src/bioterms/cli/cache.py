@@ -1,9 +1,6 @@
 import traceback
-from typing import Annotated, Optional
-from rich.table import Table
 import typer
 
-from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import get_active_cache
 from .utils import CONSOLE, run_async
 

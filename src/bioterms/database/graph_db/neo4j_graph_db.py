@@ -1,5 +1,5 @@
 import asyncio
-from typing import LiteralString, AsyncIterator, Any
+from typing import LiteralString, AsyncIterator
 import networkx as nx
 import pandas as pd
 from neo4j import AsyncDriver, AsyncSession
@@ -9,7 +9,8 @@ from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
-from bioterms.model.similar_term import SimilarTermByPrefix, SimilarTerm
+from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm
+from bioterms.model.translated_term import TranslatedTerm
 from .graph_db import GraphDatabase
 
 
@@ -570,11 +571,16 @@ class Neo4jGraphDatabase(GraphDatabase):
                 WITH
                     n,
                     m,
-                    apoc.coll.max([k IN valid_keys | props[k]]) AS score
-                ORDER BY n.id, score DESC
+                    apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
+                    apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
+                ORDER BY n.id, max_score DESC
                 WITH
                     n,
-                    collect({id: m.id, prefix: m.prefix}) AS sims
+                    collect({
+                        id: m.id,
+                        prefix: m.prefix,
+                        similarity_scores: similarity_scores
+                    }) AS sims
                 WITH
                     n,
                     CASE
@@ -585,16 +591,18 @@ class Neo4jGraphDatabase(GraphDatabase):
                 WITH
                     n,
                     sim.prefix AS similar_prefix,
-                    sim.id AS similar_id
+                    sim
                 WITH
                     n,
                     similar_prefix,
-                    collect(similar_id) AS similar_ids
+                    collect({
+                        id: sim.id,
+                        similarity_scores: sim.similarity_scores
+                    }) AS similar_concepts
                 RETURN
                     n.id AS concept_id,
                     similar_prefix AS similar_prefix,
-                    similar_ids AS similar_ids
-                
+                    similar_concepts AS similar_concepts
                 ORDER BY concept_id, similar_prefix
                 """,
                 session=session,
@@ -609,17 +617,25 @@ class Neo4jGraphDatabase(GraphDatabase):
                 }
             )
 
-            current_concept_id = None
+            current_concept_id: str | None = None
             current_groups: list[SimilarTermByPrefix] = []
 
             async for record in result:
-                concept_id = record['concept_id']
+                concept_id: str = record['concept_id']
                 similar_prefix = ConceptPrefix(record['similar_prefix'])
-                similar_ids = record['similar_ids']
+                similar_concepts_data: list[dict] = record['similar_concepts']
+
+                similar_concepts: list[SimilarTermWithScores] = [
+                    SimilarTermWithScores(
+                        conceptId=sim['id'],
+                        similarity_scores=sim['similarity_scores'],
+                    )
+                    for sim in similar_concepts_data
+                ]
 
                 group = SimilarTermByPrefix(
                     prefix=similar_prefix,
-                    similarConcepts=similar_ids,
+                    similarConcepts=similar_concepts,
                 )
 
                 if current_concept_id is None:
@@ -639,4 +655,83 @@ class Neo4jGraphDatabase(GraphDatabase):
                 yield SimilarTerm(
                     conceptId=current_concept_id,
                     similarGroups=current_groups,
+                )
+
+    async def translate_terms_iter(self,
+                                   original_ids: list[str],
+                                   original_prefix: ConceptPrefix,
+                                   constraint_ids: dict[ConceptPrefix, set[str]],
+                                   threshold: float = 1.0,
+                                   limit: int | None = None,
+                                   ) -> AsyncIterator[TranslatedTerm]:
+        """
+        Translate terms to a subset of the constraint vocabulary as an asynchronous iterator,
+        based on the similarity scores.
+        :param original_ids: The list of original concept IDs to translate.
+        :param original_prefix: The prefix of the original concepts.
+        :param constraint_ids: A dictionary mapping constraint vocabulary prefixes to sets of concept IDs.
+        :param threshold: The similarity threshold to filter translations.
+        :param limit: The maximum number of translations to return for each original concept ID.
+        :return: An asynchronous iterator yielding TranslatedTerm instances.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                UNWIND keys($constraint_ids) AS constraint_prefix
+
+                MATCH (n:Concept {prefix: $original_prefix})
+                WHERE n.id IN $original_ids
+
+                MATCH (n)-[r:similar_to]-(m:Concept {prefix: constraint_prefix})
+                WHERE m.id IN $constraint_ids[constraint_prefix]
+
+                WITH n, m, apoc.convert.toMap(r) AS props
+                WITH
+                    n,
+                    m,
+                    props,
+                    [k IN keys(props) WHERE props[k] >= $threshold] AS valid_keys
+                WHERE size(valid_keys) > 0
+                WITH
+                    n,
+                    m,
+                    apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
+                    apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
+                ORDER BY n.id, max_score DESC
+
+                WITH
+                    n,
+                    collect({
+                        id: m.id,
+                        prefix: m.prefix,
+                        max_score: max_score,
+                    }) AS sims
+                WITH
+                    n,
+                    CASE
+                        WHEN $limit IS NULL THEN sims
+                        ELSE sims[0..$limit]
+                    END AS limited_sims
+                UNWIND limited_sims AS sim
+                RETURN
+                    sim.id AS translated_id,
+                    sim.prefix AS translated_prefix,
+                    sim.max_score AS similarity_score
+                ORDER BY original_id, similarity_score DESC
+                """,
+                session=session,
+                parameters={
+                    'original_prefix': original_prefix.value,
+                    'original_ids': original_ids,
+                    'constraint_ids': {k.value: list(v) for k, v in constraint_ids.items()},
+                    'threshold': threshold,
+                    'limit': limit,
+                }
+            )
+
+            async for record in result:
+                yield TranslatedTerm(
+                    conceptId=record['translated_id'],
+                    prefix=record['translated_prefix'],
+                    score=record['similarity_score'],
                 )

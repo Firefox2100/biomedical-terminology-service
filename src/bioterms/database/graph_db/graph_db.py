@@ -9,6 +9,7 @@ from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.expanded_term import ExpandedTerm
 from bioterms.model.similar_term import SimilarTerm
+from bioterms.model.translated_term import TranslatedTerm
 
 
 class GraphDatabase(ABC):
@@ -256,6 +257,25 @@ class GraphDatabase(ABC):
             results.append(similar_term)
 
         return results
+
+    @abstractmethod
+    def translate_terms_iter(self,
+                             original_ids: list[str],
+                             original_prefix: ConceptPrefix,
+                             constraint_ids: dict[ConceptPrefix, set[str]],
+                             threshold: float = 1.0,
+                             limit: int | None = None,
+                             ) -> AsyncIterator[TranslatedTerm]:
+        """
+        Translate terms to a subset of the constraint vocabulary as an asynchronous iterator,
+        based on the similarity scores.
+        :param original_ids: The list of original concept IDs to translate.
+        :param original_prefix: The prefix of the original concepts.
+        :param constraint_ids: A dictionary mapping constraint vocabulary prefixes to sets of concept IDs.
+        :param threshold: The similarity threshold to filter translations.
+        :param limit: The maximum number of translations to return for each original concept ID.
+        :return: An asynchronous iterator yielding TranslatedTerm instances.
+        """
 
 
 _active_graph_db: GraphDatabase | None = None

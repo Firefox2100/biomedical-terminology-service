@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -42,6 +42,34 @@ class SimilarityRequestV1(JsonModel):
     )
 
 
+class TranslateRequestV1(JsonModel):
+    """
+    Request model for the translate terms endpoint (v1).
+    """
+
+    model_config = ConfigDict(
+        extra='forbid',
+        serialize_by_alias=True,
+    )
+
+    term_ids: List[str] = Field(
+        ...,
+        description='List of term IDs to translate.',
+        alias='termIds',
+    )
+    constraint_ids: List[str] = Field(
+        ...,
+        description='List of constraint term IDs to filter the translations.',
+        alias='constraintIds',
+    )
+    threshold: Union[float, List[float]] = Field(
+        ...,
+        description='The similarity score threshold(s) for the translations. '
+                    'If a single float is provided, it will be applied to all constraint IDs. '
+                    'If a list is provided, it must match the length of constraint IDs.',
+    )
+
+
 class SimilarTermV1(JsonModel):
     """
     Data model for an expanded term in the expand terms response (v1).
@@ -73,6 +101,27 @@ class SimilarTermV1(JsonModel):
     )
 
 
+class TranslatedTermV1(JsonModel):
+    """
+    Data model for a translated term in the translate terms response (v1).
+    """
+
+    model_config = ConfigDict(
+        extra='forbid',
+        serialize_by_alias=True,
+    )
+
+    term_id: str = Field(
+        ...,
+        description='The original term ID to be translated.',
+        alias='termId',
+    )
+    score: float = Field(
+        ...,
+        description='The similarity score of the translated term.',
+    )
+
+
 @similarity_router.post('/{prefix}/similarity/v1', response_model=List[SimilarTermV1])
 async def get_similar_terms_v1(prefix: ConceptPrefix,
                                requested_terms: SimilarityRequestV1,
@@ -101,10 +150,12 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
 
     v1_similar_terms = []
     async for similar_term in similarity_iter:
+        similar_concepts = similar_term.similar_groups[0].similar_concepts if similar_term.similar_groups else []
+
         v1_similar_terms.append(
             SimilarTermV1(
                 termId=similar_term.concept_id,
-                similarIds=similar_term.similar_groups[0].similar_concepts if similar_term.similar_groups else [] ,
+                similarIds=[concept.concept_id for concept in similar_concepts],
                 similarityThreshold=requested_terms.threshold,
                 threshold=result_threshold if result_threshold > 0 else None,
             )
@@ -164,5 +215,108 @@ async def get_similar_terms_v2(prefix: ConceptPrefix,
 
     return StreamingResponse(
         response_generator(similarity_iter),
+        media_type='application/json'
+    )
+
+
+@similarity_router.post('/{prefix}/translate/v1', response_model=List[TranslatedTermV1])
+async def translate_terms_v1(prefix: ConceptPrefix,
+                             translate_request: TranslateRequestV1,
+                             result_threshold: int = Query(
+                                 0,
+                                 description='The maximum number of terms to return in the response. 0 for no limit.'
+                             ),
+                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             ):
+    """
+    Translate terms for the requested term IDs (V1). This endpoint is compatible with Cafe Variome V3 backend.
+    \f
+    :param prefix: The vocabulary prefix.
+    :param translate_request: The requested terms for translation.
+    :param result_threshold: The maximum number of terms to return in the response. 0 for no limit.
+    :param graph_db: The graph database instance.
+    :return: A list of translated terms with their similarity scores.
+    """
+    translate_iter = graph_db.translate_terms_iter(
+        original_ids=translate_request.original_ids,
+        original_prefix=prefix,
+        constraint_ids={
+            prefix: set(translate_request.constraint_ids),
+        },
+        threshold=translate_request.threshold,
+        limit=result_threshold if result_threshold > 0 else None,
+    )
+
+    v1_translated_terms = []
+    async for translated_term in translate_iter:
+        v1_translated_terms.append(TranslatedTermV1(
+            termId=translated_term.concept_id,
+            score=translated_term.similarity,
+        ))
+
+    return v1_translated_terms
+
+
+@similarity_router.get('/{prefix}/translate/v2', response_model=List[SimilarTerm])
+async def translate_terms_v2(prefix: ConceptPrefix,
+                             original_ids: List[str] = Query(
+                                 ...,
+                                 description='List of concept IDs to get similar concepts for.'
+                             ),
+                             constraint_concepts: List[str] = Query(
+                                 ...,
+                                 description='List of constraint concept IDs to filter the translations. '
+                                             'In prefix:id format.'
+                             ),
+                             threshold: float = Query(
+                                 1.0,
+                                 description='Minimum similarity score to consider a term as similar. '
+                                             '0 to return all. Please note that the server may have chosen to '
+                                             'store only connections which similarity score are above a '
+                                             'certain value. In this case, since the data is not stored, '
+                                             'they will not be returned even if the threshold is set to lower.',
+                                 ge=0.0,
+                                 le=1.0,
+                             ),
+                             limit: Optional[int] = Query(
+                                 None,
+                                 description='Maximum number of descendants to return for each term.',
+                                 ge=1,
+                             ),
+                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             ):
+    """
+    Translate terms for the requested term IDs (V2).
+    \f
+    :param prefix: The vocabulary prefix.
+    :param original_ids: The original concept IDs to translate.
+    :param constraint_concepts: The constraint concept IDs to filter the translations.
+    :param threshold: The minimum similarity score to consider a term as similar.
+    :param limit: Maximum number of descendants to return for each term.
+    :param graph_db: The graph database instance.
+    :return:
+    """
+    constraint_dict = {}
+    for concept in constraint_concepts:
+        try:
+            concept_prefix_str, concept_id = concept.split(':', 1)
+            concept_prefix = ConceptPrefix(concept_prefix_str)
+        except ValueError:
+            raise ValueError(f'Invalid constraint concept format: {concept}. Expected format is prefix:id')
+
+        if concept_prefix not in constraint_dict:
+            constraint_dict[concept_prefix] = set()
+        constraint_dict[concept_prefix].add(concept_id)
+
+    translate_iter = graph_db.translate_terms_iter(
+        original_ids=original_ids,
+        original_prefix=prefix,
+        constraint_ids=constraint_dict,
+        threshold=threshold,
+        limit=limit,
+    )
+
+    return StreamingResponse(
+        response_generator(translate_iter),
         media_type='application/json'
     )
