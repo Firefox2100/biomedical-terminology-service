@@ -148,6 +148,10 @@ class Settings(BaseSettings):
         6379,
         description='Redis port for the cache',
     )
+    redis_db: int = Field(
+        0,
+        description='Redis database index for the cache',
+    )
 
     bioportal_api_key: Optional[str] = Field(
         None,

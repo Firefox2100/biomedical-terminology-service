@@ -13,7 +13,7 @@ from asgi_csrf import asgi_csrf
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
 from bioterms.etc.errors import BtsError
-from bioterms.database import get_active_doc_db, get_active_graph_db
+from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.graphql_api import create_graphql_app
 from bioterms.router import auto_complete_router, data_router, expand_router, similarity_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     """
     LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
 
+    cache = get_active_cache()
     doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
     finally:
         LOGGER.info('Shutting down application...')
 
+        await cache.close()
         await doc_db.close()
         await graph_db.close()
 

@@ -1,8 +1,12 @@
+import os
 import importlib
 import importlib.resources
 import inspect
+from datetime import datetime, timezone
+import aiofiles
 import aiofiles.os
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
@@ -42,6 +46,12 @@ async def delete_vocabulary_files(prefix: ConceptPrefix):
                 await aiofiles.os.remove(file_path)
             except Exception:
                 pass
+
+        timestamp_file_path = os.path.join(CONFIG.data_dir, vocabulary_module.TIMESTAMP_FILE)
+        try:
+            await aiofiles.os.remove(timestamp_file_path)
+        except Exception:
+            pass
     else:
         result = deletion_func()
         if inspect.iscoroutine(result):
@@ -68,6 +78,12 @@ async def download_vocabulary(prefix: ConceptPrefix,
     result = download_func()
     if inspect.iscoroutine(result):
         await result
+
+    timestamp_file_path = os.path.join(CONFIG.data_dir, vocabulary_module.TIMESTAMP_FILE)
+
+    async with aiofiles.open(timestamp_file_path, 'w') as timestamp_file:
+        current_time = datetime.now(timezone.utc).isoformat()
+        await timestamp_file.write(current_time)
 
 
 async def create_indexes(prefix: ConceptPrefix,

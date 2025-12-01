@@ -25,6 +25,7 @@ FILE_PATHS = [
     'ctv3/hierarchy.v3',
     'ctv3/redundancy.map',
 ]
+TIMESTAMP_FILE = 'ctv3/.timestamp'
 CONCEPT_CLASS = Concept
 
 

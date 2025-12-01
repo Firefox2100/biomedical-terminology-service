@@ -18,6 +18,7 @@ VOCABULARY_PREFIX = ConceptPrefix.NCIT
 ANNOTATIONS = []
 SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
 FILE_PATHS = ['ncit/thesaurus.txt']
+TIMESTAMP_FILE = 'ncit/.timestamp'
 CONCEPT_CLASS = Concept
 
 

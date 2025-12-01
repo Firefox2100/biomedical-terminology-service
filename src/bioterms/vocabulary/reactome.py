@@ -20,6 +20,7 @@ FILE_PATHS = [
     'reactome/reaction.csv',
     'reactome/pathway_to_reaction.csv',
 ]
+TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = Concept
 
 

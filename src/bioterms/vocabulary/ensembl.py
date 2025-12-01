@@ -23,6 +23,7 @@ SIMILARITY_METHODS = []
 FILE_PATHS = [
     'ensembl/homo-sapien.gtf',
 ]
+TIMESTAMP_FILE = 'ensembl/.timestamp'
 CONCEPT_CLASS = EnsemblConcept
 
 

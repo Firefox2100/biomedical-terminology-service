@@ -7,7 +7,7 @@ from ariadne.utils import convert_camel_case_to_snake
 from fastapi import Request
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import get_active_doc_db, get_active_graph_db
+from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
 from .data_loader import DataLoader
 
@@ -38,6 +38,7 @@ async def get_context_value(request: Request,
     :param _: Raw JSON payload of the GraphQL request
     :return: A dictionary containing the context values
     """
+    cache = get_active_cache()
     doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
@@ -48,6 +49,7 @@ async def get_context_value(request: Request,
 
     context_value: dict[str, Any] = {
         'request': request,
+        'cache': cache,
         'doc_db': doc_db,
         'graph_db': graph_db,
         'data_loader': data_loader,
@@ -61,6 +63,7 @@ async def create_graphql_app() -> GraphQL:
     Create a GraphQL application using Ariadne.
     :return: An instance of GraphQL ASGI application.
     """
+    cache = get_active_cache()
     doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
@@ -68,14 +71,14 @@ async def create_graphql_app() -> GraphQL:
     graphql_objects = []
     graphql_queries = []
 
-    if (await get_vocabulary_status(ConceptPrefix.HPO, doc_db, graph_db)).loaded:
+    if (await get_vocabulary_status(ConceptPrefix.HPO, cache, doc_db, graph_db)).loaded:
         from .schemas import HPO_SCHEMA
         from .resolver.hpo import HPO_CONCEPT, HPO_QUERY
 
         graphql_schemas.append(HPO_SCHEMA)
         graphql_objects.append(HPO_CONCEPT)
         graphql_queries.append(HPO_QUERY)
-    if (await get_vocabulary_status(ConceptPrefix.ORDO, doc_db, graph_db)).loaded:
+    if (await get_vocabulary_status(ConceptPrefix.ORDO, cache, doc_db, graph_db)).loaded:
         from .schemas import ORDO_SCHEMA
         from .resolver.ordo import ORDO_CONCEPT, ORDO_QUERY
 

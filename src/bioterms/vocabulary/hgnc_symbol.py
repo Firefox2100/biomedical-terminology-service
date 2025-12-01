@@ -19,6 +19,7 @@ FILE_PATHS = [
     'hgnc/symbol.txt',
     'hgnc/withdrawn.txt',
 ]
+TIMESTAMP_FILE = 'hgnc/.timestamp'
 CONCEPT_CLASS = Concept
 
 

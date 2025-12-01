@@ -16,6 +16,7 @@ VOCABULARY_PREFIX = ConceptPrefix.HPO
 ANNOTATIONS = [ConceptPrefix.ORDO]
 SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
 FILE_PATHS = ['hpo/hp.owl']
+TIMESTAMP_FILE = 'hpo/.timestamp'
 CONCEPT_CLASS = Concept
 
 

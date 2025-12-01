@@ -30,6 +30,7 @@ FILE_PATHS: list[str] = [
     'snomed/uk_drug/definition.txt',
     'snomed/uk_drug/relationship.txt',
 ]
+TIMESTAMP_FILE = 'snomed/.timestamp'
 CONCEPT_CLASS = SnomedConcept
 
 

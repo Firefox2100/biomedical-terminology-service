@@ -18,6 +18,7 @@ VOCABULARY_PREFIX = ConceptPrefix.OMIM
 ANNOTATIONS = []
 SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
 FILE_PATHS = ['omim/omim.csv']
+TIMESTAMP_FILE = 'omim/.timestamp'
 CONCEPT_CLASS = Concept
 
 

@@ -4,6 +4,7 @@ import typer
 from typing import Annotated, Optional
 
 import bioterms.cli.annotation as annotation
+import bioterms.cli.cache as cache
 import bioterms.cli.similarity as similarity
 import bioterms.cli.user as user
 import bioterms.cli.vocabulary as vocabulary
@@ -18,6 +19,7 @@ def create_cli() -> typer.Typer:
     )
 
     app.add_typer(annotation.app, name='annotation', help='Manage biomedical annotations.')
+    app.add_typer(cache.app, name='cache', help='Manage data cache.')
     app.add_typer(similarity.app, name='similarity', help='Manage similarity computations between biomedical terms.')
     app.add_typer(user.app, name='user', help='Administrator user operations')
     app.add_typer(vocabulary.app, name='vocabulary', help='Manage biomedical vocabularies.')

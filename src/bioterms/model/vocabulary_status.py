@@ -1,4 +1,5 @@
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 from pydantic import Field, ConfigDict
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
@@ -22,6 +23,16 @@ class VocabularyStatus(JsonModel):
     name: str = Field(
         ...,
         description='The name of the vocabulary.',
+    )
+    file_downloaded: bool = Field(
+        False,
+        description='Indicates whether the vocabulary file has been downloaded.',
+        alias='fileDownloaded',
+    )
+    file_download_time: Optional[datetime] = Field(
+        None,
+        description='The timestamp when the vocabulary file was downloaded.',
+        alias='fileDownloadTime',
     )
     loaded: bool = Field(
         False,
