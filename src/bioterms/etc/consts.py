@@ -44,6 +44,10 @@ class Settings(BaseSettings):
         default_factory=secrets.token_urlsafe,
         description='Secret key for the application',
     )
+    server_hmac_key: str = Field(
+        ...,
+        description='HMAC key for hashing API keys',
+    )
     use_https: bool = Field(
         False,
         description='Whether this application is behind an HTTPS proxy. This affects cookie settings, '

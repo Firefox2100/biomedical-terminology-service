@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3 mb-0">API Keys</h1>
+
+    <a href="{{ url_for('create_new_api_key') }}" class="btn btn-primary">
+      <i class="bi bi-plus-lg"></i> New Key
+    </a>
+  </div>
+
+  <div id="api-key-endpoints"
+       data-delete-endpoint="{{ url_for('delete_api_key', key_id='__KEY__') }}"
+       data-csrf-token="{{ request.scope.csrftoken() }}">
+  </div>
+
+  {% if api_keys %}
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Created</th>
+          <th scope="col" class="text-end">Actions</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for key in api_keys %}
+          <tr data-key-id="{{ key.key_id }}">
+            <td>{{ key.name }}</td>
+            <td>
+              {% if key.created_at %}
+                {{ key.created_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <button type="button"
+                      class="btn btn-sm btn-outline-danger js-revoke-key"
+                      data-key-id="{{ key.key_id }}">
+                <i class="bi bi-trash"></i> Revoke
+              </button>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="alert alert-info" role="alert">
+      You do not have any API keys yet. Click <strong>New Key</strong> to create one.
+    </div>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script src="{{ url_for('static', path='js/api_keys.js') }}"></script>
+{% endblock %}

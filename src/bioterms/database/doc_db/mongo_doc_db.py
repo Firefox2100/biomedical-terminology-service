@@ -1,4 +1,5 @@
 import re
+from uuid import UUID
 from typing import AsyncIterator
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
@@ -8,7 +9,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.model.concept import Concept
-from bioterms.model.user import User, UserRepository
+from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
 from .utils import generate_extra_data
 
@@ -80,6 +81,36 @@ class MongoUserRepository(UserRepository):
         :param username: The username of the user to be deleted.
         """
         await self._collection.delete_one({'username': username})
+
+    async def save_api_key(self,
+                           username: str,
+                           api_key: UserApiKey,
+                           ):
+        """
+        Save an API key for a user.
+        :param username: The username of the user to associate the API key with.
+        :param api_key: The UserApiKey instance to be saved.
+        """
+        data = api_key.model_dump()
+
+        await self._collection.update_one(
+            {'username': username},
+            {'$push': {'apiKeys': data}}
+        )
+
+    async def delete_api_key(self,
+                             username: str,
+                             key_id: UUID,
+                             ):
+        """
+        Delete an API key for a user.
+        :param username: The username of the user to disassociate the API key from.
+        :param key_id: The UUID of the API key to be deleted.
+        """
+        await self._collection.update_one(
+            {'username': username},
+            {'$pull': {'apiKeys': {'keyId': str(key_id)}}}
+        )
 
 
 class MongoDocumentDatabase(DocumentDatabase):

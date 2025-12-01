@@ -1,13 +1,11 @@
-import asyncio
 import secrets
-import traceback
 import importlib.resources as pkg_resources
 from contextlib import asynccontextmanager
 import uvicorn
 from starlette.middleware.sessions import SessionMiddleware
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
 from asgi_csrf import asgi_csrf
@@ -108,6 +106,7 @@ def create_app() -> FastAPI:
             'Content-Type',
             'Accept',
             'X-Requested-With',
+            'X-CSRF-Token',
         ),
     )
 
@@ -208,8 +207,16 @@ def create_app() -> FastAPI:
     async def http_exception_handler(request, exc):
         LOGGER.error('HTTP Exception: %s', exc)
 
-        if request.url.path.startswith('/api'):
+        if request.url.path.startswith('/api/'):
             return await fastapi_http_exception_handler(request, exc)
+
+        if exc.status_code == 401:
+            return RedirectResponse(
+                url=f'{request.url_for("get_login_page")}?'
+                    f'next={request.url.path}&'
+                    f'error=Please+login+to+access+this+page.',
+                status_code=status.HTTP_303_SEE_OTHER
+            )
 
         doc_db = await get_active_doc_db()
         nav_links = await build_nav_links(request, doc_db)
@@ -242,6 +249,7 @@ def create_app() -> FastAPI:
     app = asgi_csrf(
         app,
         signing_secret=CONFIG.secret_key,
+        http_header='x-csrf-token',
         always_protect={},
         cookie_secure=CONFIG.use_https,
         skip_if_scope=skip_paths,

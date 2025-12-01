@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="row justify-content-center">
+    <div class="col-lg-8 col-xl-6">
+      <h1 class="h3 mb-4">New API Key Created</h1>
+
+      <div class="alert alert-warning" role="alert">
+        <strong>Important:</strong> This API key will only be shown once.
+        Store it securely (for example in a password manager). If you lose it,
+        you will need to create a new API key.
+      </div>
+
+      <div class="mb-3">
+        <label for="api-key-value" class="form-label">Your new API key</label>
+        <input type="text"
+               id="api-key-value"
+               class="form-control font-monospace"
+               readonly
+               value="{{ api_key }}">
+        <div class="form-text">
+          Copy this value now. You will not be able to see it again.
+        </div>
+      </div>
+
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        <a href="{{ url_for('get_api_keys_page') }}" class="btn btn-primary">
+          Back to API Keys
+        </a>
+        <a href="{{ url_for('create_new_api_key') }}" class="btn btn-outline-secondary">
+          Create Another Key
+        </a>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+{% endblock %}

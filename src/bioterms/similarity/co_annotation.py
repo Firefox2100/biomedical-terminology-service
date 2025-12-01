@@ -129,7 +129,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     Calculate semantic similarity scores between terms in the target graph with co-annotation vectors.
 
     The similarity between two terms is calculated based on the overlap of their annotation vectors
-    in the annotation graph, using a modified Jaccard index.
+    in the annotation graph, using a combination of NPMI and Jaccard index.
     :param target_graph: The directed graph of the target vocabulary.
     :param target_prefix: The prefix of the target vocabulary.
     :param corpus_graph: The directed graph of the corpus vocabulary.

@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 from typing import Optional
 from argon2.exceptions import VerifyMismatchError
 from pydantic import Field, ConfigDict
@@ -21,15 +23,20 @@ class UserApiKey(JsonModel):
         ...,
         description='The name of the API key.',
     )
+    key_id: UUID = Field(
+        default_factory=uuid4,
+        description='The unique identifier for the API key.',
+        alias='keyId',
+    )
     key_hash: str = Field(
         ...,
-        description='The argon2 hashed value of the API key.',
+        description='The HMAC-SHA-256 hashed value of the API key.',
         alias='keyHash',
     )
-    key_md5: str = Field(
-        ...,
-        description='The MD5 checksum of the API key.',
-        alias='keyMd5',
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description='The timestamp when the API key was created.',
+        alias='createdAt',
     )
 
 
@@ -54,6 +61,7 @@ class User(JsonModel):
     api_keys: Optional[list[UserApiKey]] = Field(
         None,
         description='A list of API keys associated with the user.',
+        alias='apiKeys',
     )
 
     def validate_password(self, password: str) -> bool:
@@ -108,4 +116,26 @@ class UserRepository(ABC):
         """
         Delete a User entity from the database.
         :param username: The username of the user to be deleted.
+        """
+
+    @abstractmethod
+    async def save_api_key(self,
+                           username: str,
+                           api_key: UserApiKey,
+                           ):
+        """
+        Save an API key for a user.
+        :param username: The username of the user to associate the API key with.
+        :param api_key: The UserApiKey instance to be saved.
+        """
+
+    @abstractmethod
+    async def delete_api_key(self,
+                             username: str,
+                             key_id: UUID,
+                             ):
+        """
+        Delete an API key for a user.
+        :param username: The username of the user to disassociate the API key from.
+        :param key_id: The UUID of the API key to be deleted.
         """

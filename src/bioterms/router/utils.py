@@ -4,15 +4,17 @@ import importlib.resources as pkg_resources
 from typing import AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
-from fastapi import Request
+from fastapi import Request, Depends, HTTPException, status
 from fastapi.templating import Jinja2Templates
 
-from bioterms.database import DocumentDatabase
+from bioterms.database import DocumentDatabase, get_active_doc_db
 
 
 _allowed_redirect_destinations = [
     '/',
     '/vocabularies',
+    '/api-keys',
+    '/api-keys/new',
     '/login',
 ]
 _allowed_redirect_regex = [
@@ -86,15 +88,23 @@ async def build_nav_links(request: Request, db: DocumentDatabase) -> list[dict]:
     ]
 
     if username:
-        nav_links.append({
-            'label': f'Logout ({username})',
-            'url': request.url_for('handle_logout'),
-            'active': False
-        })
+        nav_links.extend([
+            {
+                'label': 'API Keys',
+                'url': request.url_for('get_api_keys_page'),
+                'active': path.startswith('/api-keys'),
+            },
+            {
+                'label': f'Logout ({username})',
+                'url': request.url_for('handle_logout'),
+                'active': False
+            },
+        ])
     else:
         nav_links.append({
             'label': 'Login',
             'url': str(request.url_for('get_login_page')) + f'?next={path}',
+            'active': False,
         })
 
     return nav_links
@@ -148,3 +158,31 @@ def sanitise_next_url(next_url: str | None = None,
     clean = urlunsplit(('', '', normalised, parts.query, ''))
 
     return clean
+
+
+async def login_required(request: Request,
+                         db: DocumentDatabase = Depends(get_active_doc_db),
+                         ) -> str:
+    """
+    A dependency to ensure that the user is logged in.
+    :param request: The FastAPI request object.
+    :param db: The DocumentDatabase instance.
+    :return: The username of the logged-in user.
+    :raises HTTPException: If the user is not logged in.
+    """
+    username = request.session.get('username')
+    if username:
+        user = await db.users.get(username)
+        if not user:
+            request.session['username'] = None
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail='Authentication required',
+            )
+
+        return username
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail='Authentication required',
+    )

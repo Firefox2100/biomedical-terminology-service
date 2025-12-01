@@ -1,14 +1,20 @@
-from typing import Union
+import secrets
+import hmac
+import hashlib
+import base64
+from uuid import UUID
 from urllib.parse import urlencode, urlparse
 from markdown import markdown
 from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
 from bioterms.annotation import get_annotation_status
-from .utils import TEMPLATES, build_nav_links, sanitise_next_url
+from bioterms.model.user import UserApiKey
+from .utils import TEMPLATES, build_nav_links, sanitise_next_url, login_required
 
 
 ui_router = APIRouter(
@@ -161,7 +167,7 @@ async def post_login_credentials(request: Request,
         if next_url:
             params['next'] = next_url
 
-        url = request.url_for('get_admin_login_page')
+        url = request.url_for('get_login_page')
 
         if params:
             url = f'{url}?{urlencode(params)}'
@@ -204,6 +210,128 @@ async def handle_logout(request: Request):
     request.session.clear()
 
     return RedirectResponse(request.url_for('get_login_page'), status_code=status.HTTP_303_SEE_OTHER)
+
+
+@ui_router.get('/api-keys', response_class=HTMLResponse)
+async def get_api_keys_page(request: Request,
+                            doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                            username: str = Depends(login_required),
+                            ):
+    """
+    Serve the API keys management page.
+    \f
+    :param request: The incoming request object.
+    :param doc_db: Document database instance.
+    :param username: The username of the logged-in user.
+    :return: An HTML response with the API keys management page.
+    """
+    user = await doc_db.users.get(username)
+
+    nav_links = await build_nav_links(request, doc_db)
+
+    return TEMPLATES.TemplateResponse(
+        'api_keys.html',
+        {
+            'request': request,
+            'page_title': 'API Keys | BioMedical Terminology Service',
+            'api_keys': user.api_keys if user and user.api_keys else [],
+            'nav_links': nav_links,
+        }
+    )
+
+
+@ui_router.get('/api-keys/new', response_class=HTMLResponse)
+async def create_new_api_key(request: Request,
+                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                             _: str = Depends(login_required),
+                             ):
+    """
+    Create a new API key for the logged-in user.
+    :param request: The incoming request object.
+    :param doc_db: The document database instance.
+    :param _: Authentication dependency to ensure the user is logged in.
+    :return: A page asking for name for the new API key.
+    """
+    nav_links = await build_nav_links(request, doc_db)
+
+    return TEMPLATES.TemplateResponse(
+        'create_new_api_key.html',
+        {
+            'request': request,
+            'page_title': 'New API Key | BioMedical Terminology Service',
+            'nav_links': nav_links,
+        }
+    )
+
+
+@ui_router.post('/api-keys/new', response_class=HTMLResponse)
+async def post_new_api_key(request: Request,
+                           name: str = Form(...),
+                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                           username: str = Depends(login_required),
+                           ):
+    """
+    Process the creation of a new API key for the logged-in user.
+    :param request: The incoming request object.
+    :param name: The name for the new API key.
+    :param doc_db: The document database instance.
+    :param username: The username of the logged-in user.
+    :return: An HTML response displaying the newly created API key.
+    """
+    user = await doc_db.users.get(username)
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+
+    new_key_bytes = secrets.token_bytes(32)
+    new_key_str = base64.urlsafe_b64encode(new_key_bytes).decode('ascii').rstrip('=')
+    server_key_bytes = base64.b64decode(CONFIG.server_hmac_key)
+
+    hmac_digest = hmac.new(
+        key=server_key_bytes,
+        msg=new_key_str.encode(),
+        digestmod=hashlib.sha256,
+    )
+
+    new_api_key = UserApiKey(
+        name=name,
+        keyHash=hmac_digest.hexdigest(),
+    )
+    await doc_db.users.save_api_key(
+        username=username,
+        api_key=new_api_key,
+    )
+
+    nav_links = await build_nav_links(request, doc_db)
+
+    return TEMPLATES.TemplateResponse(
+        'display_new_api_key.html',
+        {
+            'request': request,
+            'page_title': 'New API Key | BioMedical Terminology Service',
+            'api_key': new_key_str,
+            'nav_links': nav_links,
+        }
+    )
+
+
+@ui_router.delete('/api-keys/{key_id}', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_api_key(key_id: str,
+                         request: Request,
+                         doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                         username: str = Depends(login_required),
+                         ):
+    """
+    Delete an API key for the logged-in user.
+    :param key_id: The ID of the API key to delete.
+    :param request: The incoming request object.
+    :param doc_db: The document database instance.
+    :param username: The username of the logged-in user.
+    :return: A redirect response to the API keys management page.
+    """
+    await doc_db.users.delete_api_key(
+        username=username,
+        key_id=UUID(key_id),
+    )
 
 
 @ui_router.get('/vocabularies/{prefix}', response_class=HTMLResponse)
