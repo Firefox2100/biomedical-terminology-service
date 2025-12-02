@@ -31,7 +31,7 @@ ARG TORCH_VERSION=2.8.0
 ARG TORCH_GEOMETRIC_VERSION=2.7.0
 RUN pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu && \
-    pip install "torch-geometric==${TORCH_GEOMETRIC_VERSION}" \
+    pip install torch-geometric \
     --index-url "https://data.pyg.org/whl/torch-${TORCH_VERSION}+cpu.html" && \
     pip install .[all] && \
     chown -R appuser:appgroup /app
@@ -87,7 +87,7 @@ ARG TORCH_VERSION=2.8.0
 ARG TORCH_GEOMETRIC_VERSION=2.7.0
 RUN pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu126 && \
-    pip install "torch-geometric==${TORCH_GEOMETRIC_VERSION}" \
+    pip install torch-geometric \
     --index-url "https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu126.html" && \
     pip install .[all] && \
     chown -R appuser:appgroup /app
