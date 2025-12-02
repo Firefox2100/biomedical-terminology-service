@@ -2,13 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>{{ page_title or "BioMedical Terminology Service UI" }}</title>
+
+  <title>{{ page_title or "BioMedical Terminology Service" }}</title>
   <meta name="description"
         content="{{ meta_description or 'A service for using with biomedical terminologies, such as ontologies or vocabularies.' }}"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
   <link href="{{ url_for('static', path='vendor/bootstrap/5.3.8/css/bootstrap.min.css') }}" rel="stylesheet"/>
   <link href="{{ url_for('static', path='vendor/bootstrap-icons/1.13.1/bootstrap-icons.css') }}" rel="stylesheet"/>
   <link rel="stylesheet" href="{{ url_for('static', path='css/custom.css') }}"/>
+
+  {% if structured_data %}
+    <script type="application/ld+json" nonce="{{ request.state.csp_nonce }}">
+      {{ structured_data | tojson | safe }}
+    </script>
+  {% endif %}
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-light bg-body-tertiary">

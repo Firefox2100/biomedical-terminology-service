@@ -77,6 +77,36 @@ class RedisCache(Cache):
 
         return None
 
+    async def save_site_map(self,
+                            site_map_str: str,
+                            ttl: int = 86400,
+                            ):
+        """
+        Store the site map string in the cache.
+        :param site_map_str: The site map string to store.
+        :param ttl: Time to live in seconds. Defaults to 86400 seconds (1 day). If set to 0,
+            the site map will be stored indefinitely, and must be manually invalidated.
+        """
+        key = 'assets:site_map'
+
+        if ttl > 0:
+            await self.db.setex(key, ttl, site_map_str)
+        else:
+            await self.db.set(key, site_map_str)
+
+    async def get_site_map(self) -> str | None:
+        """
+        Retrieve the site map string from the cache.
+        :return: The site map string if it exists and is not expired, otherwise None
+        """
+        key = 'assets:site_map'
+        value = await self.db.get(key)
+
+        if value is not None:
+            return value
+
+        return None
+
     async def purge(self):
         """
         Purge all cached data.

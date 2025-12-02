@@ -110,6 +110,54 @@ async def build_nav_links(request: Request, db: DocumentDatabase) -> list[dict]:
     return nav_links
 
 
+def build_structured_data(base_url: str) -> list[dict]:
+    """
+    Build structured data for the web page.
+    :param base_url: The base URL of the web application.
+    :return: A list of structured data dictionaries.
+    """
+    homepage_url = base_url + '/'
+
+    website_ld = {
+        '@context': 'https://schema.org',
+        '@type': 'WebSite',
+        'name': 'BioMedical Terminology Service',
+        'url': homepage_url,
+        'description': 'A service for using with biomedical terminologies, '
+                       'such as ontologies or vocabularies.',
+    }
+
+    organisation_ld = {
+        '@context': 'https://schema.org',
+        '@type': 'Organization',
+        'name': 'BioMedical Terminology Service',
+        'url': homepage_url,
+        'creator': {
+            '@type': 'Person',
+            'name': 'Patrick Wang (@Firefox2100)',
+        },
+    }
+
+    webapp_ld = {
+        '@context': 'https://schema.org',
+        '@type': 'WebApplication',
+        'name': 'BioMedical Terminology Service',
+        'url': homepage_url,
+        'applicationCategory': 'MedicalApplication',
+        'operatingSystem': 'All',
+        'description': 'A service for using with biomedical terminologies, '
+                       'such as ontologies or vocabularies.',
+    }
+
+    structured_data = [
+        website_ld,
+        organisation_ld,
+        webapp_ld,
+    ]
+
+    return structured_data
+
+
 def get_templates() -> Jinja2Templates:
     """
     Get the Jinja2 templates instance for rendering HTML templates.
