@@ -242,6 +242,7 @@ async def embed_vocabulary(prefix: ConceptPrefix,
         mapping=id_map,
     )
 
+
 def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:
     """
     Get the licence information for the vocabulary specified by the prefix.

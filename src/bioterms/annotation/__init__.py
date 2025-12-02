@@ -1,9 +1,33 @@
 import importlib
 import importlib.resources
+import inspect
+import os
+import aiofiles
+import aiofiles.os
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.utils import check_files_exist
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation_status import AnnotationStatus
+
+
+def _get_annotation_module_name(prefix_1: ConceptPrefix,
+                                prefix_2: ConceptPrefix,
+                                ) -> str:
+    """
+    Get the annotation module name for the given pair of prefixes.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :return: The annotation module name.
+    """
+    prefix_str_1 = prefix_1.value.lower()
+    prefix_str_2 = prefix_2.value.lower()
+
+    sorted_prefixes = sorted([prefix_str_1, prefix_str_2])
+    annotation_module_name = f'{sorted_prefixes[0]}_{sorted_prefixes[1]}'
+
+    return annotation_module_name
 
 
 def get_annotation_module(prefix_1: ConceptPrefix,
@@ -15,13 +39,12 @@ def get_annotation_module(prefix_1: ConceptPrefix,
     :param prefix_2: The second prefix.
     :return: The annotation module.
     """
-    prefix_str_1 = prefix_1.value.lower()
-    prefix_str_2 = prefix_2.value.lower()
+    annotation_module_name = _get_annotation_module_name(prefix_1, prefix_2)
 
-    sorted_prefixes = sorted([prefix_str_1, prefix_str_2])
-    annotation_module_name = f'{sorted_prefixes[0]}_{sorted_prefixes[1]}'
-
-    annotation_module = importlib.import_module(f'bioterms.annotation.{annotation_module_name}')
+    try:
+        annotation_module = importlib.import_module(f'bioterms.annotation.{annotation_module_name}')
+    except ModuleNotFoundError:
+        raise ValueError(f'No annotation available for prefixes: {prefix_1}, {prefix_2}')
 
     return annotation_module
 
@@ -44,6 +67,32 @@ def get_annotation_config(prefix_1: ConceptPrefix,
     }
 
 
+async def delete_annotation_files(prefix_1: ConceptPrefix,
+                                  prefix_2: ConceptPrefix,
+                                  ):
+    """
+    Delete the annotation files for the given pair of prefixes.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :return: The annotation module.
+    """
+    annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+    deletion_func = getattr(annotation_module, 'delete_annotation_files', None)
+
+    if deletion_func is None or not callable(deletion_func):
+        # Fallback to default deletion method
+        for file_path in annotation_module.FILE_PATHS:
+            try:
+                await aiofiles.os.remove(file_path)
+            except Exception:
+                pass
+    else:
+        result = deletion_func()
+        if inspect.iscoroutine(result):
+            await result
+
+
 async def download_annotation(prefix_1: ConceptPrefix,
                               prefix_2: ConceptPrefix,
                               redownload: bool = False,
@@ -59,29 +108,16 @@ async def download_annotation(prefix_1: ConceptPrefix,
     annotation_module = get_annotation_module(prefix_1, prefix_2)
 
     if redownload:
-        annotation_module.delete_annotation_files()
+        await delete_annotation_files(prefix_1, prefix_2)
 
-    await annotation_module.download_annotation(download_client=download_client)
+    download_func = getattr(annotation_module, 'download_annotation', None)
+    if download_func is None or not callable(download_func):
+        raise ValueError(f'Annotation module for {prefix_1} and {prefix_2} does not '
+                         f'have a download_annotation function.')
 
-
-async def load_annotation(prefix_1: ConceptPrefix,
-                          prefix_2: ConceptPrefix,
-                          overwrite: bool = True,
-                          graph_db: GraphDatabase = None,
-                          ):
-        """
-        Load the annotation specified by the pair of prefixes.
-        :param prefix_1: The first prefix.
-        :param prefix_2: The second prefix.
-        :param overwrite: Whether to overwrite existing annotation data.
-        :param graph_db: Optional GraphDatabase instance to use.
-        """
-        annotation_module = get_annotation_module(prefix_1, prefix_2)
-
-        await annotation_module.load_annotation_from_file(
-            overwrite=overwrite,
-            graph_db=graph_db,
-        )
+    result = download_func()
+    if inspect.iscoroutine(result):
+        await result
 
 
 async def delete_annotation(prefix_1: ConceptPrefix,
@@ -96,14 +132,61 @@ async def delete_annotation(prefix_1: ConceptPrefix,
     """
     annotation_module = get_annotation_module(prefix_1, prefix_2)
 
-    if graph_db is None:
-        from bioterms.database.graph_db import get_active_graph_db
-        graph_db = get_active_graph_db()
+    delete_func = getattr(annotation_module, 'delete_annotation_data', None)
 
-    await graph_db.delete_annotations(
-        prefix_1=annotation_module.VOCABULARY_PREFIX_1,
-        prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+    if delete_func is None or not callable(delete_func):
+        # Fallback to default deletion method
+        if graph_db is None:
+            graph_db = get_active_graph_db()
+
+        await graph_db.delete_annotations(
+            prefix_1=annotation_module.VOCABULARY_PREFIX_1,
+            prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+        )
+    else:
+        result = delete_func(
+            graph_db=graph_db,
+        )
+        if inspect.iscoroutine(result):
+            await result
+
+
+async def load_annotation(prefix_1: ConceptPrefix,
+                          prefix_2: ConceptPrefix,
+                          overwrite: bool = True,
+                          graph_db: GraphDatabase = None,
+                          ):
+    """
+    Load the annotation specified by the pair of prefixes.
+    :param prefix_1: The first prefix.
+    :param prefix_2: The second prefix.
+    :param overwrite: Whether to overwrite existing annotation data.
+    :param graph_db: Optional GraphDatabase instance to use.
+    """
+    annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+    if not check_files_exist(annotation_module.FILE_PATHS):
+        raise ValueError(f'Annotation files for {prefix_1} and {prefix_2} not found. '
+                         f'Are they downloaded?')
+
+    if overwrite:
+        # Drop existing data before loading
+        await delete_annotation(
+            prefix_1=prefix_1,
+            prefix_2=prefix_2,
+            graph_db=graph_db,
+        )
+
+    load_func = getattr(annotation_module, 'load_annotation_from_file', None)
+    if load_func is None or not callable(load_func):
+        raise ValueError(f'Annotation module for {prefix_1} and {prefix_2} does not '
+                         f'have a load_annotation_from_file function.')
+
+    result = load_func(
+        graph_db=graph_db,
     )
+    if inspect.iscoroutine(result):
+        await result
 
 
 async def get_annotation_status(prefix_1: ConceptPrefix,

@@ -40,22 +40,10 @@ async def download_annotation(download_client: httpx.AsyncClient = None):
     )
 
 
-def delete_annotation_files():
-    """
-    Delete the HOOM files.
-    """
-    try:
-        os.remove(os.path.join(CONFIG.data_dir, FILE_PATHS[0]))
-    except Exception:
-        pass
-
-
-async def load_annotation_from_file(overwrite: bool = False,
-                                    graph_db: GraphDatabase = None,
+async def load_annotation_from_file(graph_db: GraphDatabase = None,
                                     ):
     """
     Load the HOOM mapping from a file into the primary databases.
-    :param overwrite: Whether to overwrite existing annotation data.
     :param graph_db: Optional GraphDatabase instance to use.
     """
     if graph_db is None:
@@ -73,10 +61,7 @@ async def load_annotation_from_file(overwrite: bool = False,
     )
 
     if annotation_count > 0:
-        if not overwrite:
-            return
-
-        await delete_annotation_data(graph_db=graph_db)
+        return  # Annotations already exist, skip loading
 
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HOOM owl file not found')
@@ -103,18 +88,4 @@ async def load_annotation_from_file(overwrite: bool = False,
 
     await graph_db.save_annotations(
         annotations=annotations
-    )
-
-
-async def delete_annotation_data(graph_db: GraphDatabase = None,
-                                 ):
-    """
-    Delete all HOOM data from the primary databases.
-    """
-    if graph_db is None:
-        graph_db = get_active_graph_db()
-
-    await graph_db.delete_annotations(
-        prefix_1=VOCABULARY_PREFIX_1,
-        prefix_2=VOCABULARY_PREFIX_2,
     )
