@@ -27,7 +27,7 @@ COPY ./LICENSE /app/LICENSE
 COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
-ARG TORCH_VERSION=2.9.1
+ARG TORCH_VERSION=2.8.0
 ARG TORCH_GEOMETRIC_VERSION=2.7.0
 RUN pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu && \
@@ -83,7 +83,7 @@ COPY ./LICENSE /app/LICENSE
 COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
-ARG TORCH_VERSION=2.9.1
+ARG TORCH_VERSION=2.8.0
 ARG TORCH_GEOMETRIC_VERSION=2.7.0
 RUN pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu126 && \
