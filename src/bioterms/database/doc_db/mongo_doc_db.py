@@ -1,7 +1,7 @@
 import re
 from uuid import UUID
 from typing import AsyncIterator
-from pymongo import AsyncMongoClient
+from pymongo import AsyncMongoClient, UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import OperationFailure
 
@@ -311,6 +311,30 @@ class MongoDocumentDatabase(DocumentDatabase):
 
         # Recreate the collection to ensure it exists
         await self.db.create_collection(str(prefix.value))
+
+    async def update_vector_mapping(self,
+                                    prefix: ConceptPrefix,
+                                    mapping: dict[str, str],
+                                    ):
+        """
+        Update the vector mapping for concepts in the document database.
+        :param prefix: The vocabulary prefix to update the vector mapping for.
+        :param mapping: A dictionary mapping concept IDs to vector IDs.
+        """
+        collection = self.db[str(prefix.value)]
+
+        # Batch update with default overwrite behaviour
+        operations = []
+        for concept_id, vector_id in mapping.items():
+            operations.append(
+                UpdateOne(
+                    {'conceptId': concept_id},
+                    {'$set': {'vectorId': vector_id}}
+                )
+            )
+
+        if operations:
+            await collection.bulk_write(operations)
 
     async def auto_complete_iter(self,
                                  prefix: ConceptPrefix,

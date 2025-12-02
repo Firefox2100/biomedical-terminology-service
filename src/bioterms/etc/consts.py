@@ -166,6 +166,26 @@ class Settings(BaseSettings):
         'BAAI/bge-base-en-v1.5',
         description='Name of the transformer model to use for embeddings',
     )
+    torch_device: str = Field(
+        'cpu',
+        description='Torch device to use for model inference (e.g., "cpu", "cuda")',
+    )
+    gnn_epochs: int = Field(
+        100,
+        description='Number of epochs to train the GNN model',
+    )
+    gnn_hidden_dim: int = Field(
+        256,
+        description='Hidden dimension size for the GNN model',
+    )
+    gnn_output_dim: int = Field(
+        256,
+        description='Output dimension size for the GNN model',
+    )
+    gnn_learning_rate: float = Field(
+        1e-3,
+        description='Learning rate for training the GNN model',
+    )
     vector_database_driver: VectorDatabaseDriverType = Field(
         VectorDatabaseDriverType.QDRANT,
         description='Vector database driver to use for the service',

@@ -49,6 +49,11 @@ class Concept(JsonModel):
         ConceptStatus.ACTIVE,
         description='The status of the concept, indicating whether it is active or deprecated.',
     )
+    vector_id: Optional[str] = Field(
+        None,
+        description='The identifier of the vector representation of the concept in the vector database.',
+        alias='vectorId',
+    )
 
     def n_grams(self,
                 min_length: int = 3,
@@ -115,3 +120,21 @@ class Concept(JsonModel):
                     search_text += ' ' + synonym
 
         return search_text
+
+    def canonical_text(self) -> str:
+        """
+        Generate a canonical text representation of the concept, used for text embedding.
+        :return: A string of canonical text.
+        """
+        concept_str = ''
+
+        if self.label:
+            concept_str += self.label + ': '
+
+        if self.definition:
+            concept_str += self.definition + ' '
+
+        if self.synonyms:
+            concept_str += '(' + ' '.join(self.synonyms) + ')'
+
+        return concept_str.strip(' :')

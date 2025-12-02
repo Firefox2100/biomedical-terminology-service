@@ -150,6 +150,17 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
+    async def update_vector_mapping(self,
+                                    prefix: ConceptPrefix,
+                                    mapping: dict[str, str],
+                                    ):
+        """
+        Update the vector mapping for concepts in the document database.
+        :param prefix: The vocabulary prefix to update the vector mapping for.
+        :param mapping: A dictionary mapping concept IDs to vector IDs.
+        """
+
+    @abstractmethod
     def auto_complete_iter(self,
                            prefix: ConceptPrefix,
                            query: str,

@@ -235,8 +235,12 @@ async def embed_vocabulary(prefix: ConceptPrefix,
 
     concept_iter = doc_db.get_terms_iter(prefix)
 
-    await vector_db.insert_concepts(concept_iter)
+    id_map = await vector_db.insert_concepts(concept_iter)
 
+    await doc_db.update_vector_mapping(
+        prefix=prefix,
+        mapping=id_map,
+    )
 
 def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:
     """

@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 from sentence_transformers import SentenceTransformer
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import VectorDatabaseDriverType
+from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix
 from bioterms.etc.utils import get_transformer
 from bioterms.model.concept import Concept
 
@@ -13,28 +13,7 @@ class VectorDatabase(ABC):
     Abstract base class for vector databases.
     """
     @staticmethod
-    def _build_text_for_concept(concept: Concept) -> str:
-        """
-        Build the text representation for a concept to be embedded.
-        :param concept: The Concept instance
-        :return: The text representation of the concept
-        """
-        concept_str = ''
-
-        if concept.label:
-            concept_str += concept.label + ': '
-
-        if concept.definition:
-            concept_str += concept.definition + ' '
-
-        if concept.synonyms:
-            concept_str += '(' + ' '.join(concept.synonyms) + ')'
-
-        return concept_str.strip(' :')
-
-    @classmethod
-    async def embed_concepts(cls,
-                             concepts: list[Concept] | AsyncIterator[Concept],
+    async def embed_concepts(concepts: list[Concept] | AsyncIterator[Concept],
                              batch_size: int = 32,
                              transformer: SentenceTransformer = None,
                              ) -> AsyncIterator[list[tuple[str, list[float]]]]:
@@ -46,11 +25,10 @@ class VectorDatabase(ABC):
             transformer = get_transformer()
 
         def process_batch(b: list[Concept]) -> list[tuple[str, list[float]]]:
-            texts = [cls._build_text_for_concept(c) for c in b]
+            texts = [c.canonical_text() for c in b]
 
             vectors = transformer.encode(
                 sentences=texts,
-                batch_size=batch_size,
                 normalize_embeddings=True,
             )
 
@@ -85,12 +63,40 @@ class VectorDatabase(ABC):
     @abstractmethod
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
+                              prefix: ConceptPrefix,
                               ) -> dict[str, str]:
         """
-        Insert concepts into the Qdrant collection. All concepts must have the same prefix.
+        Insert concepts into the Qdrant collection.
         :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
+        :param prefix: The prefix of the concepts being inserted
         :return: A mapping of concept IDs to their assigned point IDs in Qdrant
         """
+
+    @abstractmethod
+    def get_vectors_for_prefix_iter(self,
+                                    prefix: ConceptPrefix,
+                                    ) -> AsyncIterator[tuple[str, list[float]]]:
+        """
+        Get all vectors for a given prefix from the vector database as an async iterator.
+        :param prefix: The vocabulary prefix to get vectors for.
+        :return: An asynchronous iterator yielding tuples of concept IDs and their embedding vectors.
+        """
+
+    async def get_vectors_for_prefix(self,
+                                     prefix: ConceptPrefix,
+                                     ) -> dict[str, list[float]]:
+        """
+        Get all vectors for a given prefix from the vector database.
+        :param prefix: The vocabulary prefix to get vectors for.
+        :return: A dictionary mapping concept IDs to their embedding vectors.
+        """
+        vector_iter = self.get_vectors_for_prefix_iter(prefix)
+
+        results: dict[str, list[float]] = {}
+        async for concept_id, vector in vector_iter:
+            results[concept_id] = vector
+
+        return results
 
 
 _active_vector_db: VectorDatabase | None = None

@@ -3,6 +3,7 @@ from typing import AsyncIterator
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
+from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
 from .vector_db import VectorDatabase
 
@@ -68,7 +69,7 @@ class QdrantVectorDatabase(VectorDatabase):
         """
         await self.client.create_collection(
             collection_name=collection_name,
-            vector_params=VectorParams(
+            vectors_config=VectorParams(
                 size=self._embedding_dimension,
                 distance=distance,
             )
@@ -85,22 +86,24 @@ class QdrantVectorDatabase(VectorDatabase):
 
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
+                              prefix: ConceptPrefix,
                               ) -> dict[str, str]:
         """
-        Insert concepts into the Qdrant collection. All concepts must have the same prefix.
+        Insert concepts into the Qdrant collection.
         :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
+        :param prefix: The prefix of the concepts being inserted
         :return: A mapping of concept IDs to their assigned point IDs in Qdrant
         """
         if not concepts:
             return {}
 
         id_map = {}
-        collection_name = concepts[0].prefix.value
+        collection_name = prefix.value
 
         # Check if the collection exists
         collection_list = await self.client.get_collections()
-        collection_items = collection_list.model_dump().get('collections', [])
-        if collection_name not in [item.get('name') for item in collection_items]:
+        existing = [c.name for c in collection_list.collections]
+        if collection_name not in existing:
             await self.create_collection(collection_name=collection_name)
 
         async for embedded_batch in self.embed_concepts(concepts):
@@ -121,3 +124,43 @@ class QdrantVectorDatabase(VectorDatabase):
             )
 
         return id_map
+
+    async def get_vectors_for_prefix_iter(self,
+                                          prefix: ConceptPrefix,
+                                          ) -> AsyncIterator[tuple[str, list[float]]]:
+        """
+        Get all vectors for a given prefix from the vector database as an async iterator.
+        :param prefix: The vocabulary prefix to get vectors for.
+        :return: An asynchronous iterator yielding tuples of concept IDs and their embedding vectors.
+        """
+        collection_name = prefix.value
+
+        # Check if the collection exists
+        collection_list = await self.client.get_collections()
+        existing = [c.name for c in collection_list.collections]
+        if collection_name not in existing:
+            raise ValueError(f'Vocabulary prefix {prefix} does not exist in Qdrant.')
+
+        offset = None
+        limit = 100
+
+        while True:
+            points, new_offset = await self.client.scroll(
+                collection_name=collection_name,
+                with_vectors=True,
+                limit=limit,
+                offset=offset
+            )
+
+            if not points:
+                break
+
+            for point in points:
+                concept_id = point.payload.get('conceptId')
+                if concept_id is not None:
+                    yield concept_id, point.vector
+
+            if new_offset is None or new_offset == offset:
+                break
+
+            offset = new_offset
