@@ -60,10 +60,16 @@ ENV BTS_ENV_FILE="/app/conf/.env"
 ENV BTS_DATA_DIR="/app/data"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates curl && \
+    bash ca-certificates curl python3-pip python3.11 python3.11-venv && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system appgroup && \
-    useradd --system --no-create-home --gid appgroup appuser
+    useradd --system --no-create-home --gid appgroup appuser && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --set python3 /usr/bin/python3.11 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+    update-alternatives --set python /usr/bin/python3.11 && \
+    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1 && \
+    update-alternatives --set pip /usr/bin/pip3
 
 WORKDIR /app
 COPY ./src/bioterms /app/src/bioterms
