@@ -294,8 +294,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 rel_props = record['rel_props']
 
                 annotation_graph.add_edge(
-                    source_id,
-                    target_id,
+                    f'{prefix_1.value}:{source_id}',
+                    f'{prefix_2.value}:{target_id}',
                     label=rel_label,
                     **rel_props
                 )
