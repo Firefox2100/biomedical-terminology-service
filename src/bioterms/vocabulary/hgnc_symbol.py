@@ -13,7 +13,7 @@ from .hgnc import download_vocabulary
 
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee Symbol'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC_SYMBOL
-ANNOTATIONS = [ConceptPrefix.HPO]
+ANNOTATIONS = [ConceptPrefix.HPO, ConceptPrefix.NCIT]
 SIMILARITY_METHODS = []
 FILE_PATHS = [
     'hgnc/symbol.txt',
