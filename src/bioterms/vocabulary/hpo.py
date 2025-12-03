@@ -13,7 +13,7 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'Human Phenotype Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.HPO
-ANNOTATIONS = [ConceptPrefix.ORDO]
+ANNOTATIONS = [ConceptPrefix.ORDO, ConceptPrefix.HGNC_SYMBOL]
 SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
 FILE_PATHS = ['hpo/hp.owl']
 TIMESTAMP_FILE = 'hpo/.timestamp'
