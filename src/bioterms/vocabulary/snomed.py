@@ -7,7 +7,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, get_trud_release_url, \
-    download_rf2, rf2_dataframe_deduplicate
+    download_rf2, rf2_dataframe_deduplicate, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import SnomedConcept
 
@@ -114,7 +114,13 @@ def _process_concepts(concept_file_path: str) -> dict[int, CONCEPT_CLASS]:
     concept_df = rf2_dataframe_deduplicate(concept_df)
     concepts = {}
 
-    for _, row in concept_df.iterrows():
+    verbose_print(f'Concept file {concept_file_path} loaded, processing concepts...')
+
+    for _, row in iter_progress(
+        concept_df.iterrows(),
+        description='Processing SNOMED concepts',
+        total=len(concept_df)
+    ):
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
             conceptId=str(row['id']),
@@ -138,7 +144,13 @@ def _process_descriptions(description_file_path: str,
     description_df = pd.read_csv(description_file_path, sep='\t')
     description_df = rf2_dataframe_deduplicate(description_df)
 
-    for _, row in description_df.iterrows():
+    verbose_print(f'Description file {description_file_path} loaded, processing descriptions...')
+
+    for _, row in iter_progress(
+        description_df.iterrows(),
+        description='Processing SNOMED descriptions',
+        total=len(description_df)
+    ):
         if row['conceptId'] not in concepts:
             raise ValueError(f'Concept ID {row["conceptId"]} not found in concepts dictionary.')
 
@@ -164,7 +176,13 @@ def _process_definitions(definition_file_path: str,
     definition_df = pd.read_csv(definition_file_path, sep='\t')
     definition_df = rf2_dataframe_deduplicate(definition_df)
 
-    for _, row in definition_df.iterrows():
+    verbose_print(f'Definition file {definition_file_path} loaded, processing definitions...')
+
+    for _, row in iter_progress(
+        definition_df.iterrows(),
+        description='Processing SNOMED definitions',
+        total=len(definition_df)
+    ):
         if row['conceptId'] not in concepts:
             raise ValueError(f'Concept ID {row["conceptId"]} not found in concepts dictionary.')
 
@@ -182,7 +200,13 @@ def _process_relationships(relationship_file_path: str,
     relationship_df = pd.read_csv(relationship_file_path, sep='\t')
     relationship_df = rf2_dataframe_deduplicate(relationship_df)
 
-    for _, row in relationship_df.iterrows():
+    verbose_print(f'Relationship file {relationship_file_path} loaded, processing relationships...')
+
+    for _, row in iter_progress(
+        relationship_df.iterrows(),
+        description='Processing SNOMED relationships',
+        total=len(relationship_df)
+    ):
         if row['typeId'] == 116680003:
             # IS_A relationship
             snomed_graph.add_edge(
@@ -220,6 +244,8 @@ async def _load_snomed_release(concept_file: str,
     definition_full_path = os.path.join(CONFIG.data_dir, definition_file)
     relationship_full_path = os.path.join(CONFIG.data_dir, relationship_file)
 
+    verbose_print('SNOMED release files found, processing...')
+
     concepts_dict = _process_concepts(concept_full_path)
     _process_descriptions(description_full_path, concepts_dict)
     _process_definitions(definition_full_path, concepts_dict)
@@ -232,6 +258,8 @@ async def _load_snomed_release(concept_file: str,
         snomed_graph.add_node(concept.concept_id)
 
     _process_relationships(relationship_full_path, snomed_graph)
+
+    verbose_print('Concept processing complete, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

@@ -6,7 +6,8 @@ from owlready2 import get_ontology, ThingClass
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -115,14 +116,19 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HPO owl file not found')
 
-    owl_file_path = f'file://{os.path.join(CONFIG.data_dir, FILE_PATHS[0])}'
+    full_ontology_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
+    verbose_print(f'Loading HPO ontology from {full_ontology_path}')
+
+    owl_file_path = f'file://{full_ontology_path}'
 
     hpo_ontology = get_ontology(owl_file_path).load()
+    hpo_classes = list(hpo_ontology.classes())
+    verbose_print('HPO ontology read from file')
 
     hpo_graph = nx.DiGraph()
     concepts = []
 
-    for hpo_class in hpo_ontology.classes():
+    for hpo_class in iter_progress(hpo_classes, description='Processing HPO classes', total=len(hpo_classes)):
         if hpo_class.name.startswith('HP_'):
             concept, relationships = _process_hpo_class(hpo_class)
             concepts.append(concept)
@@ -139,6 +145,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         doc_db = await get_active_doc_db()
     if graph_db is None:
         graph_db = get_active_graph_db()
+
+    verbose_print('Saving HPO concepts and graph to databases')
 
     await doc_db.save_terms(
         terms=concepts

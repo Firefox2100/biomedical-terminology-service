@@ -195,6 +195,14 @@ class Settings(BaseSettings):
         description='Location of the Qdrant vector database',
     )
 
+    verbose_print: bool = Field(
+        False,
+        description='Enable verbose printing for CLI operations',
+    )
+    disable_progress_bar: bool = Field(
+        False,
+        description='Disable progress bars for operations',
+    )
 
 
 CONFIG = Settings(_env_file=os.getenv('BTS_ENV_FILE', 'conf/.env'))     # type: ignore

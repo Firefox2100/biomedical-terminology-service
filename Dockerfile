@@ -11,6 +11,8 @@ LABEL org.opencontainers.image.licenses="MIT"
 ENV PYTHONUNBUFFERED=1
 ENV BTS_ENV_FILE="/app/conf/.env"
 ENV BTS_DATA_DIR="/app/data"
+ENV BTS_VERBOSE_PRINT="false"
+ENV BTS_DISABLE_PROGRESS_BAR="true"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash ca-certificates curl && \
@@ -58,6 +60,8 @@ LABEL org.opencontainers.image.licenses="MIT"
 ENV PYTHONUNBUFFERED=1
 ENV BTS_ENV_FILE="/app/conf/.env"
 ENV BTS_DATA_DIR="/app/data"
+ENV BTS_VERBOSE_PRINT="false"
+ENV BTS_DISABLE_PROGRESS_BAR="true"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash ca-certificates curl python3-pip python3.11 python3.11-venv && \

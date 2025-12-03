@@ -6,7 +6,8 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -73,7 +74,13 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     concepts = []
     reactome_graph = nx.DiGraph()
 
-    for _, row in pathway_df.iterrows():
+    verbose_print('Reactome release files loaded from disk, processing concepts...')
+
+    for _, row in iter_progress(
+        pathway_df.iterrows(),
+        description='Processing Reactome pathways',
+        total=len(pathway_df),
+    ):
         if pd.notna(row['synonyms']):
             synonyms = row['synonyms'].split('|')
         else:
@@ -91,7 +98,11 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         concepts.append(concept)
         reactome_graph.add_node(row['st_id'])
 
-    for _, row in reaction_df.iterrows():
+    for _, row in iter_progress(
+        reaction_df.iterrows(),
+        description='Processing Reactome reactions',
+        total=len(reaction_df),
+    ):
         if pd.notna(row['synonyms']):
             synonyms = row['synonyms'].split('|')
         else:
@@ -109,12 +120,18 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         concepts.append(concept)
         reactome_graph.add_node(row['st_id'])
 
-    for _, row in mapping_df.iterrows():
+    for _, row in iter_progress(
+        mapping_df.iterrows(),
+        description='Processing Reactome pathway-reaction mappings',
+        total=len(mapping_df),
+    ):
         reactome_graph.add_edge(
             row['reaction'],
             row['pathway'],
             label=ConceptRelationshipType.PART_OF,
         )
+
+    verbose_print('Reactome concepts constructed, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

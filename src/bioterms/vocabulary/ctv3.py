@@ -9,7 +9,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, \
-    get_trud_release_url, extract_file_from_zip
+    get_trud_release_url, extract_file_from_zip, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -132,11 +132,17 @@ def _load_concepts() -> list[CONCEPT_CLASS]:
     del description_df
     del term_df
 
+    verbose_print('Successfully read CTV3 concept and term files from disk, processing concepts...')
+
     concept_index = 0
     concept_count = len(concept_df)
     concepts = []
 
-    for concept_id, group in merged_term_df:
+    for concept_id, group in iter_progress(
+        merged_term_df,
+        description='Processing CTV3 concepts',
+        total=len(merged_term_df),
+    ):
         while concept_index < concept_count and concept_df.iloc[concept_index]['concept_id'] != concept_id:
             concept = CONCEPT_CLASS(
                 prefix=VOCABULARY_PREFIX,
@@ -233,14 +239,24 @@ def _load_relationships(concepts: list[CONCEPT_CLASS],
         names=['current_id', 'old_id'],
     )
 
-    for _, row in hierarchy_df.iterrows():
+    verbose_print('Successfully read CTV3 relationship files from disk, processing relationships...')
+
+    for _, row in iter_progress(
+        hierarchy_df.iterrows(),
+        description='Processing CTV3 hierarchical relationships',
+        total=len(hierarchy_df),
+    ):
         ctv3_graph.add_edge(
             row['child_id'],
             row['parent_id'],
             label=ConceptRelationshipType.IS_A
         )
 
-    for _, row in redundant_df.iterrows():
+    for _, row in iter_progress(
+        redundant_df.iterrows(),
+        description='Processing CTV3 redundancy relationships',
+        total=len(redundant_df),
+    ):
         ctv3_graph.add_edge(
             row['old_id'],
             row['current_id'],
@@ -263,6 +279,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     concepts = _load_concepts()
     ctv3_graph = _load_relationships(concepts=concepts)
+
+    verbose_print('Saving CTV3 concepts and relationships to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

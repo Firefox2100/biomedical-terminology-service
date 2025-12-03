@@ -6,7 +6,8 @@ from owlready2 import get_ontology, ThingClass, PropertyClass, Restriction
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -132,12 +133,19 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     owl_file_path = f'file://{os.path.join(CONFIG.data_dir, FILE_PATHS[0])}'
 
     ordo_ontology = get_ontology(owl_file_path).load()
+    ordo_classes = list(ordo_ontology.classes())
+
+    verbose_print('ORDO ontology loaded from disk, processing concepts...')
 
     ordo_graph = nx.DiGraph()
     concepts = []
     part_of_prop = [p for p in ordo_ontology.object_properties() if p.name.startswith('BFO_0000050')][0]
 
-    for ordo_class in ordo_ontology.classes():
+    for ordo_class in iter_progress(
+        ordo_classes,
+        description='Processing ORDO classes',
+        total=len(ordo_classes)
+    ):
         if ordo_class.name.startswith('Orphanet_'):
             concept, relationships = _process_ordo_class(ordo_class, part_of_prop)
             concepts.append(concept)
@@ -149,6 +157,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                     target_id,
                     label=rel_type
                 )
+
+    verbose_print('Concept processing complete, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

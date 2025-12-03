@@ -8,7 +8,8 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip, \
+    iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -74,17 +75,25 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         csv_path,
     )
 
+    verbose_print('OMIM release file loaded from disk, processing concepts...')
+
     omim_graph = nx.DiGraph()
     concepts = []
 
-    for _, row in omim_df.iterrows():
+    for _, row in iter_progress(
+        omim_df.iterrows(),
+        description='Processing OMIM ontology file',
+        total=len(omim_df),
+    ):
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
             conceptTypes=[],
             conceptId=row['Class ID'].split('/')[-1],
             label=row['Preferred Label'] if not pd.isna(row['Preferred Label']) else None,
             synonyms=row['Synonyms'].split('|') if not pd.isna(row['Synonyms']) else None,
-            status=ConceptStatus.DEPRECATED if not pd.isna(row['Obsolete']) and bool(row['Obsolete']) else ConceptStatus.ACTIVE,
+            status=ConceptStatus.DEPRECATED
+                if not pd.isna(row['Obsolete']) and bool(row['Obsolete'])
+                else ConceptStatus.ACTIVE,
         )
 
         concepts.append(concept)
@@ -104,6 +113,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                 concept.concept_id,
                 label=ConceptRelationshipType.REPLACED_BY
             )
+
+    verbose_print('Concept processing complete, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

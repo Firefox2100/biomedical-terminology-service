@@ -6,7 +6,8 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, ConceptRelationshipType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept import HgncConcept
@@ -61,6 +62,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HGNC release files not found')
 
+    verbose_print('Ensuring gene symbol vocabulary is loaded...')
+
     await ensure_gene_symbol_loaded(
         doc_db=doc_db,
         graph_db=graph_db,
@@ -85,7 +88,13 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     annotations = []
     hgnc_graph = nx.DiGraph()
 
-    for _, row in symbol_df.iterrows():
+    verbose_print('HGNC file read from disk, processing concepts...')
+
+    for _, row in iter_progress(
+        symbol_df.iterrows(),
+        description='Processing HGNC entries',
+        total=len(symbol_df)
+    ):
         synonyms = []
         if row['alias_symbol'] and pd.notna(row['alias_symbol']):
             alias_symbols = row['alias_symbol'].split('|')
@@ -131,7 +140,11 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             annotationType=AnnotationType.HAS_SYMBOL,
         ))
 
-    for _, row in withdrawn_df.iterrows():
+    for _, row in iter_progress(
+        withdrawn_df.iterrows(),
+        description='Processing HGNC withdrawn entries',
+        total=len(withdrawn_df)
+    ):
         replacing_symbols = row['MERGED_INTO_REPORT(S) (i.e HGNC_ID|SYMBOL|STATUS)'].split(', ')
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
@@ -156,6 +169,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
         concepts.append(concept)
         hgnc_graph.add_node(concept.concept_id)
+
+    verbose_print('Saving HGNC concepts to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

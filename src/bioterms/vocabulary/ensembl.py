@@ -9,7 +9,8 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType, AnnotationType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip, \
+    iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept import EnsemblConcept
@@ -69,6 +70,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('Ensembl gtf file not found')
 
+    verbose_print('Checking if HGNC symbols are loaded...')
+
     await ensure_gene_symbol_loaded(
         doc_db=doc_db,
         graph_db=graph_db,
@@ -102,7 +105,9 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     ensembl_graph = nx.DiGraph()
     annotations = []
 
-    for _, row in gene_df.iterrows():
+    verbose_print('Ensembl GTF file read, processing entries...')
+
+    for _, row in iter_progress(gene_df.iterrows(), description='Processing GTF entries', total=len(gene_df)):
         # Parse the attribute into a dictionary
         attributes = dict(
             re.findall(r'(\S+)\s"([^"]+)"', row['attribute'])
@@ -202,6 +207,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             )
 
     del gene_df
+
+    verbose_print('Ensembl concepts processed, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

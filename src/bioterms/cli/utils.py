@@ -4,6 +4,9 @@ import inspect
 from rich.console import Console
 
 
+CONSOLE = Console()
+
+
 def run_async(func):
     if inspect.iscoroutinefunction(func):
         @functools.wraps(func)
@@ -13,6 +16,3 @@ def run_async(func):
         return wrapper
 
     return func
-
-
-CONSOLE = Console()

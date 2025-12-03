@@ -3,6 +3,7 @@ import base64
 import typer
 from typing import Annotated, Optional
 
+from bioterms.etc.consts import CONFIG
 import bioterms.cli.annotation as annotation
 import bioterms.cli.cache as cache
 import bioterms.cli.similarity as similarity
@@ -40,11 +41,22 @@ def create_cli() -> typer.Typer:
                               help='Show the version of the Biomedical Terminology Service CLI and exit.'
                           )
                       ] = None,
+                      verbose: Annotated[
+                          bool,
+                          typer.Option(
+                              '--verbose',
+                              '-V',
+                              help='Enable verbose output.'
+                          )
+                      ] = False,
                       ):
         if version:
             from bioterms import __version__
             CONSOLE.print(f'Biomedical Terminology Service CLI version: {__version__}')
             raise typer.Exit()
+
+        if verbose:
+            CONFIG.verbose_print = True
 
     return app
 

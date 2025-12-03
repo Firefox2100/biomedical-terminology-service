@@ -8,7 +8,8 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_zip
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_zip, \
+    iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 
@@ -86,10 +87,16 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         dtype=str,
     )
 
+    verbose_print('NCIT flat file read from disk, constructing concepts...')
+
     ncit_graph = nx.DiGraph()
     concepts = []
 
-    for _, row in ncit_df.iterrows():
+    for _, row in iter_progress(
+        ncit_df.iterrows(),
+        description='Processing NCIT concepts',
+        total=len(ncit_df)
+    ):
         synonyms = row['synonyms'].split('|')
 
         concept = CONCEPT_CLASS(
@@ -111,6 +118,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                     parent,
                     label=ConceptRelationshipType.IS_A
                 )
+
+    verbose_print('NCIT concepts constructed, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

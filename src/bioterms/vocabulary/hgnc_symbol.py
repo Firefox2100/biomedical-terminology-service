@@ -5,7 +5,7 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist
+from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 from .hgnc import download_vocabulary
@@ -49,6 +49,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     )
     withdrawn_df = withdrawn_df.drop(withdrawn_df[withdrawn_df['STATUS'] == 'Entry Withdrawn'].index)
 
+    verbose_print('HGNC symbol file read from disk, constructing concepts...')
+
     active_symbols = set()
     symbol_df['alias_symbol_substrings'] = symbol_df['alias_symbol'].str.split('|')
     alias_symbols = symbol_df['alias_symbol_substrings'].explode().dropna().tolist()
@@ -59,10 +61,16 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     withdrawn_symbols = set(withdrawn_df['WITHDRAWN_SYMBOL'].tolist())
     active_symbols = active_symbols - withdrawn_symbols
 
+    verbose_print('Concept categorisation complete, building graph...')
+
     concepts = []
     gene_graph = nx.DiGraph()
 
-    for symbol in active_symbols:
+    for symbol in iter_progress(
+        active_symbols,
+        description='Processing HGNC active symbols',
+        total=len(active_symbols)
+    ):
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
             conceptId=symbol,
@@ -73,7 +81,11 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         concepts.append(concept)
         gene_graph.add_node(symbol)
 
-    for symbol in withdrawn_symbols:
+    for symbol in iter_progress(
+        withdrawn_symbols,
+        description='Processing HGNC withdrawn symbols',
+        total=len(withdrawn_symbols)
+    ):
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
             conceptId=symbol,
@@ -83,6 +95,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
         concepts.append(concept)
         gene_graph.add_node(symbol)
+
+    verbose_print('Concept processing complete, saving to databases...')
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

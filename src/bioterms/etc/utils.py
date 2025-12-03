@@ -6,17 +6,20 @@ import tempfile
 import fnmatch
 import gzip
 from pathlib import Path
+from typing import Iterable, Iterator, AsyncIterable, AsyncIterator, TypeVar
 import aiofiles
 import aiofiles.os
 import httpx
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT
 from .errors import FilesNotFound
 
 
 _transformer: SentenceTransformer | None = None
+T = TypeVar('T')
 
 
 def check_files_exist(files: list[str]) -> bool:
@@ -67,7 +70,10 @@ async def download_file(url: str,
         os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
 
         async with aiofiles.open(absolute_file_path, 'wb') as data_file:
-            async for chunk in response.aiter_bytes():
+            async for chunk in aiter_progress(
+                response.aiter_bytes(),
+                description=f'Downloading {os.path.basename(file_path)}'
+            ):
                 await data_file.write(chunk)
 
 
@@ -203,3 +209,78 @@ def get_transformer() -> SentenceTransformer:
         _transformer = SentenceTransformer(CONFIG.transformer_model_name)
 
     return _transformer
+
+
+def iter_progress(iterable: Iterable[T],
+                  *,
+                  description: str = "Working...",
+                  total: float | None = None,
+                  **kwargs,
+                  ) -> Iterator[T]:
+    """
+    Wrap an iterable with a progress bar using rich.
+    :param iterable: The iterable to wrap.
+    :param description: Description to display alongside the progress bar.
+    :param total: Total number of items in the iterable, if known.
+    :param kwargs: Additional keyword arguments to pass to the progress bar.
+    :return: An iterator that yields items from the iterable with a progress bar.
+    """
+    if CONFIG.disable_progress_bar:
+        yield from iterable
+        return
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        transient=total is None,
+    ) as progress:
+        task = progress.add_task(description=description, total=total, **kwargs)
+        for item in iterable:
+            yield item
+            progress.advance(task)
+
+
+async def aiter_progress(async_iterable: AsyncIterable[T],
+                         *,
+                         description: str = "Working...",
+                         total: float | None = None,
+                         **kwargs) -> AsyncIterator[T]:
+    """
+    Wrap an async iterable with a progress bar using rich.
+    :param async_iterable: The async iterable to wrap.
+    :param description: Description to display alongside the progress bar.
+    :param total: Total number of items in the async iterable, if known.
+    :param kwargs: Additional keyword arguments to pass to the progress bar.
+    :return: An async iterator that yields items from the async iterable with a progress bar.
+    """
+    if CONFIG.disable_progress_bar:
+        async for item in async_iterable:
+            yield item
+            return
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        transient=total is None,
+    ) as progress:
+        task = progress.add_task(description=description, total=total, **kwargs)
+        async for item in async_iterable:
+            yield item
+            progress.advance(task)
+
+
+def verbose_print(message: str):
+    """
+    Print a message if verbose mode is enabled.
+    :param message: The message to print.
+    """
+    if CONFIG.verbose_print:
+        print(message)
