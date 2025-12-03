@@ -1,6 +1,21 @@
 import networkx as nx
 
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
+
+
+def filter_edges_by_relationship(graph: nx.DiGraph,
+                                 relationship_types: set[ConceptRelationshipType],
+                                 ):
+    """
+    Filter edges in the graph by relationship types.
+    """
+    edges_to_remove = []
+
+    for u, v, data in graph.edges(data=True):
+        if data.get('label') not in relationship_types:
+            edges_to_remove.append((u, v))
+
+    graph.remove_edges_from(edges_to_remove)
 
 
 def count_annotation_for_graph(target_graph: nx.DiGraph,

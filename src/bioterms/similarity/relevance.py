@@ -1,13 +1,14 @@
 import asyncio
 import math
 import itertools
+from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor
 import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix
-from .utils import count_annotation_for_graph
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
+from .utils import count_annotation_for_graph, filter_edges_by_relationship
 
 
 METHOD_NAME = 'Relevance Method'
@@ -139,6 +140,12 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     :return: A pandas DataFrame with similarity scores.
     """
     # Count the annotations for each node in the target graph
+    target_graph = deepcopy(target_graph)
+    filter_edges_by_relationship(
+        graph=target_graph,
+        relationship_types={ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF},
+    )
+
     count_annotation_for_graph(
         target_graph=target_graph,
         annotation_graph=annotation_graph,

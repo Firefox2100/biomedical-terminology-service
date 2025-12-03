@@ -63,7 +63,7 @@ async def calculate_similarity(method: SimilarityMethod,
     if similarity_threshold is None:
         similarity_threshold = similarity_module.DEFAULT_SIMILARITY_THRESHOLD
     if doc_db is None:
-        doc_db = get_active_doc_db()
+        doc_db = await get_active_doc_db()
     if graph_db is None:
         graph_db = get_active_graph_db()
 
