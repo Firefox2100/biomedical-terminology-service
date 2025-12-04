@@ -63,6 +63,9 @@ class ConceptRelationshipType(StrEnum):
     IS_A = 'is_a'
     PART_OF = 'part_of'
     REPLACED_BY = 'replaced_by'
+    PRECEDED_BY = 'preceded_by'
+    INPUT = 'input'
+    OUTPUT = 'output'
 
 
 class DocDatabaseDriverType(Enum):
