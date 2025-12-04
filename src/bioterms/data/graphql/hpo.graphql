@@ -1,4 +1,4 @@
-type HpoConcept implements Concept {
+type HpoConcept implements Concept & OntologyConcept {
     prefix: ConceptPrefix!
     conceptId: String!
     label: String
@@ -6,7 +6,11 @@ type HpoConcept implements Concept {
     comment: String
     status: ConceptStatus!
 
-    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationship!]!
+    replaces: [HpoConcept!]!
+    replacedBy: [HpoConcept!]!
+
+    children: [HpoConcept!]!
+    parents: [HpoConcept!]!
 }
 
 type HpoConceptResponse {

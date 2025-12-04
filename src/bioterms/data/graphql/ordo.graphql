@@ -1,4 +1,4 @@
-type OrdoConcept implements Concept {
+type OrdoConcept implements Concept & OntologyConcept {
     prefix: ConceptPrefix!
     conceptId: String!
     label: String
@@ -6,7 +6,11 @@ type OrdoConcept implements Concept {
     synonyms: [String!]
     status: ConceptStatus!
 
-    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationship!]!
+    replaces: [OrdoConcept!]!
+    replacedBy: [OrdoConcept!]!
+
+    children: [OrdoConcept!]!
+    parents: [OrdoConcept!]!
 }
 
 type OrdoConceptResponse {

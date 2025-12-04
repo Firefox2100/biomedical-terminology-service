@@ -7,19 +7,6 @@ enum ConceptStatus {
     deprecated
 }
 
-enum ConceptRelationshipType {
-    isA
-    replacedBy
-    annotation
-    similarity
-}
-
-interface ConceptRelationship {
-    from: Concept!
-    to: Concept!
-    kind: ConceptRelationshipType!
-}
-
 interface Concept {
     prefix: ConceptPrefix!
     conceptId: String
@@ -27,7 +14,13 @@ interface Concept {
     definition: String
     status: ConceptStatus!
 
-    relatedConcepts(kind: [ConceptRelationshipType!]): [ConceptRelationship!]!
+    replaces: [Concept!]!
+    replacedBy: [Concept!]!
+}
+
+interface OntologyConcept {
+    children: [Concept!]!
+    parents: [Concept!]!
 }
 
 type QueryError {
