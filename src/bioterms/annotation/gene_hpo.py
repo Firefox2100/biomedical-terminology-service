@@ -5,10 +5,11 @@ import pandas as pd
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
-from .utils import assert_vocabulary_loaded
+from .utils import assert_pre_requisite
 
 
 ANNOTATION_NAME = 'HGNC Gene Symbol Mapping to HPO'
@@ -46,31 +47,28 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
     if graph_db is None:
         graph_db = get_active_graph_db()
 
-    await assert_vocabulary_loaded(
+    await assert_pre_requisite(
+        annotation_name=ANNOTATION_NAME,
         prefix_1=VOCABULARY_PREFIX_1,
         prefix_2=VOCABULARY_PREFIX_2,
+        file_paths=FILE_PATHS,
         graph_db=graph_db,
     )
-
-    annotation_count = await graph_db.count_annotations(
-        prefix_1=VOCABULARY_PREFIX_1,
-        prefix_2=VOCABULARY_PREFIX_2,
-    )
-
-    if annotation_count > 0:
-        return  # Annotations already exist, skip loading
-
-    if not check_files_exist(FILE_PATHS):
-        raise FilesNotFound('Gene-HPO mapping file not found. Please download it first.')
 
     mapping_df = pd.read_csv(
         os.path.join(CONFIG.data_dir, FILE_PATHS[0]),
         sep='\t',
     )
 
+    verbose_print('HGNC symbol to HPO annotation file loaded from disk, processing annotations...')
+
     annotations = []
 
-    for _, row in mapping_df.iterrows():
+    for _, row in iter_progress(
+        mapping_df.iterrows(),
+        description='Processing HGNC to HPO annotations',
+        total=len(mapping_df),
+    ):
         if row['gene_symbol'] == '-':
             # No corresponding HGNC code
             continue
@@ -108,6 +106,8 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
             conceptIdTo=row['hpo_id'].split(':')[-1],
             properties={'frequency': frequency},
         ))
+
+    verbose_print(f'Inserting {len(annotations)} annotations into the graph database...')
 
     await graph_db.save_annotations(
         annotations=annotations

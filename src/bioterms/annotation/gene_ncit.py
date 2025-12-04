@@ -4,11 +4,11 @@ import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
-from .utils import assert_vocabulary_loaded
+from .utils import assert_pre_requisite
 
 
 ANNOTATION_NAME = 'NCIT Mapping to HGNC Gene Symbol'
@@ -45,22 +45,13 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
     if graph_db is None:
         graph_db = get_active_graph_db()
 
-    await assert_vocabulary_loaded(
+    await assert_pre_requisite(
+        annotation_name=ANNOTATION_NAME,
         prefix_1=VOCABULARY_PREFIX_1,
         prefix_2=VOCABULARY_PREFIX_2,
+        file_paths=FILE_PATHS,
         graph_db=graph_db,
     )
-
-    annotation_count = await graph_db.count_annotations(
-        prefix_1=VOCABULARY_PREFIX_1,
-        prefix_2=VOCABULARY_PREFIX_2,
-    )
-
-    if annotation_count > 0:
-        return  # Annotations already exist, skip loading
-
-    if not check_files_exist(FILE_PATHS):
-        raise FilesNotFound('NCIT-HGNC symbol mapping file not found. Please download it first.')
 
     mapping_df = pd.read_csv(
         os.path.join(CONFIG.data_dir, FILE_PATHS[0]),
@@ -69,15 +60,23 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         names=['ncit_id', 'hgnc_id'],
     )
 
+    verbose_print('NCIT to HGNC annotation file loaded from disk. Processing annotations...')
+
     annotations = []
 
-    for _, row in mapping_df.iterrows():
+    for _, row in iter_progress(
+        mapping_df.iterrows(),
+        description='Processing NCIT to HGNC annotations',
+        total=len(mapping_df)
+    ):
         annotations.append(Annotation(
             prefixFrom=VOCABULARY_PREFIX_1,
             prefixTo=VOCABULARY_PREFIX_2,
             conceptIdFrom=row['ncit_id'],
             conceptIdTo=row['hgnc_id'].split(':')[-1],
         ))
+
+    verbose_print(f'Processed {len(annotations)} NCIT to HGNC annotations. Saving to database...')
 
     await graph_db.save_annotations(
         annotations=annotations

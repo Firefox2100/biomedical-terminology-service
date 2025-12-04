@@ -4,11 +4,11 @@ from owlready2 import get_ontology
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
+    verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
-from .utils import assert_vocabulary_loaded
+from .utils import assert_pre_requisite
 
 
 ANNOTATION_NAME = 'HPO - ORDO Ontological Module'
@@ -49,29 +49,27 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
     if graph_db is None:
         graph_db = get_active_graph_db()
 
-    await assert_vocabulary_loaded(
+    await assert_pre_requisite(
+        annotation_name=ANNOTATION_NAME,
         prefix_1=VOCABULARY_PREFIX_1,
         prefix_2=VOCABULARY_PREFIX_2,
+        file_paths=FILE_PATHS,
         graph_db=graph_db,
     )
-
-    annotation_count = await graph_db.count_annotations(
-        prefix_1=VOCABULARY_PREFIX_1,
-        prefix_2=VOCABULARY_PREFIX_2,
-    )
-
-    if annotation_count > 0:
-        return  # Annotations already exist, skip loading
-
-    if not check_files_exist(FILE_PATHS):
-        raise FilesNotFound('HOOM owl file not found')
 
     owl_file_path = f'file://{os.path.join(CONFIG.data_dir, FILE_PATHS[0])}'
 
     hoom_ontology = get_ontology(owl_file_path).load()
+    hoom_classes = list(hoom_ontology.classes())
     annotations = []
 
-    for hoom_class in hoom_ontology.classes():
+    verbose_print('HOOM ontology file loaded from disk. Processing annotations...')
+
+    for hoom_class in iter_progress(
+        hoom_classes,
+        description='Processing HOOM classes',
+        total=len(hoom_classes)
+    ):
         if hoom_class.name.startswith('Orpha:'):
             name_components = hoom_class.name.split('_')
             ordo_id = name_components[0].split(':')[1]
@@ -85,6 +83,8 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
                 conceptIdTo=hpo_id,
                 properties={'frequency': frequency_code},
             ))
+
+    verbose_print(f'Processed {len(annotations)} HOOM annotations. Saving to database...')
 
     await graph_db.save_annotations(
         annotations=annotations
