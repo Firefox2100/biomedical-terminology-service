@@ -233,21 +233,25 @@ class MongoDocumentDatabase(DocumentDatabase):
         """
         extra_data = await generate_extra_data(terms)
 
-        documents: dict[ConceptPrefix, list[dict]] = {}
+        operations: dict[ConceptPrefix, list[UpdateOne]] = {}
         for concept, (term_id, ngrams, search_text) in zip(terms, extra_data):
             doc = concept.model_dump(exclude_none=True)
             doc['nGrams'] = ngrams
             doc['searchText'] = search_text
 
-            if concept.prefix not in documents:
-                documents[concept.prefix] = []
+            if concept.prefix not in operations:
+                operations[concept.prefix] = []
 
-            documents[concept.prefix].append(doc)
+            operations[concept.prefix].append(UpdateOne(
+                {'conceptId': concept.concept_id},
+                {'$set': doc},
+                upsert=True,
+            ))
 
-        for prefix, concept_docs in documents.items():
+        for prefix, concept_operations in operations.items():
             collection = self.db[str(prefix.value)]
 
-            await collection.insert_many(concept_docs, ordered=False)
+            await collection.bulk_write(concept_operations, ordered=False)
 
     async def count_terms(self,
                           prefix: ConceptPrefix,

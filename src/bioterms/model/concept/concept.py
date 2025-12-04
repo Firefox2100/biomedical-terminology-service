@@ -45,7 +45,7 @@ class Concept(JsonModel):
         None,
         description='Additional comments or notes about the concept.',
     )
-    status: ConceptStatus = Field(
+    status: Optional[ConceptStatus] = Field(
         ConceptStatus.ACTIVE,
         description='The status of the concept, indicating whether it is active or deprecated.',
     )

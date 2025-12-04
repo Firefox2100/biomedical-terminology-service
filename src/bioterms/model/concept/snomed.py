@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import Field, ConfigDict
 
 from .concept import Concept
@@ -13,8 +14,8 @@ class SnomedConcept(Concept):
         serialize_by_alias=True,
     )
 
-    fully_defined: bool = Field(
-        ...,
+    fully_defined: Optional[bool] = Field(
+        None,
         description='Indicates if the concept is fully defined.',
         alias='fullyDefined',
     )

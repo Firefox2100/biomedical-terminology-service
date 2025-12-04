@@ -1,5 +1,5 @@
 import asyncio
-from typing import LiteralString, AsyncIterator
+from typing import LiteralString, AsyncIterator, Iterator, TypeVar
 import networkx as nx
 import pandas as pd
 from neo4j import AsyncDriver, AsyncSession
@@ -12,6 +12,8 @@ from bioterms.model.expanded_term import ExpandedTerm
 from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
 from .graph_db import GraphDatabase
+
+T = TypeVar('T')
 
 
 class Neo4jGraphDatabase(GraphDatabase):
@@ -67,6 +69,16 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         raise RuntimeError('Exceeded maximum retry attempts for query execution.')
 
+    @staticmethod
+    def _batch_iterable(seq: list[T], batch_size: int = 10000) -> Iterator[list[T]]:
+        """
+        Batch the input parameters in case of large insertions.
+        :param seq: The iterable, must be a list-like object and not a generator
+        :param batch_size: Size of the batch, default to 1000
+        """
+        for i in range(0, len(seq), batch_size):
+            yield seq[i:i + batch_size]
+
     @classmethod
     def set_client(cls,
                    client: AsyncDriver,
@@ -101,40 +113,44 @@ class Neo4jGraphDatabase(GraphDatabase):
             for source, target, data in graph.edges(data=True)
         ]
 
+        concept_prefix = concepts[0].prefix if concepts else ''
+
         async with self._client.session() as session:
             # Insert the concepts first before adding edges
-            await self._execute_query_with_retry(
-                query="""
-                UNWIND $concepts AS concept
-                WITH concept, coalesce(concept.conceptTypes, []) AS types
-                MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
+            for concept_batch in self._batch_iterable(concepts):
+                await self._execute_query_with_retry(
+                    query="""
+                    UNWIND $concepts AS concept
+                    WITH concept, coalesce(concept.conceptTypes, []) AS types
+                    MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
 
-                WITH n, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
-                CALL apoc.create.addLabels(n, labels) YIELD node
-                RETURN count(node) AS upserted
-                """,
-                session=session,
-                parameters={
-                    'concepts': [concept.model_dump() for concept in concepts],
-                },
-            )
+                    WITH n, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
+                    CALL apoc.create.addLabels(n, labels) YIELD node
+                    RETURN count(node) AS upserted
+                    """,
+                    session=session,
+                    parameters={
+                        'concepts': [concept.model_dump() for concept in concept_batch],
+                    },
+                )
 
             # Insert the edges
-            await self._execute_query_with_retry(
-                query="""
-                UNWIND $edges AS edge
-                MERGE (source:Concept {id: edge[0], prefix: $concept_prefix})
-                MERGE (target:Concept {id: edge[1], prefix: $concept_prefix})
-                WITH source, target, edge, coalesce(edge[2], 'related_to') as rel_label
-                CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
-                RETURN count(rel) AS created
-                """,
-                session=session,
-                parameters={
-                    'edges': edges,
-                    'concept_prefix': concepts[0].prefix if concepts else '',
-                },
-            )
+            for edge_batch in self._batch_iterable(edges):
+                await self._execute_query_with_retry(
+                    query="""
+                    UNWIND $edges AS edge
+                    MERGE (source:Concept {id: edge[0], prefix: $concept_prefix})
+                    MERGE (target:Concept {id: edge[1], prefix: $concept_prefix})
+                    WITH source, target, edge, coalesce(edge[2], 'related_to') as rel_label
+                    CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
+                    RETURN count(rel) AS created
+                    """,
+                    session=session,
+                    parameters={
+                        'edges': edge_batch,
+                        'concept_prefix': concept_prefix,
+                    },
+                )
 
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
@@ -246,21 +262,22 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param annotations: A list of Annotation instances to save.
         """
         async with self._client.session() as session:
-            await self._execute_query_with_retry(
-                query="""
-                UNWIND $annotations AS annotation
-                MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
-                MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
-                WITH source,
-                    target,
-                    coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
-                    coalesce(annotation.properties, {}) AS props
-                CALL apoc.merge.relationship(source, rel_type, {}, props, target) YIELD rel
-                RETURN count(rel) AS created
-                """,
-                session=session,
-                parameters={'annotations': [annotation.model_dump() for annotation in annotations]},
-            )
+            for annotation_batch in self._batch_iterable(annotations):
+                await self._execute_query_with_retry(
+                    query="""
+                    UNWIND $annotations AS annotation
+                    MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
+                    MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                    WITH source,
+                        target,
+                        coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
+                        coalesce(annotation.properties, {}) AS props
+                    CALL apoc.merge.relationship(source, rel_type, {}, props, target) YIELD rel
+                    RETURN count(rel) AS created
+                    """,
+                    session=session,
+                    parameters={'annotations': [annotation.model_dump() for annotation in annotation_batch]},
+                )
 
     async def get_annotation_graph(self,
                                    prefix_1: ConceptPrefix,
@@ -369,7 +386,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         async with self._client.session() as session:
             # Similarity data can be millions of rows, so need to batch the inserts
-            batch_size = 1000
+            batch_size = 10000
 
             for start_idx in range(0, len(similarity_df), batch_size):
                 end_idx = start_idx + batch_size

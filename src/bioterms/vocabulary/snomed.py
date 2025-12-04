@@ -152,7 +152,11 @@ def _process_descriptions(description_file_path: str,
         total=len(description_df)
     ):
         if row['conceptId'] not in concepts:
-            raise ValueError(f'Concept ID {row["conceptId"]} not found in concepts dictionary.')
+            concepts[row['conceptId']] = CONCEPT_CLASS(
+                prefix=VOCABULARY_PREFIX,
+                conceptId=str(row['conceptId']),
+                status=None,
+            )
 
         if row['typeId'] == 900000000000003001:
             # Label
@@ -160,9 +164,9 @@ def _process_descriptions(description_file_path: str,
         else:
             # Synonym
             if concepts[row['conceptId']].synonyms is None:
-                concepts[row['conceptId']].synonyms = [row['term']]
+                concepts[row['conceptId']].synonyms = [str(row['term'])]
             else:
-                concepts[row['conceptId']].synonyms.append(row['term'])
+                concepts[row['conceptId']].synonyms.append(str(row['term']))
 
 
 def _process_definitions(definition_file_path: str,
