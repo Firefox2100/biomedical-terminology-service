@@ -157,6 +157,8 @@ async def delete_vocabulary(prefix: ConceptPrefix,
             doc_db = await get_active_doc_db()
         if graph_db is None:
             graph_db = get_active_graph_db()
+        if vector_db is None:
+            vector_db = get_active_vector_db()
 
         await cache.purge()
         await doc_db.delete_all_for_label(vocabulary_module.VOCABULARY_PREFIX)
@@ -216,6 +218,8 @@ async def load_vocabulary(prefix: ConceptPrefix,
     if inspect.iscoroutine(result):
         await result
 
+    if cache is None:
+        cache = get_active_cache()
     await cache.purge()
 
 

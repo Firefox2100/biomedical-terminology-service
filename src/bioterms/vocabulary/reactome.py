@@ -208,7 +208,7 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
         )
 
     for _, row in iter_progress(
-        reaction_pathway_df,
+        reaction_pathway_df.iterrows(),
         description='Processing Reactome reaction-pathway relationships',
         total=len(reaction_pathway_df),
     ):
@@ -223,11 +223,12 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
         description='Processing Reactome gene-reaction relationships',
         total=len(gene_reaction_df),
     ):
-        reactome_graph.add_edge(
-            row['reaction_id'],
-            row['gene_id'],
-            label=ConceptRelationshipType(row['relationship']),
-        )
+        if row['relationship'] in ['input', 'output']:
+            reactome_graph.add_edge(
+                row['reaction_id'],
+                row['gene_id'],
+                label=ConceptRelationshipType(row['relationship']),
+            )
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
@@ -246,7 +247,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     annotations = []
     mapping_df = pd.read_csv(
-        str(os.path.join(CONFIG.data_dir, FILE_PATHS[6])),
+        str(os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
     )
     for _, row in iter_progress(
         mapping_df.iterrows(),
