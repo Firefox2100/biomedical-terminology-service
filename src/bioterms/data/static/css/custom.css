@@ -1,3 +1,28 @@
 a.link-muted {
     color : #6c757d;
 }
+
+.site-logo-wrapper {
+  display: inline-flex;
+  align-items: center;
+}
+
+.site-logo-svg {
+  width: 32px;
+  height: 32px;
+  display: block;
+}
+
+.site-logo-svg .rings {
+  animation: logo-spin 10s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
