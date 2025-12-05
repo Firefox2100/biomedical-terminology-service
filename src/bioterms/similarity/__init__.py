@@ -69,16 +69,19 @@ async def calculate_similarity(method: SimilarityMethod,
 
     if not (await get_vocabulary_status(target_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
         raise ValueError(f'Target vocabulary {target_prefix.value} is not loaded.')
-    if not (await get_vocabulary_status(corpus_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
-        raise ValueError(f'Corpus vocabulary {corpus_prefix.value} is not loaded.')
-    if not (await get_annotation_status(
-        prefix_1=target_prefix,
-        prefix_2=corpus_prefix,
-        graph_db=graph_db,
-    )).loaded:
-        raise ValueError(
-            f'Annotation between {target_prefix.value} and {corpus_prefix.value} is not loaded.'
-        )
+
+    if corpus_prefix is not None:
+        if not (await get_vocabulary_status(corpus_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
+            raise ValueError(f'Corpus vocabulary {corpus_prefix.value} is not loaded.')
+
+        if not (await get_annotation_status(
+            prefix_1=target_prefix,
+            prefix_2=corpus_prefix,
+            graph_db=graph_db,
+        )).loaded:
+            raise ValueError(
+                f'Annotation between {target_prefix.value} and {corpus_prefix.value} is not loaded.'
+            )
 
     target_graph = await graph_db.get_vocabulary_graph(target_prefix)
     if corpus_prefix is not None:
@@ -91,20 +94,37 @@ async def calculate_similarity(method: SimilarityMethod,
         corpus_graph = None
         annotation_graph = None
 
-    similarity_df = await similarity_module.calculate_similarity(
+    results = []
+    result_count = 0
+
+    async for result in similarity_module.calculate_similarity(
         target_graph=target_graph,
         target_prefix=target_prefix,
         corpus_graph=corpus_graph,
         corpus_prefix=corpus_prefix,
         annotation_graph=annotation_graph,
-    )
+    ):
+        if result[2] >= similarity_threshold:
+            results.append(result)
 
-    similarity_df = similarity_df[similarity_df['similarity'] >= similarity_threshold]
+        result_count += 1
 
-    await graph_db.save_similarity_scores(
-        prefix_from=target_prefix,
-        prefix_to=target_prefix,
-        similarity_df=similarity_df,
-        similarity_method=method.value,
-        corpus_prefix=corpus_prefix,
-    )
+        if result_count >= 10000:
+            await graph_db.save_similarity_scores(
+                prefix_from=target_prefix,
+                prefix_to=target_prefix,
+                similarity_scores=results,
+                similarity_method=method.value,
+                corpus_prefix=corpus_prefix,
+            )
+            results = []
+            result_count = 0
+
+    if results:
+        await graph_db.save_similarity_scores(
+            prefix_from=target_prefix,
+            prefix_to=target_prefix,
+            similarity_scores=results,
+            similarity_method=method.value,
+            corpus_prefix=corpus_prefix,
+        )

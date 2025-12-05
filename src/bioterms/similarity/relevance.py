@@ -3,11 +3,12 @@ import math
 import itertools
 from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor
+from typing import AsyncIterator
 import networkx as nx
-import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
+from bioterms.etc.utils import iter_progress, verbose_print, schedule_tasks
 from .utils import count_annotation_for_graph, filter_edges_by_relationship
 
 
@@ -26,7 +27,11 @@ def _calculate_ic(target_graph: nx.DiGraph,
     :param target_graph: The directed graph of the target vocabulary.
     :param max_annotation_count: The maximum annotation count in the target graph.
     """
-    for node in target_graph.nodes:
+    for node in iter_progress(
+        target_graph.nodes,
+        description='Calculating Information Content',
+        total=target_graph.number_of_nodes(),
+    ):
         if 'annotation_count' not in target_graph.nodes[node] or target_graph.nodes[node]['annotation_count'] == 0:
             # The node and its descendants have no annotations, IC is infinite
             continue
@@ -88,7 +93,7 @@ def _calculate_relevance(node_1: str,
     if mica is None:
         return None
 
-    return 2 * graph.nodes[mica]['ic'] / (graph.nodes[node_1]['ic'] + graph.nodes[node_1]['ic']) * \
+    return 2 * graph.nodes[mica]['ic'] / (graph.nodes[node_1]['ic'] + graph.nodes[node_2]['ic']) * \
         (1 - graph.nodes[mica]['annotation_count'] / max_annotation_count)
 
 
@@ -129,7 +134,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
                                corpus_graph: nx.DiGraph = None,
                                corpus_prefix: ConceptPrefix = None,
                                annotation_graph: nx.DiGraph = None,
-                               ) -> pd.DataFrame:
+                               ) -> AsyncIterator[tuple[str, str, float]]:
     """
     Calculate semantic similarity scores between terms in the target graph with Relevance method.
     :param target_graph: The directed graph of the target vocabulary.
@@ -137,7 +142,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     :param corpus_graph: The directed graph of the corpus vocabulary.
     :param corpus_prefix: The prefix of the corpus vocabulary.
     :param annotation_graph: The directed graph of the annotation between target and corpus.
-    :return: A pandas DataFrame with similarity scores.
+    :return: A generator yielding tuples of (concept_from, concept_to, similarity_score).
     """
     # Count the annotations for each node in the target graph
     target_graph = deepcopy(target_graph)
@@ -145,6 +150,8 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         graph=target_graph,
         relationship_types={ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF},
     )
+
+    verbose_print(f'Relationship filtered down to {len(target_graph.edges)} edges in target graph.')
 
     count_annotation_for_graph(
         target_graph=target_graph,
@@ -156,6 +163,8 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         target_graph.nodes[node]['annotation_count'] for node in target_graph.nodes
     )
 
+    verbose_print(f'Max annotation count in target graph: {max_annotation_count}')
+
     # Calculate the information content for each node in the target graph
     _calculate_ic(
         target_graph=target_graph,
@@ -165,32 +174,22 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     nodes_with_ic = [node for node in target_graph.nodes if 'ic' in target_graph.nodes[node]]
     node_pairs = itertools.combinations(nodes_with_ic, 2)
 
-    # asyncio compatible multiprocessing
-    loop = asyncio.get_running_loop()
+    verbose_print(f'Calculating similarity for {len(nodes_with_ic)} nodes, '
+                  f'total {len(nodes_with_ic)*(len(nodes_with_ic)-1)//2} pairs.')
 
     with ProcessPoolExecutor(
         max_workers=CONFIG.process_limit,
         initializer=_worker_init,
         initargs=(target_graph, max_annotation_count),
     ) as executor:
-        tasks = [
-            loop.run_in_executor(
-                executor,
-                _relevance_worker,
-                node_pair,
-            ) for node_pair in node_pairs
-        ]
+        async for result in schedule_tasks(
+            executor=executor,
+            func=_relevance_worker,
+            iterable=node_pairs,
+            description='Calculate semantic similarity scores between terms in the target graph.',
+            total=len(nodes_with_ic)*(len(nodes_with_ic)-1)//2,
+        ):
+            concept_from, concept_to, similarity = result
 
-        results = await asyncio.gather(*tasks)
-
-    # Compile results into a DataFrame
-    sim_data = [
-        {
-            'concept_from': n1,
-            'concept_to': n2,
-            'similarity': relevance,
-        } for n1, n2, relevance in results if relevance is not None
-    ]
-
-    similarity_df = pd.DataFrame(sim_data)
-    return similarity_df
+            if similarity is not None:
+                yield concept_from, concept_to, similarity

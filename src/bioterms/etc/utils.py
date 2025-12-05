@@ -1,3 +1,4 @@
+import asyncio
 import os
 import io
 import zipfile
@@ -6,7 +7,9 @@ import tempfile
 import fnmatch
 import gzip
 from pathlib import Path
-from typing import Iterable, Iterator, AsyncIterable, AsyncIterator, TypeVar
+from itertools import islice
+from concurrent.futures import Executor
+from typing import Iterable, Iterator, AsyncIterable, AsyncIterator, Callable, Any, TypeVar
 import aiofiles
 import aiofiles.os
 import httpx
@@ -20,6 +23,7 @@ from .errors import FilesNotFound
 
 _transformer: SentenceTransformer | None = None
 T = TypeVar('T')
+R = TypeVar('R')
 
 
 def check_files_exist(files: list[str]) -> bool:
@@ -284,3 +288,76 @@ def verbose_print(message: str):
     """
     if CONFIG.verbose_print:
         print(message)
+
+
+async def schedule_tasks(executor: Executor,
+                         func: Callable[[T], R],
+                         iterable: Iterable[T],
+                         max_concurrency: int = None,
+                         loop: asyncio.AbstractEventLoop = None,
+                         description: str = None,
+                         total: int | None = None,
+                         ) -> AsyncIterator[R]:
+    """
+    Schedule tasks to run in an executor with limited concurrency.
+    :param executor: The executor to run tasks in.
+    :param func: The function to execute for each item.
+    :param iterable: The iterable of items to process.
+    :param max_concurrency: The maximum number of concurrent tasks.
+    :param loop: The asyncio event loop.
+    :param description: Description for the progress bar.
+    :param total: Total number of items for the progress bar.
+    :return: An async iterator yielding results as they complete.
+    """
+    if max_concurrency is None:
+        max_concurrency = CONFIG.process_limit * 2
+    if max_concurrency < 1:
+        raise ValueError('max_concurrency must be at least 1')
+
+    if loop is None:
+        loop = asyncio.get_running_loop()
+
+    it = iter(iterable)
+
+    pending: set[asyncio.Future] = set()
+    for arg in islice(it, max_concurrency):
+        fut = loop.run_in_executor(executor, func, arg)
+        pending.add(fut)
+
+    if not CONFIG.disable_progress_bar:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            transient=total is None,
+        )
+        task = progress.add_task(description=description or "Processing...", total=total)
+        progress.start()
+    else:
+        progress = None
+        task = None
+
+    while pending:
+        done, pending = await asyncio.wait(
+            pending,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for fut in done:
+            yield fut.result()
+            if progress is not None:
+                progress.advance(task)
+
+            try:
+                next_arg = next(it)
+            except StopIteration:
+                continue
+
+            new_fut = loop.run_in_executor(executor, func, next_arg)
+            pending.add(new_fut)
+
+    if progress is not None:
+        progress.stop()

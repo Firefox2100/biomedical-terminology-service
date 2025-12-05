@@ -1,6 +1,7 @@
 import networkx as nx
 
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
+from bioterms.etc.utils import iter_progress, verbose_print
 
 
 def filter_edges_by_relationship(graph: nx.DiGraph,
@@ -11,9 +12,15 @@ def filter_edges_by_relationship(graph: nx.DiGraph,
     """
     edges_to_remove = []
 
-    for u, v, data in graph.edges(data=True):
+    for u, v, data in iter_progress(
+        graph.edges(data=True),
+        description='Filtering edges by relationship types',
+        total=graph.number_of_edges(),
+    ):
         if data.get('label') not in relationship_types:
             edges_to_remove.append((u, v))
+
+    verbose_print(f'Removing {len(edges_to_remove)} edges not matching specified relationship types.')
 
     graph.remove_edges_from(edges_to_remove)
 
@@ -30,7 +37,11 @@ def count_annotation_for_graph(target_graph: nx.DiGraph,
     """
     order = list(nx.topological_sort(target_graph))
 
-    for node in order:
+    for node in iter_progress(
+        order,
+        description='Calculating annotation counts for target graph',
+        total=len(order),
+    ):
         annotation_name = f'{target_prefix}:{node}'
 
         direct_annotation_count = annotation_graph.degree[annotation_name] \

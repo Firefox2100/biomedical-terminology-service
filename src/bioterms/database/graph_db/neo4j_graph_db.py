@@ -370,7 +370,7 @@ class Neo4jGraphDatabase(GraphDatabase):
     async def save_similarity_scores(self,
                                      prefix_from: ConceptPrefix,
                                      prefix_to: ConceptPrefix,
-                                     similarity_df: pd.DataFrame,
+                                     similarity_scores: list[tuple[str, str, float]],
                                      similarity_method: str,
                                      corpus_prefix: ConceptPrefix | None = None,
                                      ):
@@ -378,27 +378,21 @@ class Neo4jGraphDatabase(GraphDatabase):
         Save similarity scores between two vocabularies into the graph database.
         :param prefix_from: The source vocabulary prefix. Correspond to 'concept_from' in similarity_df.
         :param prefix_to: The target vocabulary prefix. Correspond to 'concept_to' in similarity_df.
-        :param similarity_df: A DataFrame containing similarity scores. In the format of:
+        :param similarity_scores: A tuple containing similarity scores. In the format of:
             | concept_from | concept_to | similarity |
         :param similarity_method: The similarity method used to generate the scores. Stored as
             property name on the relationship.
         :param corpus_prefix: The corpus vocabulary prefix, if applicable.
         """
         async with self._client.session() as session:
-            # Similarity data can be millions of rows, so need to batch the inserts
-            batch_size = 10000
-
-            for start_idx in range(0, len(similarity_df), batch_size):
-                end_idx = start_idx + batch_size
-                batch_df = similarity_df.iloc[start_idx:end_idx]
-
+            for scores in self._batch_iterable(similarity_scores):
                 similarities = [
                     {
-                        'concept_from': row['concept_from'],
-                        'concept_to': row['concept_to'],
-                        'similarity': row['similarity'],
+                        'concept_from': score[0],
+                        'concept_to': score[1],
+                        'similarity': score[2],
                     }
-                    for _, row in batch_df.iterrows()
+                    for score in scores
                 ]
 
                 await self._execute_query_with_retry(
@@ -421,7 +415,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'similarities': similarities,
                         'prefix_from': prefix_from.value,
                         'prefix_to': prefix_to.value,
-                        'similarity_property': f'{similarity_method}:{corpus_prefix}'
+                        'similarity_property': f'{similarity_method}:{corpus_prefix.value}'
                             if corpus_prefix else similarity_method,
                     },
                 )
