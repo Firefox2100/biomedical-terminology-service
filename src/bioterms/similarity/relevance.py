@@ -1,4 +1,3 @@
-import asyncio
 import math
 import itertools
 from copy import deepcopy
@@ -186,7 +185,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
             executor=executor,
             func=_relevance_worker,
             iterable=node_pairs,
-            description='Calculate semantic similarity scores between terms in the target graph.',
+            description='Calculate relevance similarity scores between terms in the target graph.',
             total=len(nodes_with_ic)*(len(nodes_with_ic)-1)//2,
         ):
             concept_from, concept_to, similarity = result

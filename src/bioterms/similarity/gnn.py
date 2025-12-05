@@ -1,7 +1,7 @@
 import itertools
+from typing import Iterator, AsyncIterator
 import networkx as nx
 import numpy as np
-import pandas as pd
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -34,9 +34,7 @@ class ConceptGCN(nn.Module):
         if num_layers < 1:
             raise ValueError('num_layers must be at least 1')
 
-        layers = []
-
-        layers.append(GCNConv(input_dim, hidden_dim))
+        layers = [GCNConv(input_dim, hidden_dim)]
 
         for _ in range(num_layers - 2):
             layers.append(GCNConv(hidden_dim, hidden_dim))
@@ -213,7 +211,7 @@ def _train_gnn_model(data: Data,
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        num_layers=2,
+        num_layers=8,
         dropout=0.5,
     ).to(device)
 
@@ -253,7 +251,7 @@ def _train_gnn_model(data: Data,
 
 def _compute_similarity_matrix(embeddings: np.ndarray,
                                nodes: list[str],
-                               ) -> pd.DataFrame:
+                               ) -> Iterator[tuple[str, str, float]]:
     """
     Compute cosine similarity matrix between node embeddings.
     :param embeddings: np.ndarray: Node embeddings array of shape [N, D]
@@ -263,17 +261,11 @@ def _compute_similarity_matrix(embeddings: np.ndarray,
     sim_matrix = embeddings @ embeddings.T  # Shape [N, N]
 
     n = len(nodes)
-    records = []
+
     for i, j in itertools.combinations(range(n), 2):
         sim = float(sim_matrix[i, j])
-        records.append({
-            'concept_from': nodes[i],
-            'concept_to': nodes[j],
-            'similarity': sim,
-        })
 
-    df = pd.DataFrame.from_records(records)
-    return df
+        yield nodes[i], nodes[j], sim
 
 
 async def calculate_similarity(target_graph: nx.DiGraph,
@@ -281,7 +273,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
                                corpus_graph: nx.DiGraph = None,
                                corpus_prefix: ConceptPrefix = None,
                                annotation_graph: nx.DiGraph = None,
-                               ) -> pd.DataFrame:
+                               ) -> AsyncIterator[tuple[str, str, float]]:
     """
     Calculate semantic similarity scores between terms in the target graph using
     a GNN that refines text embeddings with graph structure.
@@ -290,7 +282,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     :param corpus_graph: The directed graph of the corpus vocabulary.
     :param corpus_prefix: The prefix of the corpus vocabulary.
     :param annotation_graph: The directed graph of the annotation between target and corpus.
-    :return: A pandas DataFrame with similarity scores.
+    :return: A generator yielding tuples of (concept_from, concept_to, similarity_score).
     """
     data, node_ids = await _build_pyg_from_nx(target_graph, target_prefix)
     device = torch.device(CONFIG.torch_device)
@@ -309,9 +301,8 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         x = data.x.to(device)
         edge_index = data.edge_index.to(device)
         z = model(x, edge_index)  # Shape [N, D]
-        z = F.normalize(z, p=2, dim=1)
+        z = F.normalize(z, p=2)
         embeddings = z.cpu().numpy()  # Shape [N, D]
 
-    similarity_df = _compute_similarity_matrix(embeddings, node_ids)
-
-    return similarity_df
+    for result in _compute_similarity_matrix(embeddings, node_ids):
+        yield result

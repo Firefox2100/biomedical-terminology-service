@@ -1,17 +1,17 @@
 import zlib
-from typing import AsyncIterator
 from pydantic import Field, ConfigDict
-from fastapi import APIRouter, Depends, Request, HTTPException, Query
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
+    get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.base import JsonModel
 from bioterms.model.concept import ConceptUnion
 from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license, \
     get_vocabulary_status
-from .utils import response_generator
+from .utils import response_generator, api_key_required
 
 
 data_router = APIRouter(
@@ -39,6 +39,7 @@ class IngestResponse(JsonModel):
 
 @data_router.get('/{prefix}', response_model=VocabularyStatus)
 async def get_vocabulary_status_info(prefix: ConceptPrefix,
+                                     cache: Cache = Depends(get_active_cache),
                                      doc_db: DocumentDatabase = Depends(get_active_doc_db),
                                      graph_db: GraphDatabase = Depends(get_active_graph_db),
                                      ):
@@ -46,12 +47,14 @@ async def get_vocabulary_status_info(prefix: ConceptPrefix,
     Get status about the specified vocabulary.
     \f
     :param prefix: The vocabulary prefix.
+    :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
     :return: The vocabulary status information.
     """
     vocab_status = await get_vocabulary_status(
         prefix=prefix,
+        cache=cache,
         doc_db=doc_db,
         graph_db=graph_db,
     )
@@ -90,68 +93,39 @@ async def get_concept(prefix: ConceptPrefix,
     \f
     :param prefix: The vocabulary prefix.
     :param concept_id: The ID of the concept to retrieve.
+    :param doc_db: The document database instance.
     :return: The Concept instance.
     """
 
 
-@data_router.get('/{prefix}/data', response_model=list[ConceptUnion])
-async def get_vocabulary_data(prefix: ConceptPrefix,
-                              limit: int = Query(
-                                  100,
-                                  ge=0,
-                                  le=10000,
-                                  description='The maximum number of documents to retrieve. '
-                                              'If 0, retrieve all documents.'
-                              ),
-                              doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                              ):
-    """
-    Get documents/records for the specified vocabulary from the document database.
-    \f
-    :param prefix: The vocabulary prefix.
-    :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
-    :param doc_db: The document database instance.
-    :return: A list of Concept instances.
-    """
-    concepts_iter = doc_db.get_terms_iter(prefix, limit=limit)
-
-    async def gen() -> AsyncIterator[bytes]:
-        yield b'['
-        first = True
-
-        async for concept in concepts_iter:
-            if not first:
-                yield b',\n'
-            else:
-                first = False
-
-            yield concept.model_dump_json().encode()
-
-        yield b']'
-
-    return StreamingResponse(gen(), media_type='application/json')
-
-
-@data_router.delete('/{prefix}/data')
+@data_router.delete('/{prefix}')
 async def delete_vocabulary_data(prefix: ConceptPrefix,
+                                 cache: Cache = Depends(get_active_cache),
                                  doc_db: DocumentDatabase = Depends(get_active_doc_db),
                                  graph_db: GraphDatabase = Depends(get_active_graph_db),
+                                 vector_db: VectorDatabase = Depends(get_active_vector_db),
+                                 _: str = Depends(api_key_required),
                                  ):
     """
     Delete all documents/records for the specified vocabulary from the document database.
     \f
     :param prefix: The vocabulary prefix.
+    :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
+    :param vector_db: The vector database instance.
+    :param _: API key authentication dependency.
     """
     await delete_vocabulary(
         prefix=prefix,
+        cache=cache,
         doc_db=doc_db,
         graph_db=graph_db,
+        vector_db=vector_db,
     )
 
 
-@data_router.get('/{prefix}/data/documents')
+@data_router.get('/{prefix}/documents')
 async def get_documents(prefix: ConceptPrefix,
                         doc_db: DocumentDatabase = Depends(get_active_doc_db),
                         ):
@@ -175,10 +149,11 @@ async def get_documents(prefix: ConceptPrefix,
     )
 
 
-@data_router.post('/{prefix}/data/documents', response_model=IngestResponse)
+@data_router.post('/{prefix}/documents', response_model=IngestResponse)
 async def ingest_documents(prefix: ConceptPrefix,
                            request: Request,
                            doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                           _: str = Depends(api_key_required),
                            ):
     """
     Ingest documents into the specified vocabulary database.
@@ -190,6 +165,8 @@ async def ingest_documents(prefix: ConceptPrefix,
     :param prefix: The vocabulary prefix.
     :param request: The FastAPI request object.
     :param doc_db: The document database instance.
+    :param _: API key authentication dependency.
+    :return: An IngestResponse containing the total number of concepts after ingestion.
     """
     is_gz = request.headers.get('Content-Encoding', '') == 'gzip'
     decomp = zlib.decompressobj(16 + zlib.MAX_WBITS) if is_gz else None

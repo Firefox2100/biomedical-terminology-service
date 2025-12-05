@@ -164,3 +164,20 @@ class QdrantVectorDatabase(VectorDatabase):
                 break
 
             offset = new_offset
+
+    async def delete_vectors_for_prefix(self,
+                                        prefix: ConceptPrefix,
+                                        ) -> None:
+        """
+        Delete all vectors for a given prefix from the vector database.
+        :param prefix: The vocabulary prefix to delete vectors for.
+        """
+        collection_name = prefix.value
+
+        # Check if the collection exists
+        collection_list = await self.client.get_collections()
+        existing = [c.name for c in collection_list.collections]
+        if collection_name not in existing:
+            return
+
+        await self.delete_collection(collection_name=collection_name)

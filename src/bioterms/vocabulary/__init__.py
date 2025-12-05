@@ -9,8 +9,8 @@ import aiofiles.os
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
-from bioterms.database import DocumentDatabase, GraphDatabase, VectorDatabase, get_active_doc_db, \
-    get_active_graph_db, get_active_vector_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
+    get_active_doc_db, get_active_graph_db, get_active_vector_db
 from .utils import ALL_VOCABULARIES, get_vocabulary_module, get_vocabulary_status
 
 
@@ -133,27 +133,35 @@ async def create_indexes(prefix: ConceptPrefix,
 
 
 async def delete_vocabulary(prefix: ConceptPrefix,
+                            cache: Cache = None,
                             doc_db: DocumentDatabase = None,
                             graph_db: GraphDatabase = None,
+                            vector_db: VectorDatabase = None,
                             ):
     """
     Delete the vocabulary data for the given prefix from the databases.
     :param prefix: The prefix of the vocabulary.
+    :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
+    :param vector_db: The vector database instance.
     """
     vocabulary_module = get_vocabulary_module(prefix)
 
     delete_func = getattr(vocabulary_module, 'delete_vocabulary_data', None)
     if delete_func is None or not callable(delete_func):
         # Fallback to default deletion method
+        if cache is None:
+            cache = get_active_cache()
         if doc_db is None:
             doc_db = await get_active_doc_db()
         if graph_db is None:
             graph_db = get_active_graph_db()
 
+        await cache.purge()
         await doc_db.delete_all_for_label(vocabulary_module.VOCABULARY_PREFIX)
         await graph_db.delete_vocabulary_graph(prefix=vocabulary_module.VOCABULARY_PREFIX)
+        await vector_db.delete_vectors_for_prefix(prefix=vocabulary_module.VOCABULARY_PREFIX)
     else:
         result = delete_func(
             doc_db=doc_db,
@@ -165,6 +173,7 @@ async def delete_vocabulary(prefix: ConceptPrefix,
 
 async def load_vocabulary(prefix: ConceptPrefix,
                           drop_existing: bool = True,
+                          cache: Cache = None,
                           doc_db: DocumentDatabase = None,
                           graph_db: GraphDatabase = None,
                           ):
@@ -172,6 +181,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
     Load the vocabulary specified by the prefix.
     :param prefix: The prefix of the vocabulary to load.
     :param drop_existing: Whether to drop existing data before loading.
+    :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
     """
@@ -206,8 +216,11 @@ async def load_vocabulary(prefix: ConceptPrefix,
     if inspect.iscoroutine(result):
         await result
 
+    await cache.purge()
+
 
 async def embed_vocabulary(prefix: ConceptPrefix,
+                           drop_existing: bool = True,
                            doc_db: DocumentDatabase = None,
                            graph_db: GraphDatabase = None,
                            vector_db: VectorDatabase = None,
@@ -215,6 +228,7 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     """
     Embed the vocabulary specified by the prefix.
     :param prefix: The prefix of the vocabulary to embed.
+    :param drop_existing: Whether to drop existing embeddings before embedding.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
     :param vector_db: The vector database instance.
@@ -232,6 +246,9 @@ async def embed_vocabulary(prefix: ConceptPrefix,
 
     if not status.loaded:
         raise RuntimeError(f'Vocabulary {prefix} is not loaded. Cannot embed.')
+
+    if drop_existing:
+        await vector_db.delete_vectors_for_prefix(prefix=prefix)
 
     concept_iter = doc_db.get_terms_iter(prefix)
 

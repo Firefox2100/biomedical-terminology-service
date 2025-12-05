@@ -98,6 +98,15 @@ class VectorDatabase(ABC):
 
         return results
 
+    @abstractmethod
+    async def delete_vectors_for_prefix(self,
+                                        prefix: ConceptPrefix,
+                                        ) -> None:
+        """
+        Delete all vectors for a given prefix from the vector database.
+        :param prefix: The vocabulary prefix to delete vectors for.
+        """
+
 
 _active_vector_db: VectorDatabase | None = None
 

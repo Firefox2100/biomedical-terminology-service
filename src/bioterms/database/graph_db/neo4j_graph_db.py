@@ -378,7 +378,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         Save similarity scores between two vocabularies into the graph database.
         :param prefix_from: The source vocabulary prefix. Correspond to 'concept_from' in similarity_df.
         :param prefix_to: The target vocabulary prefix. Correspond to 'concept_to' in similarity_df.
-        :param similarity_scores: A tuple containing similarity scores. In the format of:
+        :param similarity_scores: A list of tuple containing similarity scores. In the format of:
             | concept_from | concept_to | similarity |
         :param similarity_method: The similarity method used to generate the scores. Stored as
             property name on the relationship.
@@ -400,14 +400,15 @@ class Neo4jGraphDatabase(GraphDatabase):
                     UNWIND $similarities AS sim
                     MATCH (source:Concept {id: sim.concept_from, prefix: $prefix_from})
                     MATCH (target:Concept {id: sim.concept_to, prefix: $prefix_to})
-                    WITH source, target, sim.similarity AS sim_score
+                    WITH source, target, sim.similarity AS sim_score, $similarity_property AS similarity_property
                     CALL apoc.merge.relationship(
                         source,
                         'similar_to',
                         {},
-                        { $similarity_property: sim_score },
+                        {},
                         target
                     ) YIELD rel
+                    SET rel[similarity_property] = sim_score
                     RETURN count(rel) AS created
                     """,
                     session=session,
@@ -415,8 +416,10 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'similarities': similarities,
                         'prefix_from': prefix_from.value,
                         'prefix_to': prefix_to.value,
-                        'similarity_property': f'{similarity_method}:{corpus_prefix.value}'
-                            if corpus_prefix else similarity_method,
+                        'similarity_property': (
+                            f'{similarity_method}:{corpus_prefix.value}'
+                            if corpus_prefix else similarity_method
+                        ),
                     },
                 )
 

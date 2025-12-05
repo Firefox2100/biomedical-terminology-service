@@ -112,6 +112,24 @@ class MongoUserRepository(UserRepository):
             {'$pull': {'apiKeys': {'keyId': str(key_id)}}}
         )
 
+    async def get_user_by_api_key(self,
+                                  key_hash: str,
+                                  ) -> User | None:
+        """
+        Retrieve a user by their API key hash.
+        :param key_hash: The HMAC-SHA-256 hashed value of the API key.
+        :return: User object or None if not found.
+        """
+        document = await self._collection.find_one(
+            {'apiKeys.keyHash': key_hash},
+            {'_id': 0}
+        )
+
+        if document:
+            return User.model_validate(document)
+
+        return None
+
 
 class MongoDocumentDatabase(DocumentDatabase):
     """

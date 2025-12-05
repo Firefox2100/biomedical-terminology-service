@@ -139,3 +139,13 @@ class UserRepository(ABC):
         :param username: The username of the user to disassociate the API key from.
         :param key_id: The UUID of the API key to be deleted.
         """
+
+    @abstractmethod
+    async def get_user_by_api_key(self,
+                                  key_hash: str,
+                                  ) -> User | None:
+        """
+        Retrieve a user by their API key hash.
+        :param key_hash: The HMAC-SHA-256 hashed value of the API key.
+        :return: User object or None if not found.
+        """

@@ -4,7 +4,8 @@ from rich.table import Table
 import typer
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, get_vocabulary_status
+from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, embed_vocabulary, \
+    get_vocabulary_status
 from .utils import CONSOLE, run_async
 
 
@@ -46,6 +47,25 @@ async def load_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help=
         CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value} into the database.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value} into the database: {e}[/red]')
+        traceback.print_exc()
+
+
+@app.command(name='embed', help='Embed a vocabulary into vector database.')
+@run_async
+async def embed_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help='The vocabulary to embed.')],
+                        overwrite: Annotated[
+                            bool,
+                            typer.Option(
+                                '--overwrite',
+                                '-o',
+                                help='Overwrite existing embeddings in the vector database.')
+                        ] = False
+                        ):
+    try:
+        await embed_vocabulary(vocabulary, drop_existing=overwrite)
+        CONSOLE.print(f'[green]Successfully embedded vocabulary {vocabulary.value} into the vector database.[/green]')
+    except Exception as e:
+        CONSOLE.print(f'[red]Failed to embed vocabulary {vocabulary.value} into the vector database: {e}[/red]')
         traceback.print_exc()
 
 

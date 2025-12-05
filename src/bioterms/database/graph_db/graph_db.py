@@ -137,7 +137,7 @@ class GraphDatabase(ABC):
         Save similarity scores between two vocabularies into the graph database.
         :param prefix_from: The source vocabulary prefix. Correspond to 'concept_from' in similarity_df.
         :param prefix_to: The target vocabulary prefix. Correspond to 'concept_to' in similarity_df.
-        :param similarity_scores: A tuple containing similarity scores. In the format of:
+        :param similarity_scores: A list of tuple containing similarity scores. In the format of:
             | concept_from | concept_to | similarity |
         :param similarity_method: The similarity method used to generate the scores. Stored as
             property name on the relationship.

@@ -1,12 +1,12 @@
-import asyncio
 import math
 import itertools
 from concurrent.futures import ProcessPoolExecutor
+from typing import AsyncIterator
 import networkx as nx
-import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.utils import verbose_print, schedule_tasks
 from .utils import count_annotation_for_graph
 
 
@@ -124,7 +124,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
                                corpus_graph: nx.DiGraph = None,
                                corpus_prefix: ConceptPrefix = None,
                                annotation_graph: nx.DiGraph = None,
-                               ) -> pd.DataFrame:
+                               ) -> AsyncIterator[tuple[str, str, float]]:
     """
     Calculate semantic similarity scores between terms in the target graph with co-annotation vectors.
 
@@ -135,7 +135,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     :param corpus_graph: The directed graph of the corpus vocabulary.
     :param corpus_prefix: The prefix of the corpus vocabulary.
     :param annotation_graph: The directed graph of the annotation between target and corpus.
-    :return: A pandas DataFrame with similarity scores.
+    :return: A generator yielding tuples of (concept_from, concept_to, similarity_score).
     """
     # Count the annotations for each node in the target graph
     count_annotation_for_graph(
@@ -150,42 +150,34 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         node for node in pruned_target_graph.nodes
         if pruned_target_graph.nodes[node].get('annotation_count', 0) == 0
     ]
+
+    verbose_print(f'Pruning {len(nodes_to_remove)} nodes with zero annotations from target graph.')
     pruned_target_graph.remove_nodes_from(nodes_to_remove)
 
     total_annotation_count = sum(
         1 for node in annotation_graph.nodes
         if node.startswith(f'{corpus_prefix.value}:')
     )
+    verbose_print(f'Total annotation count in annotation graph: {total_annotation_count}')
 
     nodes = list(pruned_target_graph.nodes)
     node_pairs = itertools.combinations(nodes, 2)
-
-    # asyncio compatible multiprocessing
-    loop = asyncio.get_running_loop()
+    verbose_print(f'Calculating similarity for {len(nodes)} nodes, '
+                  f'total {len(nodes)*(len(nodes)-1)//2} pairs.')
 
     with ProcessPoolExecutor(
         max_workers=CONFIG.process_limit,
         initializer=_worker_init,
         initargs=(pruned_target_graph, corpus_prefix, annotation_graph, total_annotation_count),
     ) as executor:
-        tasks = [
-            loop.run_in_executor(
-                executor,
-                _co_annotation_worker,
-                node_pair,
-            ) for node_pair in node_pairs
-        ]
+        async for result in schedule_tasks(
+            executor=executor,
+            func=_co_annotation_worker,
+            iterable=node_pairs,
+            description='Calculate co-annotation similarity scores between terms in the target graph.',
+            total=len(nodes)*(len(nodes)-1)//2,
+        ):
+            concept_from, concept_to, similarity = result
 
-        results = await asyncio.gather(*tasks)
-
-        # Compile results into a DataFrame
-        sim_data = [
-            {
-                'concept_from': n1,
-                'concept_to': n2,
-                'similarity': similarity,
-            } for n1, n2, similarity in results if similarity is not None
-        ]
-
-        similarity_df = pd.DataFrame(sim_data)
-        return similarity_df
+            if similarity is not None:
+                yield concept_from, concept_to, similarity

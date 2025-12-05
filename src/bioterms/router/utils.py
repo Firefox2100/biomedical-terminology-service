@@ -1,12 +1,17 @@
 import re
 import posixpath
+import hashlib
+import hmac
+import base64
 import importlib.resources as pkg_resources
 from typing import AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import Request, Depends, HTTPException, status
 from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from bioterms.etc.consts import CONFIG
 from bioterms.database import DocumentDatabase, get_active_doc_db
 
 
@@ -22,6 +27,7 @@ _allowed_redirect_regex = [
         r'^/vocabularies/[a-zA-Z0-9_\-]+$'
     )
 ]
+BEARER_SECURITY = HTTPBearer()
 
 
 async def response_generator(data_iter: AsyncIterator[BaseModel],
@@ -234,3 +240,32 @@ async def login_required(request: Request,
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail='Authentication required',
     )
+
+
+async def api_key_required(credentials: HTTPAuthorizationCredentials = Depends(BEARER_SECURITY),
+                           db: DocumentDatabase = Depends(get_active_doc_db),
+                           ) -> str:
+    """
+    A dependency to ensure that a valid API key is provided.
+    :param credentials: HTTPAuthorizationCredentials instance.
+    :param db: The DocumentDatabase instance.
+    :return: The username who owns the API key.
+    """
+    api_key = credentials.credentials
+
+    server_key_bytes = base64.b64decode(CONFIG.server_hmac_key)
+    api_key_hash = hmac.new(
+        server_key_bytes,
+        api_key.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+    user = await db.users.get_user_by_api_key(api_key_hash)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Invalid API key',
+        )
+
+    return user.username
