@@ -82,6 +82,23 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    async def count_similarity_relationships(self,
+                                             prefix_from: ConceptPrefix,
+                                             prefix_to: ConceptPrefix,
+                                             configurations: list[tuple[SimilarityMethod, ConceptPrefix | None]],
+                                             ) -> list[tuple[SimilarityMethod, ConceptPrefix | None, int]]:
+        """
+        Count the number of similarity relationships between two vocabularies in the graph database,
+        for each similarity method and corpus configuration.
+        :param prefix_from: The source vocabulary prefix.
+        :param prefix_to: The target vocabulary prefix.
+        :param configurations: A list of tuples containing similarity methods and corpus prefixes
+            (or None for intrinsic similarity).
+        :return: A list of tuples containing the similarity method, corpus prefix,
+            and the number of similarity relationships.
+        """
+
+    @abstractmethod
     async def save_annotations(self,
                                annotations: list[Annotation],
                                ):
@@ -130,7 +147,7 @@ class GraphDatabase(ABC):
                                      prefix_from: ConceptPrefix,
                                      prefix_to: ConceptPrefix,
                                      similarity_scores: list[tuple[str, str, float]],
-                                     similarity_method: str,
+                                     similarity_method: SimilarityMethod,
                                      corpus_prefix: ConceptPrefix | None = None,
                                      ):
         """

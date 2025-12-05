@@ -1,9 +1,11 @@
 import importlib
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
-from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
+    get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
+from bioterms.model.similarity_status import SimilarityCount, SimilarityStatus
 
 
 ALL_SIMILARITY_METHODS = {
@@ -39,6 +41,34 @@ def get_similarity_method_config(method: SimilarityMethod) -> dict:
         'name': similarity_module.METHOD_NAME,
         'defaultThreshold': similarity_module.DEFAULT_SIMILARITY_THRESHOLD,
     }
+
+
+def get_all_similarity_combinations(prefix: ConceptPrefix,
+                                    annotations: list[ConceptPrefix],
+                                    similarity_methods: list[SimilarityMethod],
+                                    ) -> list[tuple[SimilarityMethod, ConceptPrefix | None]]:
+    """
+    Get all similarity combinations for the given prefix, annotations, and similarity methods.
+    :param prefix: The prefix of the target vocabulary.
+    :param annotations: The prefixes of the vocabularies that are used to annotate the target vocabulary.
+    :param similarity_methods: The similarity methods supported by the target vocabulary.
+    :return: A list of tuples containing the similarity method and the corpus prefix
+        (or None for intrinsic similarity).
+    """
+    combinations = []
+
+    if SimilarityMethod.RELEVANCE in similarity_methods:
+        combinations.extend([
+            (SimilarityMethod.RELEVANCE, annotation_prefix)
+            for annotation_prefix in annotations
+        ])
+    if SimilarityMethod.CO_ANNOTATION in similarity_methods:
+        combinations.extend([
+            (SimilarityMethod.CO_ANNOTATION, annotation_prefix)
+            for annotation_prefix in annotations
+        ])
+
+    return combinations
 
 
 async def calculate_similarity(method: SimilarityMethod,
@@ -114,7 +144,7 @@ async def calculate_similarity(method: SimilarityMethod,
                 prefix_from=target_prefix,
                 prefix_to=target_prefix,
                 similarity_scores=results,
-                similarity_method=method.value,
+                similarity_method=method,
                 corpus_prefix=corpus_prefix,
             )
             results = []
@@ -125,6 +155,59 @@ async def calculate_similarity(method: SimilarityMethod,
             prefix_from=target_prefix,
             prefix_to=target_prefix,
             similarity_scores=results,
-            similarity_method=method.value,
+            similarity_method=method,
             corpus_prefix=corpus_prefix,
         )
+
+
+async def get_similarity_status(prefix: ConceptPrefix,
+                                cache: Cache = None,
+                                doc_db: DocumentDatabase = None,
+                                graph_db: GraphDatabase = None,
+                                ) -> SimilarityStatus:
+    """
+    Get the similarity status for the vocabulary specified by the prefix.
+    :param prefix: The prefix of the vocabulary.
+    :param graph_db: The graph database instance.
+    :return: The SimilarityStatus object containing similarity counts.
+    """
+    if cache is None:
+        cache = get_active_cache()
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    vocab_status = await get_vocabulary_status(
+        prefix=prefix,
+        cache=cache,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+
+    annotations = vocab_status.annotations
+    supported_methods = vocab_status.similarity_methods
+
+    similarity_combinations = get_all_similarity_combinations(
+        prefix=prefix,
+        annotations=annotations,
+        similarity_methods=supported_methods,
+    )
+
+    similarity_counts = await graph_db.count_similarity_relationships(
+        prefix_from=prefix,
+        prefix_to=prefix,
+        configurations=similarity_combinations,
+    )
+
+    return SimilarityStatus(
+        prefix=prefix,
+        similarityCounts=[
+            SimilarityCount(
+                method=count[0],
+                corpus=count[1],
+                count=count[2],
+            )
+            for count in similarity_counts
+        ],
+    )

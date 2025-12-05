@@ -254,6 +254,56 @@ class Neo4jGraphDatabase(GraphDatabase):
             record = await result.single()
             return record['relationship_count'] if record is not None else 0
 
+    async def count_similarity_relationships(self,
+                                             prefix_from: ConceptPrefix,
+                                             prefix_to: ConceptPrefix,
+                                             configurations: list[tuple[SimilarityMethod, ConceptPrefix | None]],
+                                             ) -> list[tuple[SimilarityMethod, ConceptPrefix | None, int]]:
+        """
+        Count the number of similarity relationships between two vocabularies in the graph database,
+        for each similarity method and corpus configuration.
+        :param prefix_from: The source vocabulary prefix.
+        :param prefix_to: The target vocabulary prefix.
+        :param configurations: A list of tuples containing similarity methods and corpus prefixes
+            (or None for intrinsic similarity).
+        :return: A list of tuples containing the similarity method, corpus prefix,
+            and the number of similarity relationships.
+        """
+        configuration_mapping = {}
+        for method, corpus_prefix in configurations:
+            attribute_name = f'{method.value}:{corpus_prefix.value}' if corpus_prefix else method.value
+            configuration_mapping[attribute_name] = (method, corpus_prefix)
+
+        counts = []
+
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                UNWIND $attributes AS attr
+                WITH DISTINCT attr
+                OPTIONAL MATCH (source:Concept {prefix: $prefix_from})
+                    -[r:similar_to]->
+                    (target:Concept {prefix: $prefix_to})
+                WHERE attr IN keys(r)
+                RETURN attr AS attribute, count(r) AS relationship_count
+                ORDER BY attribute;
+                """,
+                session=session,
+                parameters={
+                    'prefix_from': prefix_from.value,
+                    'prefix_to': prefix_to.value,
+                    'attributes': list(configuration_mapping.keys()),
+                }
+            )
+
+            async for record in result:
+                attribute = record['attribute']
+                relationship_count = record['relationship_count']
+                method, corpus_prefix = configuration_mapping[attribute]
+                counts.append((method, corpus_prefix, relationship_count))
+
+        return counts
+
     async def save_annotations(self,
                                annotations: list[Annotation],
                                ):
@@ -371,7 +421,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                                      prefix_from: ConceptPrefix,
                                      prefix_to: ConceptPrefix,
                                      similarity_scores: list[tuple[str, str, float]],
-                                     similarity_method: str,
+                                     similarity_method: SimilarityMethod,
                                      corpus_prefix: ConceptPrefix | None = None,
                                      ):
         """
@@ -417,7 +467,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'prefix_from': prefix_from.value,
                         'prefix_to': prefix_to.value,
                         'similarity_property': (
-                            f'{similarity_method}:{corpus_prefix.value}'
+                            f'{similarity_method.value}:{corpus_prefix.value}'
                             if corpus_prefix else similarity_method
                         ),
                     },

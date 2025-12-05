@@ -13,6 +13,7 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
 from bioterms.annotation import get_annotation_status
+from bioterms.similarity import get_similarity_status
 from bioterms.model.user import UserApiKey
 from bioterms.model.annotation_status import AnnotationStatus
 from .utils import TEMPLATES, build_nav_links, sanitise_next_url, login_required, build_structured_data
@@ -395,6 +396,10 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             doc_db=doc_db,
             graph_db=graph_db,
         )
+        sim_status = await get_similarity_status(
+            prefix,
+            graph_db=graph_db,
+        )
         nav_links = await build_nav_links(request, doc_db)
         base_url = str(request.base_url).rstrip('/')
         structured_data = build_structured_data(base_url)
@@ -499,6 +504,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
                 'request': request,
                 'page_title': f'{vocab_status.name} | BioMedical Terminology Service',
                 'vocabulary': vocab_status,
+                'similarity': sim_status,
                 'annotations': annotation_statuses,
                 'nav_links': nav_links,
                 'license_html': license_html,
