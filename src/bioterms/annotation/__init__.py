@@ -1,11 +1,9 @@
 import importlib
 import importlib.resources
 import inspect
-import os
 import aiofiles
 import aiofiles.os
 
-from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import GraphDatabase, get_active_graph_db

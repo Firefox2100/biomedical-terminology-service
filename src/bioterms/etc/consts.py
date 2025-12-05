@@ -161,6 +161,10 @@ class Settings(BaseSettings):
         None,
         description='API key for accessing the NHS TRUD services',
     )
+    nih_umls_api_key: Optional[str] = Field(
+        None,
+        description='API key for accessing the NIH UMLS services',
+    )
 
     transformer_model_name: str = Field(
         'BAAI/bge-base-en-v1.5',

@@ -14,8 +14,14 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'Orphanet Rare Disease Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.ORDO
-ANNOTATIONS = [ConceptPrefix.HPO]
-SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
+ANNOTATIONS = [
+    ConceptPrefix.HPO,
+    ConceptPrefix.OMIM,
+]
+SIMILARITY_METHODS = [
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.CO_ANNOTATION,
+]
 FILE_PATHS = ['ordo/ordo_orphanet.owl']
 TIMESTAMP_FILE = 'ordo/.timestamp'
 CONCEPT_CLASS = Concept

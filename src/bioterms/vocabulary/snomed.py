@@ -14,8 +14,14 @@ from bioterms.model.concept import SnomedConcept
 
 VOCABULARY_NAME = 'SNOMED Clinical Terms'
 VOCABULARY_PREFIX = ConceptPrefix.SNOMED
-ANNOTATIONS = [ConceptPrefix.CTV3]
-SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
+ANNOTATIONS = [
+    ConceptPrefix.CTV3,
+    ConceptPrefix.ORDO,
+]
+SIMILARITY_METHODS = [
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.CO_ANNOTATION,
+]
 FILE_PATHS: list[str] = [
     'snomed/international/concept.txt',
     'snomed/international/description.txt',

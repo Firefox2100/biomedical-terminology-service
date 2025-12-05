@@ -14,8 +14,14 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'Human Phenotype Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.HPO
-ANNOTATIONS = [ConceptPrefix.ORDO, ConceptPrefix.HGNC_SYMBOL]
-SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
+ANNOTATIONS = [
+    ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.ORDO,
+]
+SIMILARITY_METHODS = [
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.CO_ANNOTATION,
+]
 FILE_PATHS = ['hpo/hp.owl']
 TIMESTAMP_FILE = 'hpo/.timestamp'
 CONCEPT_CLASS = Concept

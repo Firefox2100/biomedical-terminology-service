@@ -3,7 +3,7 @@ import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
@@ -13,8 +13,15 @@ from .hgnc import download_vocabulary
 
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee Symbol'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC_SYMBOL
-ANNOTATIONS = [ConceptPrefix.HPO, ConceptPrefix.NCIT]
-SIMILARITY_METHODS = []
+ANNOTATIONS = [
+    ConceptPrefix.HPO,
+    ConceptPrefix.NCIT,
+    ConceptPrefix.OMIM,
+    ConceptPrefix.ORDO,
+]
+SIMILARITY_METHODS = [
+    SimilarityMethod.CO_ANNOTATION
+]
 FILE_PATHS = [
     'hgnc/symbol.txt',
     'hgnc/withdrawn.txt',

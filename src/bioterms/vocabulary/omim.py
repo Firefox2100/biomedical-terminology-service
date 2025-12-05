@@ -16,8 +16,14 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'Online Mendelian Inheritance in Man'
 VOCABULARY_PREFIX = ConceptPrefix.OMIM
-ANNOTATIONS = []
-SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
+ANNOTATIONS = [
+    ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.ORDO,
+]
+SIMILARITY_METHODS = [
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.CO_ANNOTATION,
+]
 FILE_PATHS = ['omim/omim.csv']
 TIMESTAMP_FILE = 'omim/.timestamp'
 CONCEPT_CLASS = Concept

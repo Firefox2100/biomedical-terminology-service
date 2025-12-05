@@ -5,11 +5,12 @@ import zipfile
 import uuid
 import tempfile
 import fnmatch
-import gzip
+import zlib
+import tarfile
 from pathlib import Path
 from itertools import islice
 from concurrent.futures import Executor
-from typing import Iterable, Iterator, AsyncIterable, AsyncIterator, Callable, Any, TypeVar
+from typing import Iterable, Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar
 import aiofiles
 import aiofiles.os
 import httpx
@@ -139,20 +140,76 @@ async def extract_file_from_zip(zip_path: str,
 
 async def extract_file_from_gzip(gzip_path: str,
                                  output_path: str,
+                                 chunk_size: int = 1024 * 1024,
                                  ):
     """
     Extract a gzip compressed file.
     :param gzip_path: The path to the gzip file.
     :param output_path: The path to save the decompressed output file.
+    :param chunk_size: The chunk size to use when reading the gzip file.
     """
-    # Read the gz file asynchronously, decompress in memory, then write output asynchronously
-    async with aiofiles.open(gzip_path, 'rb') as f_in:
-        gz_data = await f_in.read()
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
 
-    decompressed = gzip.decompress(gz_data)
+    async with aiofiles.open(gzip_path, "rb") as f_in, \
+        aiofiles.open(output_path, "wb") as f_out:
 
-    async with aiofiles.open(output_path, 'wb') as f_out:
-        await f_out.write(decompressed)
+        while True:
+            chunk = await f_in.read(chunk_size)
+            if not chunk:
+                break
+
+            data = decompressor.decompress(chunk)
+            if data:
+                await f_out.write(data)
+
+        tail = decompressor.flush()
+        if tail:
+            await f_out.write(tail)
+
+
+def _extract_tarball_sync(tarball_path: str,
+                          output_dir: str,
+                          members: Optional[Iterable[str]] = None,
+                          mode: str = "r:gz",
+                          ) -> None:
+    """
+    Synchronous implementation that extracts a .tar.gz archive.
+    :param tarball_path: Path to the .tar.gz file.
+    :param output_dir: Directory where files will be extracted.
+    :param members: Optional iterable of member names to extract. If None, extracts everything.
+    """
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(tarball_path, mode=mode) as tar:
+        if members is None:
+            tar.extractall(path=out_path)
+        else:
+            # members may be file names (str); convert to TarInfo objects
+            # if you want to filter by name:
+            selected = [m for m in tar.getmembers() if m.name in members]
+            tar.extractall(path=out_path, members=selected)
+
+
+async def extract_file_from_tarball(tarball_path: str,
+                                    output_dir: str,
+                                    members: Optional[Iterable[str]] = None,
+                                    mode: str = "r:gz",
+                                    ) -> None:
+    """
+    Asynchronous wrapper for extracting a .tar.gz archive in a separate thread.
+    :param tarball_path: Path to the .tar.gz file.
+    :param output_dir: Directory where files will be extracted.
+    :param members: Optional iterable of member names to extract.
+    :param mode: The mode to open the tar file.
+    """
+    await asyncio.to_thread(
+        _extract_tarball_sync,
+        tarball_path,
+        output_dir,
+        members,
+        mode,
+    )
 
 
 async def download_rf2(release_url: str,

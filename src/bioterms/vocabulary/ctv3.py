@@ -17,7 +17,10 @@ from bioterms.model.concept import Concept
 VOCABULARY_NAME = 'Clinical Terms Version 3 (Read Codes)'
 VOCABULARY_PREFIX = ConceptPrefix.CTV3
 ANNOTATIONS = [ConceptPrefix.SNOMED]
-SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
+SIMILARITY_METHODS = [
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.CO_ANNOTATION
+]
 FILE_PATHS = [
     'ctv3/concept.v3',
     'ctv3/description.v3',

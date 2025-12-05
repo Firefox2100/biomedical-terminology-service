@@ -16,8 +16,13 @@ from bioterms.model.concept import Concept
 
 VOCABULARY_NAME = 'National Cancer Institute Thesaurus'
 VOCABULARY_PREFIX = ConceptPrefix.NCIT
-ANNOTATIONS = [ConceptPrefix.HGNC_SYMBOL]
-SIMILARITY_METHODS = [SimilarityMethod.RELEVANCE]
+ANNOTATIONS = [
+    ConceptPrefix.HGNC_SYMBOL
+]
+SIMILARITY_METHODS = [
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.CO_ANNOTATION,
+]
 FILE_PATHS = ['ncit/thesaurus.txt']
 TIMESTAMP_FILE = 'ncit/.timestamp'
 CONCEPT_CLASS = Concept
