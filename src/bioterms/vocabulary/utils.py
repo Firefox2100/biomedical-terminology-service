@@ -45,6 +45,7 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
                                 cache: Cache = None,
                                 doc_db: DocumentDatabase = None,
                                 graph_db: GraphDatabase = None,
+                                use_cache: bool = True,
                                 ) -> VocabularyStatus:
     """
     Get the status of the vocabulary specified by the prefix.
@@ -52,6 +53,7 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
     :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
+    :param use_cache: Whether to use the cache. Defaults to True.
     :return: The vocabulary status.
     """
     vocabulary_module = get_vocabulary_module(prefix)
@@ -59,9 +61,10 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
     if cache is None:
         cache = get_active_cache()
 
-    cached_status = await cache.get_vocabulary_status(prefix)
-    if cached_status is not None:
-        return cached_status
+    if use_cache:
+        cached_status = await cache.get_vocabulary_status(prefix)
+        if cached_status is not None:
+            return cached_status
 
     if doc_db is None:
         doc_db = await get_active_doc_db()

@@ -1,7 +1,10 @@
 import redis.asyncio as redis
+from pydantic import ValidationError
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.vocabulary_status import VocabularyStatus
+from bioterms.model.annotation_status import AnnotationStatus
+from bioterms.model.similarity_status import SimilarityStatus
 from .cache import Cache
 
 
@@ -73,7 +76,75 @@ class RedisCache(Cache):
         value = await self.db.get(key)
 
         if value is not None:
-            return VocabularyStatus.model_validate_json(value)
+            try:
+                return VocabularyStatus.model_validate_json(value)
+            except ValidationError:
+                await self.db.delete(key)
+
+        return None
+
+    async def save_annotation_status(self,
+                                     status: AnnotationStatus,
+                                     ):
+        """
+        Store the annotation status in the cache.
+        :param status: The annotation status to store.
+        """
+        key = f'anno_status:{status.prefix_source.value}:{status.prefix_target.value}'
+
+        value = status.model_dump_json()
+
+        await self.db.set(key, value)
+
+    async def get_annotation_status(self,
+                                    prefix_1: ConceptPrefix,
+                                    prefix_2: ConceptPrefix,
+                                    ) -> AnnotationStatus | None:
+        """
+        Retrieve the annotation status from the cache.
+        :param prefix_1: The first prefix of the annotation to retrieve.
+        :param prefix_2: The second prefix of the annotation to retrieve.
+        :return: The annotation status if it exists, otherwise None
+        """
+        key = f'anno_status:{prefix_1.value}:{prefix_2.value}'
+        value = await self.db.get(key)
+
+        if value is not None:
+            try:
+                return AnnotationStatus.model_validate_json(value)
+            except ValidationError:
+                await self.db.delete(key)
+
+        return None
+
+    async def save_similarity_status(self,
+                                     status: SimilarityStatus,
+                                     ):
+        """
+        Store the similarity status in the cache.
+        :param status: The similarity status to store.
+        """
+        key = f'sim_status:{status.prefix.value}'
+        value = status.model_dump_json()
+
+        await self.db.set(key, value)
+
+    async def get_similarity_status(self,
+                                    prefix: ConceptPrefix,
+                                    ) -> SimilarityStatus | None:
+        """
+        Retrieve the similarity status from the cache.
+        :param prefix: The prefix of the vocabulary to retrieve.
+        :return: The similarity status if it exists, otherwise None
+        """
+        key = f'sim_status:{prefix.value}'
+        value = await self.db.get(key)
+
+        if value is not None:
+            try:
+                return SimilarityStatus.model_validate_json(value)
+            except ValidationError:
+                await self.db.delete(key)
 
         return None
 

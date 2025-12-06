@@ -5,7 +5,7 @@ import pandas as pd
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
-from bioterms.model.expanded_term import ExpandedTerm
+from bioterms.model.related_term import RelatedTerms
 from bioterms.model.similar_term import SimilarTerm
 from .graph_db import GraphDatabase
 
@@ -208,12 +208,32 @@ class MemoryGraphDatabase(GraphDatabase):
         In-memory graph does not require indexes.
         """
 
+    async def trace_ancestors_iter(self,
+                                   prefix: ConceptPrefix,
+                                   concept_ids: list[str],
+                                   max_depth: int | None = None,
+                                   limit: int | None = None,
+                                   ) -> AsyncIterator[RelatedTerms]:
+        """
+        Trace the given terms to retrieve their ancestors up to the specified depth, and return
+        an asynchronous iterator over the results.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to trace.
+        :param concept_ids: The list of concept IDs to trace.
+        :param max_depth: The maximum depth to trace. If None, trace to all depths.
+        :param limit: The maximum number of ancestors to return for each term. If None, return all.
+        :return: An asynchronous iterator yielding ExpandedTerm instances.
+        """
+
     async def expand_terms_iter(self,
                                 prefix: ConceptPrefix,
                                 concept_ids: list[str],
                                 max_depth: int | None = None,
                                 limit: int | None = None,
-                                ) -> AsyncIterator[ExpandedTerm]:
+                                ) -> AsyncIterator[RelatedTerms]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -226,6 +246,28 @@ class MemoryGraphDatabase(GraphDatabase):
         :param max_depth: The maximum depth to expand. If None, expand to all depths.
         :param limit: The maximum number of descendants to return for each term. If None, return all descendants.
         :return: An asynchronous iterator yielding ExpandedTerm instances.
+        """
+
+    async def get_replaced_terms_iter(self,
+                                      prefix: ConceptPrefix,
+                                      concept_ids: list[str],
+                                      ) -> AsyncIterator[RelatedTerms]:
+        """
+        Get the concepts replaced by the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find replacements for.
+        :param concept_ids: The list of concept IDs to find replacements for.
+        :return: An asynchronous iterator yielding RelatedTerms instances.
+        """
+
+    async def get_replacing_terms_iter(self,
+                                       prefix: ConceptPrefix,
+                                       concept_ids: list[str],
+                                       ) -> AsyncIterator[RelatedTerms]:
+        """
+        Get the concepts that replace the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find replacing terms for.
+        :param concept_ids: The list of concept IDs to find replacing terms for.
+        :return: An asynchronous iterator yielding RelatedTerms instances.
         """
 
     async def get_similar_terms_iter(self,

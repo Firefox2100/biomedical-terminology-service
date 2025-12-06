@@ -11,6 +11,14 @@ type OrdoConcept implements Concept & OntologyConcept {
 
     children: [OrdoConcept!]!
     parents: [OrdoConcept!]!
+
+    similarConcepts: [SimilarOrdoConcept!]!
+}
+
+type SimilarOrdoConcept implements SimilarConcept {
+    from: OrdoConcept!
+    to: OrdoConcept!
+    score: Float!
 }
 
 type OrdoConceptResponse {

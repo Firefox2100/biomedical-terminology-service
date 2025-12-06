@@ -8,7 +8,7 @@ from neo4j.exceptions import TransientError
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
-from bioterms.model.expanded_term import ExpandedTerm
+from bioterms.model.related_term import RelatedTerms
 from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
 from .graph_db import GraphDatabase
@@ -503,12 +503,92 @@ class Neo4jGraphDatabase(GraphDatabase):
                 session=session,
             )
 
+    async def trace_ancestors_iter(self,
+                                   prefix: ConceptPrefix,
+                                   concept_ids: list[str],
+                                   max_depth: int | None = None,
+                                   limit: int | None = None,
+                                   ) -> AsyncIterator[RelatedTerms]:
+        """
+        Trace the given terms to retrieve their ancestors up to the specified depth, and return
+        an asynchronous iterator over the results.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to trace.
+        :param concept_ids: The list of concept IDs to trace.
+        :param max_depth: The maximum depth to trace. If None, trace to all depths.
+        :param limit: The maximum number of ancestors to return for each term. If None, return all.
+        :return: An asynchronous iterator yielding ExpandedTerm instances.
+        """
+        async with self._client.session() as session:
+            if max_depth is None:
+                result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.id IN $concept_ids
+                    OPTIONAL MATCH (n)-[:is_a*]->(ancestor:Concept)
+                    WITH n, [a IN collect(DISTINCT ancestor.id) WHERE a IS NOT NULL] AS all_anc
+                    WITH n,
+                        CASE
+                            WHEN $limit IS NULL THEN all_anc
+                            ELSE all_anc[0..$limit]
+                        END AS ancestors
+                    RETURN n.id AS concept_id, ancestors
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'concept_ids': concept_ids,
+                        'limit': limit,
+                    },
+                )
+            else:
+                result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.id IN $concept_ids
+                    CALL apoc.path.expandConfig(
+                        n,
+                        {
+                            relationshipFilter: 'is_a>',
+                            labelFilter: '+Concept',
+                            minLevel: 1,
+                            maxLevel: $depth,
+                            bfs: true,
+                            uniqueness: 'NODE_GLOBAL'
+                        }
+                    ) YIELD path
+                    WITH n, [a IN collect(DISTINCT last(nodes(path)).id) WHERE a IS NOT NULL] AS all_anc
+                    WITH n,
+                        CASE
+                            WHEN $limit IS NULL THEN all_anc
+                            ELSE all_anc[0..$limit]
+                        END AS ancestors
+                    RETURN n.id AS concept_id, ancestors
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'concept_ids': concept_ids,
+                        'limit': limit,
+                        'depth': max_depth,
+                    },
+                )
+
+            async for record in result:
+                yield RelatedTerms(
+                    conceptId=record['concept_id'],
+                    relatedConcepts=list(set(record['ancestors'])),
+                )
+
     async def expand_terms_iter(self,
                                 prefix: ConceptPrefix,
                                 concept_ids: list[str],
                                 max_depth: int | None = None,
                                 limit: int | None = None,
-                                ) -> AsyncIterator[ExpandedTerm]:
+                                ) -> AsyncIterator[RelatedTerms]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -578,9 +658,73 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
 
             async for record in result:
-                yield ExpandedTerm(
+                yield RelatedTerms(
                     conceptId=record['concept_id'],
-                    descendants=list(set(record['descendants'])),
+                    relatedConcepts=list(set(record['descendants'])),
+                )
+
+    async def get_replaced_terms_iter(self,
+                                      prefix: ConceptPrefix,
+                                      concept_ids: list[str],
+                                      ) -> AsyncIterator[RelatedTerms]:
+        """
+        Get the concepts replaced by the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find replacements for.
+        :param concept_ids: The list of concept IDs to find replacements for.
+        :return: An asynchronous iterator yielding RelatedTerms instances.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                WHERE n.id IN $concept_ids
+                OPTIONAL MATCH (n)<-[:replaced_by]-(m:Concept)
+                WITH n, [r IN collect(DISTINCT m.id) WHERE r IS NOT NULL] AS replaced_terms
+                RETURN n.id AS concept_id, replaced_terms
+                """,
+                session=session,
+                parameters={
+                    'prefix': prefix.value,
+                    'concept_ids': concept_ids,
+                }
+            )
+
+            async for record in result:
+                yield RelatedTerms(
+                    conceptId=record['concept_id'],
+                    relatedConcepts=list(set(record['replaced_terms'])),
+                )
+
+    async def get_replacing_terms_iter(self,
+                                       prefix: ConceptPrefix,
+                                       concept_ids: list[str],
+                                       ) -> AsyncIterator[RelatedTerms]:
+        """
+        Get the concepts that replace the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find replacing terms for.
+        :param concept_ids: The list of concept IDs to find replacing terms for.
+        :return: An asynchronous iterator yielding RelatedTerms instances.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                WHERE n.id IN $concept_ids
+                OPTIONAL MATCH (n)-[:replaced_by]->(m:Concept)
+                WITH n, [r IN collect(DISTINCT m.id) WHERE r IS NOT NULL] AS replacing_terms
+                RETURN n.id AS concept_id, replacing_terms
+                """,
+                session=session,
+                parameters={
+                    'prefix': prefix.value,
+                    'concept_ids': concept_ids,
+                }
+            )
+
+            async for record in result:
+                yield RelatedTerms(
+                    conceptId=record['concept_id'],
+                    relatedConcepts=list(set(record['replacing_terms'])),
                 )
 
     async def get_similar_terms_iter(self,

@@ -164,15 +164,25 @@ async def get_similarity_status(prefix: ConceptPrefix,
                                 cache: Cache = None,
                                 doc_db: DocumentDatabase = None,
                                 graph_db: GraphDatabase = None,
+                                use_cache: bool = True,
                                 ) -> SimilarityStatus:
     """
     Get the similarity status for the vocabulary specified by the prefix.
     :param prefix: The prefix of the vocabulary.
+    :param cache: The cache instance.
+    :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
+    :param use_cache: Whether to use the cache. Defaults to True.
     :return: The SimilarityStatus object containing similarity counts.
     """
     if cache is None:
         cache = get_active_cache()
+
+    if use_cache:
+        cached_status = await cache.get_similarity_status(prefix)
+        if cached_status is not None:
+            return cached_status
+
     if doc_db is None:
         doc_db = await get_active_doc_db()
     if graph_db is None:
@@ -200,7 +210,7 @@ async def get_similarity_status(prefix: ConceptPrefix,
         configurations=similarity_combinations,
     )
 
-    return SimilarityStatus(
+    status = SimilarityStatus(
         prefix=prefix,
         similarityCounts=[
             SimilarityCount(
@@ -211,3 +221,9 @@ async def get_similarity_status(prefix: ConceptPrefix,
             for count in similarity_counts
         ],
     )
+
+    await cache.save_similarity_status(
+        status=status,
+    )
+
+    return status

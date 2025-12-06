@@ -6,7 +6,7 @@ import aiofiles.os
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
-from bioterms.database import GraphDatabase, get_active_graph_db
+from bioterms.database import Cache, GraphDatabase, get_active_cache, get_active_graph_db
 from bioterms.model.annotation_status import AnnotationStatus
 
 
@@ -189,29 +189,54 @@ async def load_annotation(prefix_1: ConceptPrefix,
 
 async def get_annotation_status(prefix_1: ConceptPrefix,
                                 prefix_2: ConceptPrefix,
+                                cache: Cache = None,
                                 graph_db: GraphDatabase = None,
+                                use_cache: bool = True,
                                 ) -> AnnotationStatus:
     """
     Get the annotation status for the given pair of prefixes.
     :param prefix_1: The first prefix.
     :param prefix_2: The second prefix.
+    :param cache: Optional Cache instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
+    :param use_cache: Whether to use cached status if available.
     :return: The AnnotationStatus instance.
     """
     annotation_module = get_annotation_module(prefix_1, prefix_2)
+
+    if cache is None:
+        cache = get_active_cache()
+
+    prefix_1 = annotation_module.VOCABULARY_PREFIX_1
+    prefix_2 = annotation_module.VOCABULARY_PREFIX_2
+
+    if use_cache:
+        cached_status = await cache.get_annotation_status(
+            prefix_1=prefix_1,
+            prefix_2=prefix_2,
+        )
+
+        if cached_status is not None:
+            return cached_status
 
     if graph_db is None:
         graph_db = get_active_graph_db()
 
     annotation_count = await graph_db.count_annotations(
-        prefix_1=annotation_module.VOCABULARY_PREFIX_1,
-        prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+        prefix_1=prefix_1,
+        prefix_2=prefix_2,
     )
 
-    return AnnotationStatus(
-        prefixSource=annotation_module.VOCABULARY_PREFIX_1,
-        prefixTarget=annotation_module.VOCABULARY_PREFIX_2,
+    status = AnnotationStatus(
+        prefixSource=prefix_1,
+        prefixTarget=prefix_2,
         name=annotation_module.ANNOTATION_NAME,
         loaded=annotation_count > 0,
         relationshipCount=annotation_count,
     )
+
+    await cache.save_annotation_status(
+        status=status,
+    )
+
+    return status

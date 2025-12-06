@@ -4,7 +4,7 @@ from pydantic import Field, ConfigDict
 from .base import JsonModel
 
 
-class ExpandedTerm(JsonModel):
+class RelatedTerms(JsonModel):
     """
     Data model for an expanded term in the expand terms response (v2).
     """
@@ -19,7 +19,8 @@ class ExpandedTerm(JsonModel):
         description='The concept ID of the expanded term.',
         alias='conceptId',
     )
-    descendants: List[str] = Field(
+    related_concepts: List[str] = Field(
         ...,
-        description='List of descendant concept IDs.',
+        description='List of related concept IDs.',
+        alias='relatedConcepts',
     )

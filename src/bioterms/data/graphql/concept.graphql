@@ -7,6 +7,12 @@ enum ConceptStatus {
     deprecated
 }
 
+interface SimilarConcept {
+    from: Concept!
+    to: Concept!
+    score: Float!
+}
+
 interface Concept {
     prefix: ConceptPrefix!
     conceptId: String
@@ -16,6 +22,8 @@ interface Concept {
 
     replaces: [Concept!]!
     replacedBy: [Concept!]!
+
+    similarConcepts: [SimilarConcept!]!
 }
 
 interface OntologyConcept {

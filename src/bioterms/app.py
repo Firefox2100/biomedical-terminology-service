@@ -12,8 +12,12 @@ from asgi_csrf import asgi_csrf
 
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG
+from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
+from bioterms.vocabulary import get_vocabulary_status
+from bioterms.annotation import get_annotation_status
+from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
 from bioterms.router import auto_complete_router, data_router, expand_router, misc_router, similarity_router, \
     ui_router
@@ -48,6 +52,43 @@ async def lifespan(app: FastAPI):
         await graph_db.close()
 
         LOGGER.info('Application shutdown complete.')
+
+
+async def rebuild_cache():
+    """
+    Rebuild the cache by clearing existing entries and repopulating them.
+    """
+    LOGGER.info('Rebuilding cache...')
+
+    cache = get_active_cache()
+    doc_db = await get_active_doc_db()
+    graph_db = get_active_graph_db()
+
+    for prefix in ConceptPrefix:
+        vocab_status = await get_vocabulary_status(
+            prefix=prefix,
+            cache=cache,
+            doc_db=doc_db,
+            graph_db=graph_db,
+            use_cache=False,
+        )
+
+        for annotation in vocab_status.annotations:
+            await get_annotation_status(
+                prefix_1=prefix,
+                prefix_2=annotation,
+                cache=cache,
+                graph_db=graph_db,
+                use_cache=False,
+            )
+
+        await get_similarity_status(
+            prefix=prefix,
+            cache=cache,
+            doc_db=doc_db,
+            graph_db=graph_db,
+            use_cache=False,
+        )
 
 
 def create_app() -> FastAPI:

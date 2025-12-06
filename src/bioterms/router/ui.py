@@ -10,7 +10,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
+    get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
@@ -378,6 +379,7 @@ async def list_vocabularies(request: Request,
 @ui_router.get('/vocabularies/{prefix}', response_class=HTMLResponse)
 async def get_vocabulary_info(prefix: ConceptPrefix,
                               request: Request,
+                              cache: Cache = Depends(get_active_cache),
                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
                               graph_db: GraphDatabase = Depends(get_active_graph_db),
                               ):
@@ -386,6 +388,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
     \f
     :param prefix: The vocabulary prefix.
     :param request: Request object.
+    :param cache: Cache instance.
     :param doc_db: Document database instance.
     :param graph_db: Graph database instance.
     :return: An HTML response with the vocabulary information.
@@ -393,11 +396,14 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
     try:
         vocab_status = await get_vocabulary_status(
             prefix,
+            cache=cache,
             doc_db=doc_db,
             graph_db=graph_db,
         )
         sim_status = await get_similarity_status(
             prefix,
+            cache=cache,
+            doc_db=doc_db,
             graph_db=graph_db,
         )
         nav_links = await build_nav_links(request, doc_db)
@@ -416,6 +422,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             annotation_status = await get_annotation_status(
                 prefix_1=vocab_status.prefix,
                 prefix_2=annotation,
+                cache=cache,
                 graph_db=graph_db,
             )
 

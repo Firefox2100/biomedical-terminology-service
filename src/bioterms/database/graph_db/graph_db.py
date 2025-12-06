@@ -1,13 +1,12 @@
 from abc import ABC, abstractmethod
 from typing import AsyncIterator
 import networkx as nx
-import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
-from bioterms.model.expanded_term import ExpandedTerm
+from bioterms.model.related_term import RelatedTerms
 from bioterms.model.similar_term import SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
 
@@ -168,12 +167,64 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    def trace_ancestors_iter(self,
+                             prefix: ConceptPrefix,
+                             concept_ids: list[str],
+                             max_depth: int | None = None,
+                             limit: int | None = None,
+                             ) -> AsyncIterator[RelatedTerms]:
+        """
+        Trace the given terms to retrieve their ancestors up to the specified depth, and return
+        an asynchronous iterator over the results.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to trace.
+        :param concept_ids: The list of concept IDs to trace.
+        :param max_depth: The maximum depth to trace. If None, trace to all depths.
+        :param limit: The maximum number of ancestors to return for each term. If None, return all.
+        :return: An asynchronous iterator yielding ExpandedTerm instances.
+        """
+
+    async def trace_ancestors(self,
+                              prefix: ConceptPrefix,
+                              concept_ids: list[str],
+                              max_depth: int | None = None,
+                              limit: int | None = None,
+                              ) -> list[RelatedTerms]:
+        """
+        Trace the given terms to retrieve their ancestors up to the specified depth.
+
+        This would only work on ontologies, because it relies on the IS_A relationships.
+        Expanding a non-ontology or an ontology that does not have hierarchical relationships
+        would return an empty set for each term.
+        :param prefix: The prefix of the concepts to trace.
+        :param concept_ids: The list of concept IDs to trace.
+        :param max_depth: The maximum depth to trace. If None, trace to all depths.
+        :param limit: The maximum number of ancestors to return for each term. If None, return all.
+        :return: A list of ExpandedTerm instances.
+        """
+        trace_iter = self.trace_ancestors_iter(
+            prefix=prefix,
+            concept_ids=concept_ids,
+            max_depth=max_depth,
+            limit=limit,
+        )
+
+        results: list[RelatedTerms] = []
+        async for expanded_term in trace_iter:
+            results.append(expanded_term)
+
+        return results
+
+    @abstractmethod
     def expand_terms_iter(self,
                           prefix: ConceptPrefix,
                           concept_ids: list[str],
                           max_depth: int | None = None,
                           limit: int | None = None,
-                          ) -> AsyncIterator[ExpandedTerm]:
+                          ) -> AsyncIterator[RelatedTerms]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -193,7 +244,7 @@ class GraphDatabase(ABC):
                            concept_ids: list[str],
                            max_depth: int | None = None,
                            limit: int | None = None,
-                           ) -> list[ExpandedTerm]:
+                           ) -> list[RelatedTerms]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth.
 
@@ -213,9 +264,75 @@ class GraphDatabase(ABC):
             limit=limit,
         )
 
-        results: list[ExpandedTerm] = []
+        results: list[RelatedTerms] = []
         async for expanded_term in expand_iter:
             results.append(expanded_term)
+
+        return results
+
+    @abstractmethod
+    def get_replaced_terms_iter(self,
+                                prefix: ConceptPrefix,
+                                concept_ids: list[str],
+                                ) -> AsyncIterator[RelatedTerms]:
+        """
+        Get the concepts replaced by the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find replacements for.
+        :param concept_ids: The list of concept IDs to find replacements for.
+        :return: An asynchronous iterator yielding RelatedTerms instances.
+        """
+
+    async def get_replaced_terms(self,
+                                 prefix: ConceptPrefix,
+                                 concept_ids: list[str],
+                                 ) -> list[RelatedTerms]:
+        """
+        Get the concepts replaced by the given concept IDs.
+        :param prefix: The prefix of the concepts to find replacements for.
+        :param concept_ids: The list of concept IDs to find replacements for.
+        :return: A list of RelatedTerms instances.
+        """
+        replaced_iter = self.get_replaced_terms_iter(
+            prefix=prefix,
+            concept_ids=concept_ids,
+        )
+
+        results: list[RelatedTerms] = []
+        async for replaced_term in replaced_iter:
+            results.append(replaced_term)
+
+        return results
+
+    @abstractmethod
+    def get_replacing_terms_iter(self,
+                                 prefix: ConceptPrefix,
+                                 concept_ids: list[str],
+                                 ) -> AsyncIterator[RelatedTerms]:
+        """
+        Get the concepts that replace the given concept IDs as an asynchronous iterator.
+        :param prefix: The prefix of the concepts to find replacing terms for.
+        :param concept_ids: The list of concept IDs to find replacing terms for.
+        :return: An asynchronous iterator yielding RelatedTerms instances.
+        """
+
+    async def get_replacing_terms(self,
+                                  prefix: ConceptPrefix,
+                                  concept_ids: list[str],
+                                  ) -> list[RelatedTerms]:
+        """
+        Get the concepts that replace the given concept IDs.
+        :param prefix: The prefix of the concepts to find replacing terms for.
+        :param concept_ids: The list of concept IDs to find replacing terms for.
+        :return: A list of RelatedTerms instances.
+        """
+        replacing_iter = self.get_replacing_terms_iter(
+            prefix=prefix,
+            concept_ids=concept_ids,
+        )
+
+        results: list[RelatedTerms] = []
+        async for replacing_term in replacing_iter:
+            results.append(replacing_term)
 
         return results
 

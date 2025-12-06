@@ -19,6 +19,7 @@ class DataLoader:
         if prefix not in self._concept_loaders:
             self._concept_loaders[prefix] = ConceptLoader(
                 prefix=prefix,
+                graph_db=self._graph_db,
                 doc_db=self._doc_db,
             )
 

@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import CacheDriverType, ConceptPrefix
 from bioterms.model.vocabulary_status import VocabularyStatus
+from bioterms.model.annotation_status import AnnotationStatus
+from bioterms.model.similarity_status import SimilarityStatus
 
 
 class Cache(ABC):
@@ -30,6 +32,46 @@ class Cache(ABC):
         Retrieve the vocabulary status from the cache.
         :param prefix: The prefix of the vocabulary to retrieve.
         :return: The vocabulary status if it exists and is not expired, otherwise None
+        """
+
+    @abstractmethod
+    async def save_annotation_status(self,
+                                     status: AnnotationStatus,
+                                     ):
+        """
+        Store the annotation status in the cache.
+        :param status: The annotation status to store.
+        """
+
+    @abstractmethod
+    async def get_annotation_status(self,
+                                    prefix_1: ConceptPrefix,
+                                    prefix_2: ConceptPrefix,
+                                    ) -> AnnotationStatus | None:
+        """
+        Retrieve the annotation status from the cache.
+        :param prefix_1: The first prefix of the annotation to retrieve.
+        :param prefix_2: The second prefix of the annotation to retrieve.
+        :return: The annotation status if it exists, otherwise None
+        """
+
+    @abstractmethod
+    async def save_similarity_status(self,
+                                     status: SimilarityStatus,
+                                     ):
+        """
+        Store the similarity status in the cache.
+        :param status: The similarity status to store.
+        """
+
+    @abstractmethod
+    async def get_similarity_status(self,
+                                    prefix: ConceptPrefix,
+                                    ) -> SimilarityStatus | None:
+        """
+        Retrieve the similarity status from the cache.
+        :param prefix: The prefix of the vocabulary to retrieve.
+        :return: The similarity status if it exists, otherwise None
         """
 
     @abstractmethod
