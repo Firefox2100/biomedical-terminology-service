@@ -383,6 +383,7 @@ async def schedule_tasks(executor: Executor,
                          loop: asyncio.AbstractEventLoop = None,
                          description: str = None,
                          total: int | None = None,
+                         transient: bool = False,
                          ) -> AsyncIterator[R]:
     """
     Schedule tasks to run in an executor with limited concurrency.
@@ -393,6 +394,7 @@ async def schedule_tasks(executor: Executor,
     :param loop: The asyncio event loop.
     :param description: Description for the progress bar.
     :param total: Total number of items for the progress bar.
+    :param transient: Whether the progress bar should be transient.
     :return: An async iterator yielding results as they complete.
     """
     if max_concurrency is None:
@@ -418,7 +420,7 @@ async def schedule_tasks(executor: Executor,
             TextColumn("{task.completed}/{task.total}"),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
-            transient=total is None,
+            transient=total is None or transient,
         )
         task = progress.add_task(description=description or "Processing...", total=total)
         progress.start()
