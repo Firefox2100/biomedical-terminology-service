@@ -37,6 +37,30 @@ class IngestResponse(JsonModel):
     )
 
 
+class ConceptInfoResponse(JsonModel):
+    """
+    Response model for the get concept endpoint.
+    """
+
+    model_config = ConfigDict(
+        serialize_by_alias=True,
+        extra='forbid',
+    )
+
+    concept: ConceptUnion = Field(
+        ...,
+        description='The retrieved concept.',
+    )
+    children: list[ConceptUnion] = Field(
+        ...,
+        description='List of child concepts.',
+    )
+    parents: list[ConceptUnion] = Field(
+        ...,
+        description='List of parent concepts.',
+    )
+
+
 @data_router.get('/{prefix}', response_model=VocabularyStatus)
 async def get_vocabulary_status_info(prefix: ConceptPrefix,
                                      cache: Cache = Depends(get_active_cache),
@@ -83,10 +107,11 @@ async def get_license(prefix: ConceptPrefix):
     )
 
 
-@data_router.get('/{prefix}/{concept_id}', response_model=ConceptUnion)
+@data_router.get('/{prefix}/{concept_id}', response_model=ConceptInfoResponse)
 async def get_concept(prefix: ConceptPrefix,
                       concept_id: str,
                       doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                      graph_db: GraphDatabase = Depends(get_active_graph_db),
                       ):
     """
     Get a specific concept by its ID from the specified vocabulary.
@@ -94,8 +119,36 @@ async def get_concept(prefix: ConceptPrefix,
     :param prefix: The vocabulary prefix.
     :param concept_id: The ID of the concept to retrieve.
     :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
     :return: The Concept instance.
     """
+    concept = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=[concept_id],
+    )
+
+    if not concept:
+        raise HTTPException(
+            status_code=404,
+            detail=f'Concept {concept_id} not found in vocabulary {prefix.value}'
+        )
+
+    children = await graph_db.expand_terms(
+        prefix=prefix,
+        concept_ids=[concept_id],
+        max_depth=1,
+    )
+    parents = await graph_db.trace_ancestors(
+        prefix=prefix,
+        concept_ids=[concept_id],
+        max_depth=1,
+    )
+
+    return ConceptInfoResponse(
+        concept=concept[0],
+        children=children[0].related_concepts if children else [],
+        parents=parents[0].related_concepts if parents else [],
+    )
 
 
 @data_router.delete('/{prefix}')
