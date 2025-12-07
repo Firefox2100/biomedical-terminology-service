@@ -2,6 +2,7 @@ import re
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
 from typing import AsyncIterator
+import pymongo
 from pymongo import AsyncMongoClient, UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import OperationFailure
@@ -254,47 +255,48 @@ class MongoDocumentDatabase(DocumentDatabase):
         async for doc in result:
             existing_concept_ids.add(doc['conceptId'])
 
-        with ProcessPoolExecutor(
-            max_workers=CONFIG.process_limit,
-        ) as executor:
-            for batch in batch_iterable(terms):
-                extra_data = await generate_extra_data(
-                    concepts=batch,
-                    executor=executor,
-                )
+        with pymongo.timeout(None):
+            with ProcessPoolExecutor(
+                max_workers=CONFIG.process_limit,
+            ) as executor:
+                for batch in batch_iterable(terms):
+                    extra_data = await generate_extra_data(
+                        concepts=batch,
+                        executor=executor,
+                    )
 
-                existing_docs: dict[str, dict] = {}
-                new_docs: dict[str, dict] = {}
+                    existing_docs: dict[str, dict] = {}
+                    new_docs: dict[str, dict] = {}
 
-                for c in batch:
-                    c_doc = c.model_dump(exclude_none=True)
-                    if c.concept_id in existing_concept_ids:
-                        # Remove the immutable fields for faster updates
-                        c_doc.pop('conceptId', None)
-                        c_doc.pop('prefix', None)
-                        existing_docs[c.concept_id] = c_doc
-                    else:
-                        new_docs[c.concept_id] = c_doc
+                    for c in batch:
+                        c_doc = c.model_dump(exclude_none=True)
+                        if c.concept_id in existing_concept_ids:
+                            # Remove the immutable fields for faster updates
+                            c_doc.pop('conceptId', None)
+                            c_doc.pop('prefix', None)
+                            existing_docs[c.concept_id] = c_doc
+                        else:
+                            new_docs[c.concept_id] = c_doc
 
-                for concept_id, ngrams, search_text in extra_data:
-                    if concept_id in existing_docs:
-                        existing_docs[concept_id]['nGrams'] = ngrams
-                        existing_docs[concept_id]['searchText'] = search_text
-                    elif concept_id in new_docs:
-                        new_docs[concept_id]['nGrams'] = ngrams
-                        new_docs[concept_id]['searchText'] = search_text
+                    for concept_id, ngrams, search_text in extra_data:
+                        if concept_id in existing_docs:
+                            existing_docs[concept_id]['nGrams'] = ngrams
+                            existing_docs[concept_id]['searchText'] = search_text
+                        elif concept_id in new_docs:
+                            new_docs[concept_id]['nGrams'] = ngrams
+                            new_docs[concept_id]['searchText'] = search_text
 
-                if new_docs:
-                    await collection.insert_many(new_docs.values())
+                    if new_docs:
+                        await collection.insert_many(new_docs.values())
 
-                if existing_docs:
-                    operations = [
-                        UpdateOne(
-                            {'conceptId': concept_id},
-                            {'$set': doc}
-                        ) for concept_id, doc in existing_docs.items()
-                    ]
-                    await collection.bulk_write(operations)
+                    if existing_docs:
+                        operations = [
+                            UpdateOne(
+                                {'conceptId': concept_id},
+                                {'$set': doc}
+                            ) for concept_id, doc in existing_docs.items()
+                        ]
+                        await collection.bulk_write(operations)
 
     async def count_terms(self,
                           prefix: ConceptPrefix,

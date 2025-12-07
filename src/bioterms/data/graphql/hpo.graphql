@@ -12,7 +12,9 @@ type HpoConcept implements Concept & OntologyConcept {
     children: [HpoConcept!]!
     parents: [HpoConcept!]!
 
-    similarConcepts: [SimilarHpoConcept!]!
+    similarConcepts(threshold: Float): [SimilarHpoConcept!]!
+
+    annotatedOrdo: [OrdoConcept!]!
 }
 
 type SimilarHpoConcept implements SimilarConcept {
@@ -33,6 +35,7 @@ type HpoConceptListResponse {
 
 type HpoQuery {
     hpoConcept(conceptId: String!): HpoConceptResponse
+    autoComplete(query: String!, limit: Int): HpoConceptListResponse
 }
 
 extend type Query {

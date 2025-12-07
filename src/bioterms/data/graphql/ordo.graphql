@@ -12,7 +12,7 @@ type OrdoConcept implements Concept & OntologyConcept {
     children: [OrdoConcept!]!
     parents: [OrdoConcept!]!
 
-    similarConcepts: [SimilarOrdoConcept!]!
+    similarConcepts(threshold: Float): [SimilarOrdoConcept!]!
 }
 
 type SimilarOrdoConcept implements SimilarConcept {
@@ -33,6 +33,7 @@ type OrdoConceptListResponse {
 
 type OrdoQuery {
     ordoConcept(conceptId: String!): OrdoConceptResponse
+    autoComplete(query: String!, limit: Int): OrdoConceptListResponse
 }
 
 extend type Query {

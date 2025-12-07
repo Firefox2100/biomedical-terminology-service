@@ -23,7 +23,7 @@ interface Concept {
     replaces: [Concept!]!
     replacedBy: [Concept!]!
 
-    similarConcepts: [SimilarConcept!]!
+    similarConcepts(threshold: Float): [SimilarConcept!]!
 }
 
 interface OntologyConcept {
