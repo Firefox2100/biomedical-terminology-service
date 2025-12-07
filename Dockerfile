@@ -22,15 +22,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY ./src/bioterms /app/src/bioterms
-COPY ./conf /app/conf
+COPY ./conf /app/conf.defaults
 COPY ./pyproject.toml /app/pyproject.toml
-COPY ./example.env /app/conf/.env
+COPY ./example.env /app/conf.defaults/.env
 COPY ./LICENSE /app/LICENSE
 COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
 ARG TORCH_VERSION=2.8.0
-RUN pip install --upgrade pip && \
+RUN mkdir -p /app/conf && \
+    cp -r /app/conf.defaults/. /app/conf/ && \
+    pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu && \
     pip install .[all] && \
     chown -R appuser:appgroup /app
@@ -42,7 +44,7 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl --fail http://localhost:5000/health || exit 1
 
-VOLUME ["/app/conf", "/app/data"]
+VOLUME ["/app/data"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["--host", "0.0.0.0", "--port", "5000", "--log-config", "/app/conf/uvicorn-log.config.yaml"]
@@ -77,15 +79,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY ./src/bioterms /app/src/bioterms
-COPY ./conf /app/conf
+COPY ./conf /app/conf.defaults
 COPY ./pyproject.toml /app/pyproject.toml
-COPY ./example.env /app/conf/.env
+COPY ./example.env /app/conf.defaults/.env
 COPY ./LICENSE /app/LICENSE
 COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
 ARG TORCH_VERSION=2.8.0
-RUN pip install --upgrade pip && \
+RUN mkdir -p /app/conf && \
+    cp -r /app/conf.defaults/. /app/conf/ && \
+    pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu126 && \
     pip install .[all] && \
     chown -R appuser:appgroup /app
