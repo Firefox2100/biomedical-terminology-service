@@ -1,5 +1,5 @@
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import AsyncIterator
 from pymongo import AsyncMongoClient, UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
@@ -8,6 +8,7 @@ from pymongo.errors import OperationFailure
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
+from bioterms.etc.utils import verbose_print
 from bioterms.model.concept import Concept
 from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
@@ -249,27 +250,62 @@ class MongoDocumentDatabase(DocumentDatabase):
         Save a list of terms into the mongodb.
         :param terms: A list of Concept instances to save.
         """
-        extra_data = await generate_extra_data(terms)
+        prefix_grouped_terms = {}
 
-        operations: dict[ConceptPrefix, list[UpdateOne]] = {}
-        for concept, (term_id, ngrams, search_text) in zip(terms, extra_data):
-            doc = concept.model_dump(exclude_none=True)
-            doc['nGrams'] = ngrams
-            doc['searchText'] = search_text
+        for term in terms:
+            if term.prefix not in prefix_grouped_terms:
+                prefix_grouped_terms[term.prefix] = []
+            prefix_grouped_terms[term.prefix].append(term)
 
-            if concept.prefix not in operations:
-                operations[concept.prefix] = []
+        del terms
 
-            operations[concept.prefix].append(UpdateOne(
-                {'conceptId': concept.concept_id},
-                {'$set': doc},
-                upsert=True,
-            ))
+        operation_uuid = str(uuid4())
+        try:
+            for prefix in prefix_grouped_terms.keys():
+                # Create a temporary collection for this operation
+                collection = self.db[f'{prefix.value}.{operation_uuid}']
+                extra_data = await generate_extra_data(prefix_grouped_terms[prefix])
+                docs = []
 
-        for prefix, concept_operations in operations.items():
-            collection = self.db[str(prefix.value)]
+                for concept, (term_id, ngrams, search_text) in zip(prefix_grouped_terms[prefix], extra_data):
+                    doc = concept.model_dump(exclude_none=True)
+                    doc['nGrams'] = ngrams
+                    doc['searchText'] = search_text
+                    docs.append(doc)
 
-            await collection.bulk_write(concept_operations, ordered=False)
+                verbose_print(f'Saving concepts of {prefix.value} to {operation_uuid}')
+
+                await collection.create_index('conceptId', name='conceptId_index', unique=True)
+                await collection.insert_many(docs)
+
+                verbose_print('Temporary insertion complete, merging...')
+
+                # Use aggregated pipeline to merge it back onto the main collection
+                main_collection = self.db[str(prefix.value)]
+                pipeline = [
+                    {
+                        '$merge': {
+                            'into': str(prefix.value),
+                            'on': 'conceptId',
+                            'whenMatched': 'merge',
+                            'whenNotMatched': 'insert',
+                        }
+                    }
+                ]
+
+                cursor = await collection.aggregate(pipeline)
+                await cursor.to_list()
+
+                verbose_print(f'Merge complete for {prefix.value}.')
+        finally:
+            # Clean up temporary collections
+            for prefix in prefix_grouped_terms.keys():
+                try:
+                    await self.db.drop_collection(f'{prefix.value}.{operation_uuid}')
+
+                    verbose_print(f'Dropped temporary collection for {prefix.value}.{operation_uuid}')
+                except Exception:
+                    pass
 
     async def count_terms(self,
                           prefix: ConceptPrefix,

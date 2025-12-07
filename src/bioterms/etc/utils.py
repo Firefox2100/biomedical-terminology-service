@@ -48,6 +48,35 @@ def ensure_data_directory():
         os.makedirs(CONFIG.data_dir, exist_ok=True)
 
 
+def batch_iterable(seq: list[T],
+                   batch_size: int = 10000,
+                   ) -> Iterator[list[T]]:
+    """
+    Batch the input parameters in case of large insertions.
+    :param seq: The iterable, must be a list-like object and not a generator
+    :param batch_size: Size of the batch, default to 1000
+    """
+    batch_count = (len(seq) + batch_size - 1) // batch_size
+
+    if batch_count <= 1:
+        yield seq
+        return
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task(description='Batching...', total=batch_count)
+
+        for i in range(0, len(seq), batch_size):
+            yield seq[i:i + batch_size]
+            progress.advance(task)
+
+
 async def download_file(url: str,
                         file_path: str,
                         headers: dict[str, str] = None,

@@ -1,6 +1,8 @@
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
 
-from bioterms.etc.consts import EXECUTOR
+from bioterms.etc.consts import CONFIG
+from bioterms.etc.utils import schedule_tasks
 from bioterms.model.concept import Concept
 
 
@@ -22,11 +24,18 @@ async def generate_extra_data(concepts: list[Concept]) -> list[tuple[str, list[s
     :param concepts: A list of Concept objects
     :return: A tuple containing the term's ID, n-grams, and search text.
     """
-    loop = asyncio.get_running_loop()
+    results = []
 
-    futures = [
-        loop.run_in_executor(EXECUTOR, _generate_extra_data_for_term, concept)
-        for concept in concepts
-    ]
+    with ProcessPoolExecutor(
+        max_workers=CONFIG.process_limit,
+    ) as executor:
+        async for result in schedule_tasks(
+            executor=executor,
+            func=_generate_extra_data_for_term,
+            iterable=concepts,
+            description='Generating extra data for search indexing from Concept objects.',
+            total=len(concepts),
+        ):
+            results.append(result)
 
-    return await asyncio.gather(*futures)
+    return results

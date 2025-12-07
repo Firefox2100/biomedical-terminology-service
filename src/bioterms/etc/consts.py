@@ -226,7 +226,6 @@ if not LOGGER.hasHandlers():
     LOGGER.addHandler(console_handler)
 
 
-EXECUTOR = ProcessPoolExecutor(max_workers=CONFIG.process_limit)
 DOWNLOAD_CLIENT = AsyncClient()
 QUERY_CLIENT = AsyncClient()
 

@@ -1,11 +1,11 @@
 import asyncio
 from typing import LiteralString, AsyncIterator, Iterator, TypeVar
 import networkx as nx
-import pandas as pd
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
+from bioterms.etc.utils import batch_iterable, verbose_print
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.related_term import RelatedTerms
@@ -69,16 +69,6 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         raise RuntimeError('Exceeded maximum retry attempts for query execution.')
 
-    @staticmethod
-    def _batch_iterable(seq: list[T], batch_size: int = 10000) -> Iterator[list[T]]:
-        """
-        Batch the input parameters in case of large insertions.
-        :param seq: The iterable, must be a list-like object and not a generator
-        :param batch_size: Size of the batch, default to 1000
-        """
-        for i in range(0, len(seq), batch_size):
-            yield seq[i:i + batch_size]
-
     @classmethod
     def set_client(cls,
                    client: AsyncDriver,
@@ -117,7 +107,8 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         async with self._client.session() as session:
             # Insert the concepts first before adding edges
-            for concept_batch in self._batch_iterable(concepts):
+            verbose_print(f'Inserting {len(concepts)} concepts into Neo4j...')
+            for concept_batch in batch_iterable(concepts):
                 await self._execute_query_with_retry(
                     query="""
                     UNWIND $concepts AS concept
@@ -135,7 +126,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
 
             # Insert the edges
-            for edge_batch in self._batch_iterable(edges):
+            verbose_print(f'Inserting {len(edges)} edges into Neo4j...')
+            for edge_batch in batch_iterable(edges):
                 await self._execute_query_with_retry(
                     query="""
                     UNWIND $edges AS edge
@@ -312,7 +304,8 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param annotations: A list of Annotation instances to save.
         """
         async with self._client.session() as session:
-            for annotation_batch in self._batch_iterable(annotations):
+            verbose_print(f'Inserting {len(annotations)} annotations into Neo4j...')
+            for annotation_batch in batch_iterable(annotations):
                 await self._execute_query_with_retry(
                     query="""
                     UNWIND $annotations AS annotation
@@ -435,7 +428,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param corpus_prefix: The corpus vocabulary prefix, if applicable.
         """
         async with self._client.session() as session:
-            for scores in self._batch_iterable(similarity_scores):
+            for scores in batch_iterable(similarity_scores):
                 similarities = [
                     {
                         'concept_from': score[0],
