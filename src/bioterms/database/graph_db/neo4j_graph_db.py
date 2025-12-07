@@ -8,7 +8,7 @@ from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.etc.utils import batch_iterable, verbose_print
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
-from bioterms.model.related_term import RelatedTerms
+from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
 from .graph_db import GraphDatabase
@@ -501,7 +501,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                                    concept_ids: list[str],
                                    max_depth: int | None = None,
                                    limit: int | None = None,
-                                   ) -> AsyncIterator[RelatedTerms]:
+                                   ) -> AsyncIterator[RelatedTerm]:
         """
         Trace the given terms to retrieve their ancestors up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -571,7 +571,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
 
             async for record in result:
-                yield RelatedTerms(
+                yield RelatedTerm(
                     conceptId=record['concept_id'],
                     relatedConcepts=list(set(record['ancestors'])),
                 )
@@ -581,7 +581,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                                 concept_ids: list[str],
                                 max_depth: int | None = None,
                                 limit: int | None = None,
-                                ) -> AsyncIterator[RelatedTerms]:
+                                ) -> AsyncIterator[RelatedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -651,7 +651,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
 
             async for record in result:
-                yield RelatedTerms(
+                yield RelatedTerm(
                     conceptId=record['concept_id'],
                     relatedConcepts=list(set(record['descendants'])),
                 )
@@ -659,7 +659,7 @@ class Neo4jGraphDatabase(GraphDatabase):
     async def get_replaced_terms_iter(self,
                                       prefix: ConceptPrefix,
                                       concept_ids: list[str],
-                                      ) -> AsyncIterator[RelatedTerms]:
+                                      ) -> AsyncIterator[RelatedTerm]:
         """
         Get the concepts replaced by the given concept IDs as an asynchronous iterator.
         :param prefix: The prefix of the concepts to find replacements for.
@@ -683,7 +683,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             )
 
             async for record in result:
-                yield RelatedTerms(
+                yield RelatedTerm(
                     conceptId=record['concept_id'],
                     relatedConcepts=list(set(record['replaced_terms'])),
                 )
@@ -691,7 +691,7 @@ class Neo4jGraphDatabase(GraphDatabase):
     async def get_replacing_terms_iter(self,
                                        prefix: ConceptPrefix,
                                        concept_ids: list[str],
-                                       ) -> AsyncIterator[RelatedTerms]:
+                                       ) -> AsyncIterator[RelatedTerm]:
         """
         Get the concepts that replace the given concept IDs as an asynchronous iterator.
         :param prefix: The prefix of the concepts to find replacing terms for.
@@ -715,9 +715,65 @@ class Neo4jGraphDatabase(GraphDatabase):
             )
 
             async for record in result:
-                yield RelatedTerms(
+                yield RelatedTerm(
                     conceptId=record['concept_id'],
                     relatedConcepts=list(set(record['replacing_terms'])),
+                )
+
+    async def map_terms_iter(self,
+                             prefix: ConceptPrefix,
+                             target_prefix: ConceptPrefix,
+                             concept_ids: list[str],
+                             max_hops: int = 1,
+                             limit: int | None = None,
+                             ) -> AsyncIterator[RelatedTerm]:
+        """
+        Map terms from one vocabulary to another as an asynchronous iterator.
+        :param prefix: The source prefix.
+        :param target_prefix: The target prefix.
+        :param concept_ids: The list of concept IDs to map.
+        :param max_hops: The maximum number of mapping hops to consider.
+        :param limit: The maximum number of mapped terms to return for each concept ID.
+        :return: An asynchronous iterator yielding RelatedTerm instances.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                MATCH (src:Concept {prefix: $prefix})
+                WHERE src.id IN $concept_ids
+                CALL {
+                    MATCH p = (src)
+                        -[r:annotated_with|has_symbol|exact|broad|narrow|related*1..$max_hops]-
+                        (tgt:Concept {prefix: $target_prefix})
+
+                    WHERE ALL(rel IN relationships(p) WHERE startNode(rel).prefix <> endNode(rel).prefix)
+
+                    WITH src, tgt, p, [n in nodes(p) | n.prefix] AS prefixes
+                    WHERE size(prefixes) = size(apoc.coll.toSet(prefixes))
+                        AND ALL(n IN nodes(p)[1..-2] WHERE n.prefix <> src.prefix AND n.prefix <> $target_prefix)
+                    
+                    WITH src, tgt, p
+                    ORDER BY length(p) ASC
+                    
+                    LIMIT COALESCE($limit, 1000000)
+                    RETURN src.id AS source_id, collect(DISTINCT tgt.id) AS mapped_terms
+                }
+                RETURN source_id AS concept_id, mapped_terms
+                """,
+                session=session,
+                parameters={
+                    'prefix': prefix.value,
+                    'target_prefix': target_prefix.value,
+                    'concept_ids': concept_ids,
+                    'max_hops': max_hops,
+                    'limit': limit,
+                },
+            )
+
+            async for record in result:
+                yield RelatedTerm(
+                    conceptId=record['concept_id'],
+                    relatedConcepts=list(set(record['mapped_terms'])),
                 )
 
     async def get_similar_terms_iter(self,

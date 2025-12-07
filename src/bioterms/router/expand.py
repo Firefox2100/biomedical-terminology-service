@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
-from bioterms.model.related_term import RelatedTerms
+from bioterms.model.related_term import RelatedTerm
 from .utils import response_generator
 
 
@@ -101,7 +101,7 @@ async def expand_terms_v1(prefix: ConceptPrefix,
     return v1_expanded_terms
 
 
-@expand_router.get('/{prefix}/expand/v2', response_model=List[RelatedTerms])
+@expand_router.get('/{prefix}/expand/v2', response_model=List[RelatedTerm])
 async def expand_terms_v2(prefix: ConceptPrefix,
                           concept_ids: List[str] = Query(
                               ...,

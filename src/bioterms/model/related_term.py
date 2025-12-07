@@ -4,9 +4,10 @@ from pydantic import Field, ConfigDict
 from .base import JsonModel
 
 
-class RelatedTerms(JsonModel):
+class RelatedTerm(JsonModel):
     """
-    Data model for an expanded term in the expand terms response (v2).
+    Data model for a concept with its related concepts. This may be used in various contexts for different
+    types of relationships between concepts.
     """
 
     model_config = ConfigDict(

@@ -5,7 +5,7 @@ import pandas as pd
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
-from bioterms.model.related_term import RelatedTerms
+from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTerm
 from .graph_db import GraphDatabase
 
@@ -213,7 +213,7 @@ class MemoryGraphDatabase(GraphDatabase):
                                    concept_ids: list[str],
                                    max_depth: int | None = None,
                                    limit: int | None = None,
-                                   ) -> AsyncIterator[RelatedTerms]:
+                                   ) -> AsyncIterator[RelatedTerm]:
         """
         Trace the given terms to retrieve their ancestors up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -233,7 +233,7 @@ class MemoryGraphDatabase(GraphDatabase):
                                 concept_ids: list[str],
                                 max_depth: int | None = None,
                                 limit: int | None = None,
-                                ) -> AsyncIterator[RelatedTerms]:
+                                ) -> AsyncIterator[RelatedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -251,7 +251,7 @@ class MemoryGraphDatabase(GraphDatabase):
     async def get_replaced_terms_iter(self,
                                       prefix: ConceptPrefix,
                                       concept_ids: list[str],
-                                      ) -> AsyncIterator[RelatedTerms]:
+                                      ) -> AsyncIterator[RelatedTerm]:
         """
         Get the concepts replaced by the given concept IDs as an asynchronous iterator.
         :param prefix: The prefix of the concepts to find replacements for.
@@ -262,7 +262,7 @@ class MemoryGraphDatabase(GraphDatabase):
     async def get_replacing_terms_iter(self,
                                        prefix: ConceptPrefix,
                                        concept_ids: list[str],
-                                       ) -> AsyncIterator[RelatedTerms]:
+                                       ) -> AsyncIterator[RelatedTerm]:
         """
         Get the concepts that replace the given concept IDs as an asynchronous iterator.
         :param prefix: The prefix of the concepts to find replacing terms for.

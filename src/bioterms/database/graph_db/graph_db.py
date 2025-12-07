@@ -6,7 +6,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
-from bioterms.model.related_term import RelatedTerms
+from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
 
@@ -172,7 +172,7 @@ class GraphDatabase(ABC):
                              concept_ids: list[str],
                              max_depth: int | None = None,
                              limit: int | None = None,
-                             ) -> AsyncIterator[RelatedTerms]:
+                             ) -> AsyncIterator[RelatedTerm]:
         """
         Trace the given terms to retrieve their ancestors up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -192,7 +192,7 @@ class GraphDatabase(ABC):
                               concept_ids: list[str],
                               max_depth: int | None = None,
                               limit: int | None = None,
-                              ) -> list[RelatedTerms]:
+                              ) -> list[RelatedTerm]:
         """
         Trace the given terms to retrieve their ancestors up to the specified depth.
 
@@ -212,7 +212,7 @@ class GraphDatabase(ABC):
             limit=limit,
         )
 
-        results: list[RelatedTerms] = []
+        results: list[RelatedTerm] = []
         async for expanded_term in trace_iter:
             results.append(expanded_term)
 
@@ -224,7 +224,7 @@ class GraphDatabase(ABC):
                           concept_ids: list[str],
                           max_depth: int | None = None,
                           limit: int | None = None,
-                          ) -> AsyncIterator[RelatedTerms]:
+                          ) -> AsyncIterator[RelatedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth, and return
         an asynchronous iterator over the results.
@@ -244,7 +244,7 @@ class GraphDatabase(ABC):
                            concept_ids: list[str],
                            max_depth: int | None = None,
                            limit: int | None = None,
-                           ) -> list[RelatedTerms]:
+                           ) -> list[RelatedTerm]:
         """
         Expand the given terms to retrieve their descendants up to the specified depth.
 
@@ -264,7 +264,7 @@ class GraphDatabase(ABC):
             limit=limit,
         )
 
-        results: list[RelatedTerms] = []
+        results: list[RelatedTerm] = []
         async for expanded_term in expand_iter:
             results.append(expanded_term)
 
@@ -274,7 +274,7 @@ class GraphDatabase(ABC):
     def get_replaced_terms_iter(self,
                                 prefix: ConceptPrefix,
                                 concept_ids: list[str],
-                                ) -> AsyncIterator[RelatedTerms]:
+                                ) -> AsyncIterator[RelatedTerm]:
         """
         Get the concepts replaced by the given concept IDs as an asynchronous iterator.
         :param prefix: The prefix of the concepts to find replacements for.
@@ -285,7 +285,7 @@ class GraphDatabase(ABC):
     async def get_replaced_terms(self,
                                  prefix: ConceptPrefix,
                                  concept_ids: list[str],
-                                 ) -> list[RelatedTerms]:
+                                 ) -> list[RelatedTerm]:
         """
         Get the concepts replaced by the given concept IDs.
         :param prefix: The prefix of the concepts to find replacements for.
@@ -297,7 +297,7 @@ class GraphDatabase(ABC):
             concept_ids=concept_ids,
         )
 
-        results: list[RelatedTerms] = []
+        results: list[RelatedTerm] = []
         async for replaced_term in replaced_iter:
             results.append(replaced_term)
 
@@ -307,7 +307,7 @@ class GraphDatabase(ABC):
     def get_replacing_terms_iter(self,
                                  prefix: ConceptPrefix,
                                  concept_ids: list[str],
-                                 ) -> AsyncIterator[RelatedTerms]:
+                                 ) -> AsyncIterator[RelatedTerm]:
         """
         Get the concepts that replace the given concept IDs as an asynchronous iterator.
         :param prefix: The prefix of the concepts to find replacing terms for.
@@ -318,7 +318,7 @@ class GraphDatabase(ABC):
     async def get_replacing_terms(self,
                                   prefix: ConceptPrefix,
                                   concept_ids: list[str],
-                                  ) -> list[RelatedTerms]:
+                                  ) -> list[RelatedTerm]:
         """
         Get the concepts that replace the given concept IDs.
         :param prefix: The prefix of the concepts to find replacing terms for.
@@ -330,9 +330,57 @@ class GraphDatabase(ABC):
             concept_ids=concept_ids,
         )
 
-        results: list[RelatedTerms] = []
+        results: list[RelatedTerm] = []
         async for replacing_term in replacing_iter:
             results.append(replacing_term)
+
+        return results
+
+    @abstractmethod
+    def map_terms_iter(self,
+                       prefix: ConceptPrefix,
+                       target_prefix: ConceptPrefix,
+                       concept_ids: list[str],
+                       max_hops: int = 1,
+                       limit: int | None = None,
+                       ) -> AsyncIterator[RelatedTerm]:
+        """
+        Map terms from one vocabulary to another as an asynchronous iterator.
+        :param prefix: The source prefix.
+        :param target_prefix: The target prefix.
+        :param concept_ids: The list of concept IDs to map.
+        :param max_hops: The maximum number of mapping hops to consider.
+        :param limit: The maximum number of mapped terms to return for each concept ID.
+        :return: An asynchronous iterator yielding RelatedTerm instances.
+        """
+
+    async def map_terms(self,
+                        prefix: ConceptPrefix,
+                        target_prefix: ConceptPrefix,
+                        concept_ids: list[str],
+                        max_hops: int = 1,
+                        limit: int | None = None,
+                        ) -> list[RelatedTerm]:
+        """
+        Map terms from one vocabulary to another.
+        :param prefix: The source prefix.
+        :param target_prefix: The target prefix.
+        :param concept_ids: The list of concept IDs to map.
+        :param max_hops: The maximum number of mapping hops to consider.
+        :param limit: The maximum number of mapped terms to return for each concept ID.
+        :return: A list of RelatedTerm instances.
+        """
+        map_iter = self.map_terms_iter(
+            prefix=prefix,
+            target_prefix=target_prefix,
+            concept_ids=concept_ids,
+            max_hops=max_hops,
+            limit=limit,
+        )
+
+        results: list[RelatedTerm] = []
+        async for mapped_term in map_iter:
+            results.append(mapped_term)
 
         return results
 
