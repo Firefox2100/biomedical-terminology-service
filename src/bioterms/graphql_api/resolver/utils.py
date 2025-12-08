@@ -1,6 +1,7 @@
 from ariadne import QueryType
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.database import DocumentDatabase
 from bioterms.vocabulary import get_vocabulary_status
 from ..data_loader import DataLoader
 
@@ -8,7 +9,7 @@ from ..data_loader import DataLoader
 GRAPHQL_QUERY_TYPE = QueryType()
 
 
-def assemble_response(data: dict = None,
+def assemble_response(data: dict | list[dict] = None,
                       error_str: str = None,
                       error_code: int = None,
                       ) -> dict:
@@ -153,10 +154,31 @@ async def resolve_concept_similar_concepts(obj,
 
     return [
         {
-            'from': concept_id,
-            'to': similar_id,
+            'from': {
+                'conceptId': concept_id
+            },
+            'to': {
+                'conceptId': similar_id
+            },
             'score': score,
         } for similar_id, score in similar_concepts
+    ]
+
+
+async def resolve_concept_annotated_concepts(obj,
+                                             info,
+                                             source_prefix: ConceptPrefix,
+                                             target_prefix: ConceptPrefix,
+                                             ):
+    concept_id = obj['conceptId']
+    data_loader: DataLoader = info.context['data_loader']
+    concept_loader = data_loader.get_concept_loader(source_prefix)
+    annotation_loader = concept_loader.get_mapping_loader(target_prefix)
+
+    mapped_concepts = await annotation_loader.load(concept_id)
+
+    return [
+        {'conceptId': mapped_id} for mapped_id in mapped_concepts
     ]
 
 
@@ -165,7 +187,6 @@ async def resolve_get_concept(info,
                               prefix: ConceptPrefix,
                               ) -> dict:
     data_loader: DataLoader = info.context['data_loader']
-
     concept_loader = data_loader.get_concept_loader(prefix)
     concept = await concept_loader.id.load(concept_id)
 
@@ -176,3 +197,22 @@ async def resolve_get_concept(info,
         )
 
     return assemble_response(concept)
+
+
+async def resolve_auto_complete(info,
+                                query: str,
+                                prefix: ConceptPrefix,
+                                ) -> dict:
+    # Auto-completion request cannot be repeated within the same GraphQL request,
+    # and does not link to term identity, so no need for data loader
+    doc_db: DocumentDatabase = info.context['doc_db']
+    concepts = await doc_db.auto_complete_search(
+        prefix=prefix,
+        query=query,
+    )
+
+    results = [
+        concept.model_dump(exclude_none=True) for concept in concepts
+    ]
+
+    return assemble_response(results)

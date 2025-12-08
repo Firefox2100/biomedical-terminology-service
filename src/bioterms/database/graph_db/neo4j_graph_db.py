@@ -809,37 +809,17 @@ class Neo4jGraphDatabase(GraphDatabase):
                 WITH
                     n,
                     m,
-                    [
-                        k IN keys(props)
-                        WHERE props[k] >= threshold
-                    ] AS valid_keys
-                WHERE size(valid_keys) > 0
+                    [k IN keys(props) WHERE props[k] >= threshold | props[k]] AS scores
+                WHERE size(scores) > 0
                 WITH
                     n,
                     m,
-                    apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
-                    apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
-                ORDER BY n.id, max_score DESC
-                WITH
-                    n,
-                    collect({
-                        id: m.id,
-                        similarity_scores: similarity_scores
-                    }) AS sims
-                UNWIND sims AS sim
-                WITH
-                    n,
-                    sim.id AS similar_id,
-                    sim.similarity_scores AS similarity_scores
-                WITH
-                    n,
-                    similar_id,
-                    apoc.coll.max([score IN values(similarity_scores) | score]) AS highest_score
+                    apoc.coll.max(scores) AS highest_score
                 ORDER BY n.id, highest_score DESC
                 WITH
                     n,
                     collect({
-                        id: similar_id,
+                        id: m.id,
                         highest_score: highest_score
                     }) AS similar_concepts
                 RETURN

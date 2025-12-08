@@ -151,6 +151,33 @@ class ConceptLoaderBySimilarity(DataLoader[tuple[str, float], list[tuple[str, fl
         return sorted_similar
 
 
+class ConceptLoaderByAnnotatedConcepts(DataLoader[str, list[str]]):
+    def __init__(self,
+                 source_prefix: ConceptPrefix,
+                 target_prefix: ConceptPrefix,
+                 graph_db: GraphDatabase,
+                 ):
+        super().__init__()
+
+        self._source_prefix = source_prefix
+        self._target_prefix = target_prefix
+        self._graph_db = graph_db
+
+    async def batch_load_fn(self,
+                            concept_ids: list[str],
+                            ) -> list[list[str]]:
+        mapped_concepts = await self._graph_db.map_terms(
+            prefix=self._source_prefix,
+            target_prefix=self._target_prefix,
+            concept_ids=concept_ids,
+        )
+
+        mapped_map = {item.concept_id: item.related_concepts for item in mapped_concepts}
+        sorted_mapped = [mapped_map.get(concept_id, []) for concept_id in concept_ids]
+
+        return sorted_mapped
+
+
 class ConceptLoader:
     def __init__(self,
                  prefix: ConceptPrefix,
@@ -167,6 +194,7 @@ class ConceptLoader:
         self._replaced_loader = None
         self._replacement_loader = None
         self._similarity_loader = None
+        self._mapping_loaders = {}
 
     @property
     def id(self) -> ConceptLoaderById:
@@ -227,3 +255,15 @@ class ConceptLoader:
             )
 
         return self._similarity_loader
+
+    def get_mapping_loader(self,
+                           target_prefix: ConceptPrefix,
+                           ) -> ConceptLoaderByAnnotatedConcepts:
+        if target_prefix not in self._mapping_loaders:
+            self._mapping_loaders[target_prefix] = ConceptLoaderByAnnotatedConcepts(
+                source_prefix=self._prefix,
+                target_prefix=target_prefix,
+                graph_db=self._graph_db,
+            )
+
+        return self._mapping_loaders[target_prefix]
