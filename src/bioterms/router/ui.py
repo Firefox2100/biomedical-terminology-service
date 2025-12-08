@@ -15,9 +15,11 @@ from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
+from bioterms.task.cache import rebuild_cache_task
 from bioterms.model.user import UserApiKey
 from bioterms.model.annotation_status import AnnotationStatus
-from .utils import TEMPLATES, build_nav_links, sanitise_next_url, login_required, build_structured_data
+from .utils import TEMPLATES, build_nav_links, sanitise_next_url, login_optional, login_required, \
+    build_structured_data
 
 
 ui_router = APIRouter(
@@ -306,6 +308,7 @@ async def delete_api_key(key_id: str,
 async def list_vocabularies(request: Request,
                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                            username: str | None = Depends(login_optional),
                             ):
     """
     List all available vocabularies.
@@ -313,6 +316,7 @@ async def list_vocabularies(request: Request,
     :param request: Request object.
     :param doc_db: Document database instance.
     :param graph_db: Graph database instance.
+    :param username: The username of the logged-in user, if any.
     :return: An HTML response with the list of vocabularies.
     """
     try:
@@ -370,6 +374,7 @@ async def list_vocabularies(request: Request,
                 'vocabularies': vocab_statuses,
                 'nav_links': nav_links,
                 'structured_data': structured_data,
+                'is_admin': username is not None,
             }
         )
     except Exception as e:
@@ -520,3 +525,15 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@ui_router.post('/rebuild-cache', status_code=status.HTTP_202_ACCEPTED)
+async def rebuild_cache_endpoint(_: str = Depends(login_required),
+                                 ):
+    """
+    Trigger a cache rebuild task.
+    \f
+    :param _: Authentication dependency to ensure the user is logged in.
+    :return: A redirect response to the home page.
+    """
+    rebuild_cache_task.delay()

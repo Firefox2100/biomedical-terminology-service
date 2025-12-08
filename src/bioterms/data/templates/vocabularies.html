@@ -7,6 +7,17 @@
         Supported vocabularies and their statistics.
       </p>
     </div>
+
+    <div>
+      {% if is_admin %}
+        <button id="rebuild-cache-btn"
+                class="btn btn-sm btn-warning ms-2"
+                data-endpoint="{{ request.url_for('rebuild_cache_endpoint') }}"
+                data-csrf="{{ request.scope.csrftoken() }}">
+          Rebuild Cache
+        </button>
+      {% endif %}
+    </div>
   </div>
 
   {% if vocabularies and vocabularies|length > 0 %}
@@ -50,4 +61,6 @@
       No vocabularies supported. This is likely an error. Please contact the administrator.
     </div>
   {% endif %}
+
+  <script src="{{ request.url_for('static', path='js/vocabularies.js') }}"></script>
 {% endblock %}

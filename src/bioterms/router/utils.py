@@ -214,6 +214,28 @@ def sanitise_next_url(next_url: str | None = None,
     return clean
 
 
+async def login_optional(request: Request,
+                         db: DocumentDatabase = Depends(get_active_doc_db),
+                         ) -> str | None:
+    """
+    A dependency to optionally get the logged-in user.
+    :param request: The FastAPI request object.
+    :param db: The DocumentDatabase instance.
+    :return: The username of the logged-in user, or None if not logged in.
+    """
+    username = request.session.get('username')
+
+    if username:
+        user = await db.users.get(username)
+        if not user:
+            request.session['username'] = None
+            return None
+
+        return username
+
+    return None
+
+
 async def login_required(request: Request,
                          db: DocumentDatabase = Depends(get_active_doc_db),
                          ) -> str:
