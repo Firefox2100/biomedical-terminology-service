@@ -1,5 +1,6 @@
 enum ConceptPrefix {
     hpo
+    ordo
 }
 
 enum ConceptStatus {

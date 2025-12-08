@@ -1,0 +1,41 @@
+type Ctv3Concept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    synonyms: [String!]
+    status: ConceptStatus!
+
+    replaces: [Ctv3Concept!]!
+    replacedBy: [Ctv3Concept!]!
+
+    children: [Ctv3Concept!]!
+    parents: [Ctv3Concept!]!
+
+    similarConcepts(threshold: Float): [SimilarCtv3Concept!]!
+}
+
+type SimilarCtv3Concept implements SimilarConcept {
+    from: Ctv3Concept!
+    to: Ctv3Concept!
+    score: Float!
+}
+
+type Ctv3ConceptResponse {
+    error: QueryError
+    data: Ctv3Concept
+}
+
+type Ctv3ConceptListResponse {
+    error: QueryError
+    data: [Ctv3Concept]
+}
+
+type Ctv3Query {
+    ctv3Concept(conceptId: String!): Ctv3ConceptResponse
+    autoComplete(query: String!, limit: Int): Ctv3ConceptListResponse
+}
+
+extend type Query {
+    ctv3: Ctv3Query
+}
