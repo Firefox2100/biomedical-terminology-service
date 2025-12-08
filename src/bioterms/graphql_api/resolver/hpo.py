@@ -2,7 +2,8 @@ from ariadne import ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
-    resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, resolve_get_concept
+    resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, resolve_get_concept, \
+    resolve_concept_similar_concepts
 
 
 HPO_CONCEPT = ObjectType('HpoConcept')
@@ -55,6 +56,19 @@ async def resolve_hpo_concept_parents(obj, info):
         obj=obj,
         info=info,
         prefix=ConceptPrefix.HPO,
+    )
+
+
+@HPO_CONCEPT.field('similarConcepts')
+async def resolve_hpo_concept_similar_concepts(obj,
+                                               info,
+                                               threshold: float = 1.0,
+                                               ):
+    return await resolve_concept_similar_concepts(
+        obj=obj,
+        info=info,
+        prefix=ConceptPrefix.HPO,
+        threshold=threshold,
     )
 
 

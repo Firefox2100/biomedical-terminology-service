@@ -84,15 +84,15 @@ async def map_terms_v1(prefix: ConceptPrefix,
         prefix=prefix,
         target_prefix=target_prefix,
         concept_ids=requested_terms.term_ids,
-        limit=result_threshold,
+        limit=result_threshold or None,
     )
 
     v1_mapped_terms = []
     async for mapped_term in map_iter:
         v1_mapped_terms.append(
             MappedTermV1(
-                termId=mapped_term.term_id,
-                mappedIds=mapped_term.mapped_concepts,
+                termId=mapped_term.concept_id,
+                mappedIds=mapped_term.related_concepts,
                 targetType=target_prefix,
             )
         )

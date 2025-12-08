@@ -7,7 +7,7 @@ from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, Similarit
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.related_term import RelatedTerm
-from bioterms.model.similar_term import SimilarTerm
+from bioterms.model.similar_term import SimilarTerm, SimilarTermAggregate
 from bioterms.model.translated_term import TranslatedTerm
 
 
@@ -381,6 +381,49 @@ class GraphDatabase(ABC):
         results: list[RelatedTerm] = []
         async for mapped_term in map_iter:
             results.append(mapped_term)
+
+        return results
+
+    @abstractmethod
+    def get_similar_terms_aggregate_iter(self,
+                                         prefix: ConceptPrefix,
+                                         similarity_queries: list[tuple[str, float]],
+                                         ) -> AsyncIterator[SimilarTermAggregate]:
+        """
+        Get similar terms for a list of concept IDs as an asynchronous iterator.
+
+        This method is designed for the GraphQL query, where each concept ID may have a
+        different similarity threshold, but is always within the same vocabulary prefix.
+        It only returns the highest similarity score for each similar term, regardless
+        of the corpus or method used to calculate the similarity.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param similarity_queries: A tuple containing the concept ID and the similarity threshold.
+        :return: An asynchronous iterator yielding SimilarTerm instances.
+        """
+
+    async def get_similar_terms_aggregate(self,
+                                          prefix: ConceptPrefix,
+                                          similarity_queries: list[tuple[str, float]],
+                                          ) -> list[SimilarTermAggregate]:
+        """
+        Get similar terms for a list of concept IDs.
+
+        This method is designed for the GraphQL query, where each concept ID may have a
+        different similarity threshold, but is always within the same vocabulary prefix.
+        It only returns the highest similarity score for each similar term, regardless
+        of the corpus or method used to calculate the similarity.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param similarity_queries: A tuple containing the concept ID and the similarity threshold.
+        :return: A list of SimilarTerm instances.
+        """
+        similar_iter = self.get_similar_terms_aggregate_iter(
+            prefix=prefix,
+            similarity_queries=similarity_queries,
+        )
+
+        results: list[SimilarTermAggregate] = []
+        async for similar_term in similar_iter:
+            results.append(similar_term)
 
         return results
 

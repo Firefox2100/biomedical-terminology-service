@@ -15,12 +15,12 @@ class Cache(ABC):
     @abstractmethod
     async def save_vocabulary_status(self,
                                      status: VocabularyStatus,
-                                     ttl: int = 3600,
+                                     ttl: int = 86400,
                                      ):
         """
         Store the vocabulary status in the cache.
         :param status: The vocabulary status to store.
-        :param ttl: Time to live in seconds. Defaults to 3600 seconds (1 hour). If set to 0,
+        :param ttl: Time to live in seconds. Defaults to 86400 seconds (1 day). If set to 0,
             the status will be stored indefinitely, and must be manually invalidated.
         """
 

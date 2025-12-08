@@ -127,6 +127,30 @@ class ConceptLoaderByReplaced(DataLoader[str, list[str]]):
         return sorted_replaced
 
 
+class ConceptLoaderBySimilarity(DataLoader[tuple[str, float], list[tuple[str, float]]]):
+    def __init__(self,
+                 prefix: ConceptPrefix,
+                 graph_db: GraphDatabase,
+                 ):
+        super().__init__()
+
+        self._prefix = prefix
+        self._graph_db = graph_db
+
+    async def batch_load_fn(self,
+                            queries: list[tuple[str, float]],
+                            ) -> list[list[tuple[str, float]]]:
+        similar_concepts = await self._graph_db.get_similar_terms_aggregate(
+            prefix=self._prefix,
+            similarity_queries=queries,
+        )
+
+        similar_map = {item.concept_id: item.similar_concepts for item in similar_concepts}
+        sorted_similar = [similar_map.get(query[0], []) for query in queries]
+
+        return sorted_similar
+
+
 class ConceptLoader:
     def __init__(self,
                  prefix: ConceptPrefix,
@@ -142,6 +166,7 @@ class ConceptLoader:
         self._parents_loader = None
         self._replaced_loader = None
         self._replacement_loader = None
+        self._similarity_loader = None
 
     @property
     def id(self) -> ConceptLoaderById:
@@ -192,3 +217,13 @@ class ConceptLoader:
             )
 
         return self._replacement_loader
+
+    @property
+    def similar(self) -> ConceptLoaderBySimilarity:
+        if self._similarity_loader is None:
+            self._similarity_loader = ConceptLoaderBySimilarity(
+                prefix=self._prefix,
+                graph_db=self._graph_db,
+            )
+
+        return self._similarity_loader

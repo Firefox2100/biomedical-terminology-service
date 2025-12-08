@@ -50,7 +50,7 @@ class SimilarTermByPrefix(JsonModel):
 
 class SimilarTerm(JsonModel):
     """
-    Data model for an expanded term in the expand terms response (v2).
+    Data model for a similar term.
     """
 
     model_config = ConfigDict(
@@ -67,4 +67,26 @@ class SimilarTerm(JsonModel):
         ...,
         description='List of similar terms grouped by concept prefix.',
         alias='similarGroups',
+    )
+
+
+class SimilarTermAggregate(JsonModel):
+    """
+    Data model for a similar term, but in aggregated form for GraphQL responses.
+    """
+
+    model_config = ConfigDict(
+        extra='forbid',
+        serialize_by_alias=True,
+    )
+
+    concept_id: str = Field(
+        ...,
+        description='The concept ID of the expanded term.',
+        alias='conceptId',
+    )
+    similar_concepts: List[tuple[str, float]] = Field(
+        ...,
+        description='List of similar terms as tuples of (concept ID, similarity score).',
+        alias='similarConcepts',
     )

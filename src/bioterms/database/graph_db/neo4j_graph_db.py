@@ -9,7 +9,8 @@ from bioterms.etc.utils import batch_iterable, verbose_print
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.related_term import RelatedTerm
-from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm
+from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm, \
+    SimilarTermAggregate
 from bioterms.model.translated_term import TranslatedTerm
 from .graph_db import GraphDatabase
 
@@ -742,19 +743,26 @@ class Neo4jGraphDatabase(GraphDatabase):
                 MATCH (src:Concept {prefix: $prefix})
                 WHERE src.id IN $concept_ids
                 CALL {
-                    MATCH p = (src)
-                        -[r:annotated_with|has_symbol|exact|broad|narrow|related*1..$max_hops]-
-                        (tgt:Concept {prefix: $target_prefix})
-
-                    WHERE ALL(rel IN relationships(p) WHERE startNode(rel).prefix <> endNode(rel).prefix)
-
-                    WITH src, tgt, p, [n in nodes(p) | n.prefix] AS prefixes
+                    WITH src
+                    CALL apoc.path.expandConfig(
+                        src,
+                        {
+                            relationshipFilter: 'annotated_with|has_symbol|exact|broad|narrow|related',
+                            labelFilter: '+Concept',
+                            minLevel: 1,
+                            maxLevel: $max_hops,
+                            bfs: true,
+                            uniqueness: 'NODE_GLOBAL'
+                        }
+                    ) YIELD path
+                    WITH src, path, last(nodes(path)) AS tgt, nodes(path) AS ns
+                    WHERE tgt.prefix = $target_prefix
+                        AND ALL(rel IN relationships(path) WHERE startNode(rel).prefix <> endNode(rel).prefix)
+                    WITH src, tgt, [n IN ns | n.prefix] AS prefixes, path
                     WHERE size(prefixes) = size(apoc.coll.toSet(prefixes))
-                        AND ALL(n IN nodes(p)[1..-2] WHERE n.prefix <> src.prefix AND n.prefix <> $target_prefix)
-                    
-                    WITH src, tgt, p
-                    ORDER BY length(p) ASC
-                    
+                        AND ALL(n IN nodes(path)[1..-2] WHERE n.prefix <> src.prefix AND n.prefix <> $target_prefix)
+                    WITH src, tgt, path
+                    ORDER BY length(path) ASC
                     LIMIT COALESCE($limit, 1000000)
                     RETURN src.id AS source_id, collect(DISTINCT tgt.id) AS mapped_terms
                 }
@@ -774,6 +782,96 @@ class Neo4jGraphDatabase(GraphDatabase):
                 yield RelatedTerm(
                     conceptId=record['concept_id'],
                     relatedConcepts=list(set(record['mapped_terms'])),
+                )
+
+    async def get_similar_terms_aggregate_iter(self,
+                                               prefix: ConceptPrefix,
+                                               similarity_queries: list[tuple[str, float]],
+                                               ) -> AsyncIterator[SimilarTermAggregate]:
+        """
+        Get similar terms for a list of concept IDs as an asynchronous iterator.
+
+        This method is designed for the GraphQL query, where each concept ID may have a
+        different similarity threshold, but is always within the same vocabulary prefix.
+        It only returns the highest similarity score for each similar term, regardless
+        of the corpus or method used to calculate the similarity.
+        :param prefix: The prefix of the concepts to find similar terms for.
+        :param similarity_queries: A tuple containing the concept ID and the similarity threshold.
+        :return: An asynchronous iterator yielding SimilarTerm instances.
+        """
+        async with self._client.session() as session:
+            result = await self._execute_query_with_retry(
+                query="""
+                UNWIND $similarity_queries AS sim_query
+                MATCH (n:Concept {prefix: $prefix, id: sim_query.concept_id})
+                MATCH (n)-[r:similar_to]-(m:Concept {prefix: $prefix})
+                WITH n, m, apoc.convert.toMap(r) AS props, sim_query.threshold AS threshold
+                WITH
+                    n,
+                    m,
+                    [
+                        k IN keys(props)
+                        WHERE props[k] >= threshold
+                    ] AS valid_keys
+                WHERE size(valid_keys) > 0
+                WITH
+                    n,
+                    m,
+                    apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
+                    apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
+                ORDER BY n.id, max_score DESC
+                WITH
+                    n,
+                    collect({
+                        id: m.id,
+                        similarity_scores: similarity_scores
+                    }) AS sims
+                UNWIND sims AS sim
+                WITH
+                    n,
+                    sim.id AS similar_id,
+                    sim.similarity_scores AS similarity_scores
+                WITH
+                    n,
+                    similar_id,
+                    apoc.coll.max([score IN values(similarity_scores) | score]) AS highest_score
+                ORDER BY n.id, highest_score DESC
+                WITH
+                    n,
+                    collect({
+                        id: similar_id,
+                        highest_score: highest_score
+                    }) AS similar_concepts
+                RETURN
+                    n.id AS concept_id,
+                    similar_concepts AS similar_concepts
+                ORDER BY concept_id
+                """,
+                session=session,
+                parameters={
+                    'prefix': prefix.value,
+                    'similarity_queries': [
+                        {
+                            'concept_id': sim_id,
+                            'threshold': threshold,
+                        }
+                        for sim_id, threshold in similarity_queries
+                    ],
+                }
+            )
+
+            async for record in result:
+                concept_id: str = record['concept_id']
+                similar_concepts_data: list[dict] = record['similar_concepts']
+
+                similar_concepts: list[tuple[str, float]] = [
+                    (sim['id'], sim['highest_score'])
+                    for sim in similar_concepts_data
+                ]
+
+                yield SimilarTermAggregate(
+                    conceptId=concept_id,
+                    similarConcepts=similar_concepts,
                 )
 
     async def get_similar_terms_iter(self,

@@ -6,6 +6,7 @@ enum ConceptPrefix {
 enum ConceptStatus {
     active
     deprecated
+    unknown
 }
 
 interface SimilarConcept {

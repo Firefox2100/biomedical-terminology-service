@@ -2,7 +2,8 @@ from ariadne import ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
-    resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, resolve_get_concept
+    resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, resolve_get_concept, \
+    resolve_concept_similar_concepts
 
 
 ORDO_CONCEPT = ObjectType('OrdoConcept')
@@ -58,7 +59,20 @@ async def resolve_ordo_concept_parents(obj, info):
     )
 
 
-@ORDO_CONCEPT.field('ordoConcept')
+@ORDO_CONCEPT.field('similarConcepts')
+async def resolve_ordo_concept_similar_concepts(obj,
+                                                info,
+                                                threshold: float = 1.0,
+                                                ):
+    return await resolve_concept_similar_concepts(
+        obj=obj,
+        info=info,
+        prefix=ConceptPrefix.ORDO,
+        threshold=threshold,
+    )
+
+
+@ORDO_QUERY.field('ordoConcept')
 async def resolve_get_ordo_concept(_, info, concept_id: str) -> dict:
     return await resolve_get_concept(
         info=info,

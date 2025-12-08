@@ -69,7 +69,13 @@ async def resolve_concept_info_fields(obj,
     concept = await concept_loader.id.load(concept_id)
 
     if not concept:
-        raise ValueError(f'Concept not found for ID: {concept_id} in {prefix.value}')
+        if field_name == 'prefix':
+            return prefix.value
+
+        if field_name == 'status':
+            return 'unknown'
+
+        return None
 
     return concept[field_name]
 
@@ -131,6 +137,26 @@ async def resolve_concept_parents(obj,
 
     return [
         {'conceptId': parent_id} for parent_id in parents_ids
+    ]
+
+
+async def resolve_concept_similar_concepts(obj,
+                                           info,
+                                           prefix: ConceptPrefix,
+                                           threshold: float = 1.0,
+                                           ):
+    concept_id = obj['conceptId']
+    data_loader: DataLoader = info.context['data_loader']
+
+    concept_loader = data_loader.get_concept_loader(prefix)
+    similar_concepts = await concept_loader.similar.load((concept_id, threshold))
+
+    return [
+        {
+            'from': concept_id,
+            'to': similar_id,
+            'score': score,
+        } for similar_id, score in similar_concepts
     ]
 
 
