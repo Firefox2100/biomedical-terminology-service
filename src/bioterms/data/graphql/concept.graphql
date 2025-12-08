@@ -1,6 +1,14 @@
 enum ConceptPrefix {
+    ctv3
+    ensembl
+    gene
+    hgnc
     hpo
+    ncit
+    omim
     ordo
+    reactome
+    snomed
 }
 
 enum ConceptStatus {
@@ -19,11 +27,7 @@ interface Concept {
     prefix: ConceptPrefix!
     conceptId: String
     label: String
-    definition: String
     status: ConceptStatus!
-
-    replaces: [Concept!]!
-    replacedBy: [Concept!]!
 
     similarConcepts(threshold: Float): [SimilarConcept!]!
 }

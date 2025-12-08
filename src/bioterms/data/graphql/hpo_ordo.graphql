@@ -1,0 +1,7 @@
+extend type HpoConcept {
+    annotatedOrdo: [OrdoConcept!]!
+}
+
+extend type OrdoConcept {
+    annotatedHpo: [HpoConcept!]!
+}

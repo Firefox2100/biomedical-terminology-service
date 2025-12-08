@@ -1,0 +1,37 @@
+interface GeneConcept {
+    symbols: [HgncSymbolConcept!]!
+}
+
+type HgncSymbolConcept implements Concept{
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    status: ConceptStatus!
+
+    similarConcepts(threshold: Float): [SimilarHgncSymbolConcept!]!
+}
+
+type SimilarHgncSymbolConcept implements SimilarConcept {
+    from: HgncSymbolConcept!
+    to: HgncSymbolConcept!
+    score: Float!
+}
+
+type HgncSymbolConceptResponse {
+    error: QueryError
+    data: HgncSymbolConcept
+}
+
+type HgncSymbolConceptListResponse {
+    error: QueryError
+    data: [HgncSymbolConcept]
+}
+
+type HgncSymbolQuery {
+    geneConcept(conceptId: String!): HgncSymbolConceptResponse
+    autoComplete(query: String!, limit: Int): HgncSymbolConceptListResponse
+}
+
+extend type Query {
+    gene: HgncSymbolQuery
+}

@@ -1,0 +1,40 @@
+type OmimConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    synonyms: [String!]
+    status: ConceptStatus!
+
+    replaces: [OmimConcept!]!
+    replacedBy: [OmimConcept!]!
+
+    children: [OmimConcept!]!
+    parents: [OmimConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarOmimConcept!]!
+}
+
+type SimilarOmimConcept implements SimilarConcept {
+    from: OmimConcept!
+    to: OmimConcept!
+    score: Float!
+}
+
+type OmimConceptResponse {
+    error: QueryError
+    data: OmimConcept
+}
+
+type OmimConceptListResponse {
+    error: QueryError
+    data: [OmimConcept]
+}
+
+type OmimQuery {
+    omimConcept(conceptId: String!): OmimConceptResponse
+    autoComplete(query: String!, limit: Int): OmimConceptListResponse
+}
+
+extend type Query {
+    omim: OmimQuery
+}

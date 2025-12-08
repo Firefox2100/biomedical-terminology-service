@@ -1,0 +1,42 @@
+type SnomedConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    synonyms: [String!]
+    fullyDefined: Boolean
+    status: ConceptStatus!
+
+    replaces: [SnomedConcept!]!
+    replacedBy: [SnomedConcept!]!
+
+    children: [SnomedConcept!]!
+    parents: [SnomedConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarSnomedConcept!]!
+}
+
+type SimilarSnomedConcept implements SimilarConcept {
+    from: SnomedConcept!
+    to: SnomedConcept!
+    score: Float!
+}
+
+type SnomedConceptResponse {
+    error: QueryError
+    data: SnomedConcept
+}
+
+type SnomedConceptListResponse {
+    error: QueryError
+    data: [SnomedConcept]
+}
+
+type SnomedQuery {
+    snomedConcept(conceptId: String!): SnomedConceptResponse
+    autoComplete(query: String!, limit: Int): SnomedConceptListResponse
+}
+
+extend type Query {
+    snomed: SnomedQuery
+}

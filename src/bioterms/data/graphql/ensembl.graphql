@@ -1,0 +1,53 @@
+enum EnsemblConceptType {
+    gene
+    transcript
+    exon
+    protein
+}
+
+type EnsemblConcept implements Concept & GeneConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    conceptType: EnsemblConceptType!
+    label: String
+    bioType: String
+    start: Int
+    end: Int
+    sequence: String
+    status: ConceptStatus!
+
+    symbols: [HgncSymbolConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
+
+    annotatedHpo: [HpoConcept!]!
+}
+
+extend type HgncSymbolConcept {
+    ensemblConcepts: [EnsemblConcept!]!
+}
+
+type SimilarEnsemblConcept implements SimilarConcept {
+    from: EnsemblConcept!
+    to: EnsemblConcept!
+    score: Float!
+}
+
+type EnsemblConceptResponse {
+    error: QueryError
+    data: EnsemblConcept
+}
+
+type EnsemblConceptListResponse {
+    error: QueryError
+    data: [EnsemblConcept]
+}
+
+type EnsemblQuery {
+    ensemblConcept(conceptId: String!): EnsemblConceptResponse
+    autoComplete(query: String!, limit: Int): EnsemblConceptListResponse
+}
+
+extend type Query {
+    ensembl: EnsemblQuery
+}

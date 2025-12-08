@@ -1,0 +1,81 @@
+interface ReactomeConcept implements Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    inferred: Boolean
+    status: ConceptStatus!
+
+    similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
+}
+
+type ReactomePathway implements ReactomeConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    inferred: Boolean
+    status: ConceptStatus!
+
+    subPathways: [ReactomePathway!]!
+    superPathways: [ReactomePathway!]!
+
+    similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
+}
+
+type ReactomeReaction implements ReactomeConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    synonyms: [String!]
+    inferred: Boolean
+    status: ConceptStatus!
+
+    precedingReactions: [ReactomeReaction!]!
+    subsequentReactions: [ReactomeReaction!]!
+
+    pathways: [ReactomePathway!]!
+
+    inputs: [ReactomeGene!]!
+    outputs: [ReactomeGene!]!
+
+    similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
+}
+
+type ReactomeGene implements ReactomeConcept & Concept & GeneConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    synonyms: [String!]
+    inferred: Boolean
+    status: ConceptStatus!
+
+    reactions: [ReactomeReaction!]!
+
+    symbols: [HgncSymbolConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
+}
+
+type SimilarReactomeConcept implements SimilarConcept {
+    from: ReactomeConcept!
+    to: ReactomeConcept!
+    score: Float!
+}
+
+type ReactomeConceptResponse {
+    error: QueryError
+    data: ReactomeConcept
+}
+
+type ReactomeConceptListResponse {
+    error: QueryError
+    data: [ReactomeConcept]
+}
+
+type ReactomeQuery {
+    reactomeConcept(conceptId: String!): ReactomeConceptResponse
+    autoComplete(query: String!, limit: Int): ReactomeConceptListResponse
+}
+
+extend type Query {
+    reactome: ReactomeQuery
+}

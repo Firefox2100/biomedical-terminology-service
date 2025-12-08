@@ -202,6 +202,7 @@ async def resolve_get_concept(info,
 async def resolve_auto_complete(info,
                                 query: str,
                                 prefix: ConceptPrefix,
+                                limit: int = None,
                                 ) -> dict:
     # Auto-completion request cannot be repeated within the same GraphQL request,
     # and does not link to term identity, so no need for data loader
@@ -209,6 +210,7 @@ async def resolve_auto_complete(info,
     concepts = await doc_db.auto_complete_search(
         prefix=prefix,
         query=query,
+        limit=limit,
     )
 
     results = [

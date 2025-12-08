@@ -1,0 +1,44 @@
+type HgncConcept implements Concept & GeneConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    synonyms: [String!]
+    status: ConceptStatus!
+
+    replaces: [HgncConcept!]!
+    replacedBy: [HgncConcept!]!
+
+    symbols: [HgncSymbolConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarHgncConcept!]!
+}
+
+extend type HgncSymbolConcept {
+    hgncConcepts: [HgncConcept!]!
+}
+
+type SimilarHgncConcept implements SimilarConcept {
+    from: HgncConcept!
+    to: HgncConcept!
+    score: Float!
+}
+
+type HgncConceptResponse {
+    error: QueryError
+    data: HgncConcept
+}
+
+type HgncConceptListResponse {
+    error: QueryError
+    data: [HgncConcept]
+}
+
+type HgncQuery {
+    hgncConcept(conceptId: String!): HgncConceptResponse
+    autoComplete(query: String!, limit: Int): HgncConceptListResponse
+}
+
+extend type Query {
+    hgnc: HgncQuery
+}

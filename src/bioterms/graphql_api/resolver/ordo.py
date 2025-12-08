@@ -3,7 +3,7 @@ from ariadne import ObjectType
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
     resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, resolve_get_concept, \
-    resolve_concept_similar_concepts, resolve_concept_annotated_concepts, resolve_auto_complete
+    resolve_concept_similar_concepts, resolve_auto_complete
 
 
 ORDO_CONCEPT = ObjectType('OrdoConcept')
@@ -72,16 +72,6 @@ async def resolve_ordo_concept_similar_concepts(obj,
     )
 
 
-@ORDO_CONCEPT.field('annotatedHpo')
-async def resolve_ordo_concept_annotated_hpo(obj, info):
-    return await resolve_concept_annotated_concepts(
-        obj=obj,
-        info=info,
-        source_prefix=ConceptPrefix.ORDO,
-        target_prefix=ConceptPrefix.HPO,
-    )
-
-
 @ORDO_QUERY.field('ordoConcept')
 async def resolve_get_ordo_concept(_, info, concept_id: str) -> dict:
     return await resolve_get_concept(
@@ -92,11 +82,12 @@ async def resolve_get_ordo_concept(_, info, concept_id: str) -> dict:
 
 
 @ORDO_QUERY.field('autoComplete')
-async def resolve_ordo_autocomplete(_, info, query: str) -> dict:
+async def resolve_ordo_autocomplete(_, info, query: str, limit: int = None) -> dict:
     return await resolve_auto_complete(
         info=info,
         query=query,
         prefix=ConceptPrefix.ORDO,
+        limit=limit,
     )
 
 

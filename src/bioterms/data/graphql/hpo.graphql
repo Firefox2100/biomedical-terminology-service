@@ -13,8 +13,6 @@ type HpoConcept implements Concept & OntologyConcept {
     parents: [HpoConcept!]!
 
     similarConcepts(threshold: Float): [SimilarHpoConcept!]!
-
-    annotatedOrdo: [OrdoConcept!]!
 }
 
 type SimilarHpoConcept implements SimilarConcept {

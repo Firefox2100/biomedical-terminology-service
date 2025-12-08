@@ -16,5 +16,15 @@ def load_schema_file(file_name: str) -> str:
 
 CONCEPT_SCHEMA = load_schema_file('concept')
 
+CTV3_SCHEMA = load_schema_file('ctv3')
+ENSEMBL_SCHEMA = load_schema_file('ensembl')
+GENE_SCHEMA = load_schema_file('gene')
+HGNC_SCHEMA = load_schema_file('hgnc')
 HPO_SCHEMA = load_schema_file('hpo')
+NCIT_SCHEMA = load_schema_file('ncit')
+OMIM_SCHEMA = load_schema_file('omim')
 ORDO_SCHEMA = load_schema_file('ordo')
+REACTOME_SCHEMA = load_schema_file('reactome')
+SNOMED_SCHEMA = load_schema_file('snomed')
+
+HPO_ORDO_SCHEMA = load_schema_file('hpo_ordo')

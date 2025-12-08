@@ -1,5 +1,5 @@
 from typing import Any
-from ariadne import make_executable_schema
+from ariadne import ObjectType, make_executable_schema
 from ariadne.asgi import GraphQL
 from ariadne.graphql import GraphQLSchema
 from ariadne.explorer import ExplorerGraphiQL
@@ -9,6 +9,9 @@ from fastapi import Request
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
+from bioterms.annotation import get_annotation_status
+from bioterms.model.vocabulary_status import VocabularyStatus
+from bioterms.model.annotation_status import AnnotationStatus
 from .data_loader import DataLoader
 
 
@@ -68,23 +71,116 @@ async def create_graphql_app() -> GraphQL:
     graph_db = get_active_graph_db()
 
     graphql_schemas = []
-    graphql_objects = []
+    graphql_objects: dict[ConceptPrefix, ObjectType | list[ObjectType]] = {}
     graphql_queries = []
 
-    if (await get_vocabulary_status(ConceptPrefix.HPO, cache, doc_db, graph_db)).loaded:
+    vocabulary_statuses: dict[ConceptPrefix, VocabularyStatus] = {
+        prefix: await get_vocabulary_status(prefix, cache, doc_db, graph_db)
+        for prefix in ConceptPrefix
+    }
+    supported_annotations = [
+        (ConceptPrefix.CTV3, ConceptPrefix.SNOMED),
+        (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO),
+        (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT),
+        (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM),
+        (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO),
+        (ConceptPrefix.HPO, ConceptPrefix.ORDO),
+        (ConceptPrefix.OMIM, ConceptPrefix.ORDO),
+        (ConceptPrefix.ORDO, ConceptPrefix.SNOMED),
+    ]
+    annotation_statuses: dict[tuple[ConceptPrefix, ConceptPrefix], AnnotationStatus] = {
+        (prefix_1, prefix_2): await get_annotation_status(
+            prefix_1=prefix_1,
+            prefix_2=prefix_2,
+            cache=cache,
+            graph_db=graph_db,
+        )
+        for prefix_1, prefix_2 in supported_annotations
+    }
+
+    if vocabulary_statuses[ConceptPrefix.CTV3].loaded:
+        from .schemas import CTV3_SCHEMA
+        from .resolver.ctv3 import CTV3_CONCEPT, CTV3_QUERY
+
+        graphql_schemas.append(CTV3_SCHEMA)
+        graphql_objects[ConceptPrefix.CTV3] = CTV3_CONCEPT
+        graphql_queries.append(CTV3_QUERY)
+    if vocabulary_statuses[ConceptPrefix.ENSEMBL].loaded:
+        from .schemas import ENSEMBL_SCHEMA
+        from .resolver.ensembl import ENSEMBL_CONCEPT, ENSEMBL_QUERY
+
+        graphql_schemas.append(ENSEMBL_SCHEMA)
+        graphql_objects[ConceptPrefix.ENSEMBL] = ENSEMBL_CONCEPT
+        graphql_queries.append(ENSEMBL_QUERY)
+    if vocabulary_statuses[ConceptPrefix.HGNC].loaded:
+        from .schemas import HGNC_SCHEMA
+        from .resolver.hgnc import HGNC_CONCEPT, HGNC_QUERY
+
+        graphql_schemas.append(HGNC_SCHEMA)
+        graphql_objects[ConceptPrefix.HGNC] = HGNC_CONCEPT
+        graphql_queries.append(HGNC_QUERY)
+    if vocabulary_statuses[ConceptPrefix.HGNC_SYMBOL].loaded:
+        from .schemas import GENE_SCHEMA
+        from .resolver.gene import GENE_CONCEPT, GENE_QUERY
+
+        graphql_schemas.append(GENE_SCHEMA)
+        graphql_objects[ConceptPrefix.HGNC_SYMBOL] = GENE_CONCEPT
+        graphql_queries.append(GENE_QUERY)
+    if vocabulary_statuses[ConceptPrefix.HPO].loaded:
         from .schemas import HPO_SCHEMA
         from .resolver.hpo import HPO_CONCEPT, HPO_QUERY
 
         graphql_schemas.append(HPO_SCHEMA)
-        graphql_objects.append(HPO_CONCEPT)
+        graphql_objects[ConceptPrefix.HPO] = HPO_CONCEPT
         graphql_queries.append(HPO_QUERY)
-    if (await get_vocabulary_status(ConceptPrefix.ORDO, cache, doc_db, graph_db)).loaded:
+    if vocabulary_statuses[ConceptPrefix.NCIT].loaded:
+        from .schemas import NCIT_SCHEMA
+        from .resolver.ncit import NCIT_CONCEPT, NCIT_QUERY
+
+        graphql_schemas.append(NCIT_SCHEMA)
+        graphql_objects[ConceptPrefix.NCIT] = NCIT_CONCEPT
+        graphql_queries.append(NCIT_QUERY)
+    if vocabulary_statuses[ConceptPrefix.OMIM].loaded:
+        from .schemas import OMIM_SCHEMA
+        from .resolver.omim import OMIM_CONCEPT, OMIM_QUERY
+
+        graphql_schemas.append(OMIM_SCHEMA)
+        graphql_objects[ConceptPrefix.OMIM] = OMIM_CONCEPT
+        graphql_queries.append(OMIM_QUERY)
+    if vocabulary_statuses[ConceptPrefix.ORDO].loaded:
         from .schemas import ORDO_SCHEMA
         from .resolver.ordo import ORDO_CONCEPT, ORDO_QUERY
 
         graphql_schemas.append(ORDO_SCHEMA)
-        graphql_objects.append(ORDO_CONCEPT)
+        graphql_objects[ConceptPrefix.ORDO] = ORDO_CONCEPT
         graphql_queries.append(ORDO_QUERY)
+    if vocabulary_statuses[ConceptPrefix.REACTOME].loaded:
+        from .schemas import REACTOME_SCHEMA
+        from .resolver.reactome import REACTOME_PATHWAY, REACTOME_REACTION, REACTOME_GENE, REACTOME_QUERY
+
+        graphql_schemas.append(REACTOME_SCHEMA)
+        graphql_objects[ConceptPrefix.REACTOME] = [
+            REACTOME_PATHWAY,
+            REACTOME_REACTION,
+            REACTOME_GENE,
+        ]
+        graphql_queries.append(REACTOME_QUERY)
+    if vocabulary_statuses[ConceptPrefix.SNOMED].loaded:
+        from .schemas import SNOMED_SCHEMA
+        from .resolver.snomed import SNOMED_CONCEPT, SNOMED_QUERY
+
+        graphql_schemas.append(SNOMED_SCHEMA)
+        graphql_objects[ConceptPrefix.SNOMED] = SNOMED_CONCEPT
+        graphql_queries.append(SNOMED_QUERY)
+
+    # Replace the graphql objects if the annotation data is also loaded
+    if annotation_statuses[(ConceptPrefix.HPO, ConceptPrefix.ORDO)].loaded:
+        from .schemas import HPO_ORDO_SCHEMA
+        from .resolver.hpo_ordo import HPO_CONCEPT, ORDO_CONCEPT
+
+        graphql_schemas.append(HPO_ORDO_SCHEMA)
+        graphql_objects[ConceptPrefix.HPO] = HPO_CONCEPT
+        graphql_objects[ConceptPrefix.ORDO] = ORDO_CONCEPT
 
     if graphql_schemas:
         from .schemas import CONCEPT_SCHEMA
@@ -96,9 +192,16 @@ async def create_graphql_app() -> GraphQL:
 
         graphql_queries.insert(0, GRAPHQL_QUERY_TYPE)
 
+    graphql_object_list = []
+    for obj in graphql_objects.values():
+        if isinstance(obj, list):
+            graphql_object_list.extend(obj)
+        else:
+            graphql_object_list.append(obj)
+
     schema = make_executable_schema(
         graphql_schemas,
-        graphql_objects,
+        graphql_object_list,
         graphql_queries,
         convert_names_case=_convert_schema_names,
     )

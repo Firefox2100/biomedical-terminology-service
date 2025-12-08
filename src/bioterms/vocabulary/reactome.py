@@ -12,6 +12,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import ReactomeConcept
 from bioterms.model.annotation import Annotation
+from .utils import ensure_gene_symbol_loaded
 
 
 VOCABULARY_NAME = 'Reactome Pathways'
@@ -241,6 +242,13 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     """
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('Reactome release files not found')
+
+    verbose_print('Checking if HGNC symbols are loaded...')
+
+    await ensure_gene_symbol_loaded(
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
 
     concepts, reactome_graph = _process_concept_files()
     _process_relationship_files(reactome_graph)

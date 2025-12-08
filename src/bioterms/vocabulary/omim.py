@@ -93,7 +93,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     ):
         concept = CONCEPT_CLASS(
             prefix=VOCABULARY_PREFIX,
-            conceptTypes=[],
             conceptId=row['Class ID'].split('/')[-1],
             label=row['Preferred Label'] if not pd.isna(row['Preferred Label']) else None,
             synonyms=row['Synonyms'].split('|') if not pd.isna(row['Synonyms']) else None,

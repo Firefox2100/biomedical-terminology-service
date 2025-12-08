@@ -1,0 +1,38 @@
+type NcitConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    synonyms: [String!]
+    status: ConceptStatus!
+
+    children: [NcitConcept!]!
+    parents: [NcitConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarNcitConcept!]!
+}
+
+type SimilarNcitConcept implements SimilarConcept {
+    from: NcitConcept!
+    to: NcitConcept!
+    score: Float!
+}
+
+type NcitConceptResponse {
+    error: QueryError
+    data: NcitConcept
+}
+
+type NcitConceptListResponse {
+    error: QueryError
+    data: [NcitConcept]
+}
+
+type NcitQuery {
+    ncitConcept(conceptId: String!): NcitConceptResponse
+    autoComplete(query: String!, limit: Int): NcitConceptListResponse
+}
+
+extend type Query {
+    ncit: NcitQuery
+}
