@@ -17,11 +17,11 @@ VOCABULARY_PREFIX = ConceptPrefix.HPO
 ANNOTATIONS = [
     ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.ORDO,
-    SimilarityMethod.WEIGHED_RELEVANCE,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,
     SimilarityMethod.CO_ANNOTATION,
+    SimilarityMethod.WEIGHED_RELEVANCE,
 ]
 FILE_PATHS = ['hpo/hp.owl']
 TIMESTAMP_FILE = 'hpo/.timestamp'

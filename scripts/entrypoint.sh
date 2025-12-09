@@ -19,4 +19,17 @@ for f in "${FILES[@]}"; do
     fi
 done
 
-exec uvicorn bioterms.asgi:application "$@"
+case "${1:-web}" in
+    web)
+        [ "$1" = "web" ] && shift
+        exec uvicorn bioterms.asgi:application "$@"
+        ;;
+    worker)
+        shift
+        exec celery -A bioterms worker "$@"
+        ;;
+    *)
+        echo "Unknown command: $1"
+        exit 1
+        ;;
+esac

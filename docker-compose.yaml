@@ -78,6 +78,8 @@ services:
     image: firefox2100/biomedical-terminology-service:latest
     restart: unless-stopped
     container_name: bioterms
+    command: >
+      web --host 0.0.0.0 --port 5000 --log-config /app/conf/uvicorn-log.config.yaml
     # This section enables GPU support; remove if not needed
     deploy:
       resources:
@@ -111,6 +113,76 @@ services:
       - BTS_DOCS_URL=/docs
       - BTS_REDOC_URL=/redoc
       - BTS_ENVIRONMENT=dev
+      - BTS_CELERY_BROKER=redis://redis:6379/1
+      - BTS_CELERY_BACKEND=redis://redis:6379/2
+      - BTS_DOC_DATABASE_DRIVER=mongo
+      - BTS_MONGODB_HOST=mongodb
+      - BTS_MONGODB_PORT=27017
+      - BTS_MONGODB_DB_NAME=bts
+      - BTS_MONGODB_USERNAME= # Leave blank if not using authentication
+      - BTS_MONGODB_PASSWORD= # Leave blank if not using authentication
+      - BTS_GRAPH_DATABASE_DRIVER=neo4j
+      - BTS_NEO4J_URI=neo4j://neo4j:7687
+      - BTS_NEO4J_DB_NAME=neo4j
+      - BTS_NEO4J_USERNAME=neo4j
+      - BTS_NEO4J_PASSWORD=password
+      - BTS_CACHE_DRIVER=redis
+      - BTS_REDIS_HOST=redis
+      - BTS_REDIS_PORT=6379
+      - BTS_REDIS_DB=0
+      - BTS_BIOPORTAL_API_KEY=your-bioportal-api-key
+      - BTS_NHS_TRUD_API_KEY=your-nhs-trud-api-key
+      - BTS_TRANSFORMER_MODEL_NAME=BAAI/bge-base-en-v1.5
+      - BTS_TORCH_DEVICE=cpu
+      - BTS_GNN_EPOCHS=100
+      - BTS_GNN_HIDDEN_DIM=256
+      - BTS_GNN_OUTPUT_DIM=256
+      - BTS_GNN_LEARNING_RATE=0.001
+      - BTS_VECTOR_DATABASE_DRIVER=qdrant
+      - BTS_QDRANT_LOCATION=http://qdrant:6333
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+
+  # celery worker if you need web UI to trigger database operations. Generally not
+  # recommended for production deployments, unless the worker is on-demand only.
+  bioterms-worker:
+    image: firefox2100/biomedical-terminology-service:latest
+    restart: unless-stopped
+    container_name: bioterms
+    command: >
+      worker --loglevel=INFO
+    # This section enables GPU support; remove if not needed
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      - BTS_PROCESS_LIMIT=4
+      - BTS_LOGGING_LEVEL=INFO
+      - BTS_SECRET_KEY=secret-key
+      - BTS_SERVER_HMAC_KEY=your-hmac-key
+      - BTS_USE_HTTPS=false
+      - BTS_ENABLE_METRICS=true
+      - BTS_SERVICE_ROOT_PATH=
+      - BTS_OPENAPI_URL=/openapi.json
+      - BTS_DOCS_URL=/docs
+      - BTS_REDOC_URL=/redoc
+      - BTS_ENVIRONMENT=dev
+      - BTS_CELERY_BROKER=redis://redis:6379/1
+      - BTS_CELERY_BACKEND=redis://redis:6379/2
       - BTS_DOC_DATABASE_DRIVER=mongo
       - BTS_MONGODB_HOST=mongodb
       - BTS_MONGODB_PORT=27017

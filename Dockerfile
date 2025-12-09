@@ -47,7 +47,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 VOLUME ["/app/data"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["--host", "0.0.0.0", "--port", "5000", "--log-config", "/app/conf/uvicorn-log.config.yaml"]
+CMD ["web", "--host", "0.0.0.0", "--port", "5000", "--log-config", "/app/conf/uvicorn-log.config.yaml"]
 
 FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04 AS gpu
 
@@ -101,7 +101,7 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl --fail http://localhost:5000/health || exit 1
 
-VOLUME ["/app/conf", "/app/data"]
+VOLUME ["/app/data"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["--host", "0.0.0.0", "--port", "5000", "--log-config", "/app/conf/uvicorn-log.config.yaml"]
+CMD ["web", "--host", "0.0.0.0", "--port", "5000", "--log-config", "/app/conf/uvicorn-log.config.yaml"]
