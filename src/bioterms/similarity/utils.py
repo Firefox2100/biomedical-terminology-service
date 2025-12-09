@@ -58,3 +58,66 @@ def count_annotation_for_graph(target_graph: nx.DiGraph,
 
         total_annotation_count = direct_annotation_count + child_annotation_sum
         target_graph.nodes[node]['annotation_count'] = total_annotation_count
+
+
+def find_mica(node_1: str,
+              node_2: str,
+              graph: nx.DiGraph,
+              property_name: str = 'ic',
+              ) -> str | None:
+    """
+    Find the Most Informative Common Ancestor (MICA) of two nodes in the graph.
+    :param node_1: The first node.
+    :param node_2: The second node.
+    :param graph: The directed graph.
+    :param property_name: The node property to use for information content. Defaults to 'ic'.
+    :return: The MICA node ID, or None if no common ancestor is found.
+    """
+    node_1_ancestors = set(nx.descendants(graph, node_1)) | {node_1}
+    node_2_ancestors = set(nx.descendants(graph, node_2)) | {node_2}
+
+    common_ancestors = node_1_ancestors.intersection(node_2_ancestors)
+
+    if not common_ancestors:
+        return None
+
+    max_ic = -1
+    mica = None
+
+    for ancestor in common_ancestors:
+        if property_name in graph.nodes[ancestor] and graph.nodes[ancestor][property_name] > max_ic:
+            max_ic = graph.nodes[ancestor][property_name]
+            mica = ancestor
+
+    return mica
+
+
+def calculate_relevance(node_1: str,
+                        node_2: str,
+                        graph: nx.DiGraph,
+                        max_annotation: int | float,
+                        annotation_attribute: str = 'annotation_count',
+                        ic_attribute: str = 'ic',
+                        ) -> float | None:
+    """
+    Calculate the Relevance similarity between two nodes.
+    :param node_1: The first node.
+    :param node_2: The second node.
+    :param graph: The directed graph.
+    :param max_annotation: The maximum (equivalent) annotation count in the graph.
+    :param annotation_attribute: The node attribute for annotation count. Defaults to 'annotation_count'.
+    :param ic_attribute: The node attribute for information content. Defaults to 'ic'.
+    :return: The Relevance similarity score, or None if it cannot be calculated.
+    """
+    mica = find_mica(
+        node_1=node_1,
+        node_2=node_2,
+        graph=graph,
+    )
+
+    if mica is None:
+        return None
+
+    return 2 * graph.nodes[mica][ic_attribute] / \
+        (graph.nodes[node_1][ic_attribute] + graph.nodes[node_2][ic_attribute]) * \
+        (1 - graph.nodes[mica][annotation_attribute] / max_annotation)

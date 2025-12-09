@@ -100,6 +100,7 @@ class SimilarityMethod(Enum):
     """
     CO_ANNOTATION = 'co-annotation'
     RELEVANCE = 'relevance'
+    WEIGHED_RELEVANCE = 'weighed-relevance'
 
 
 class VectorDatabaseDriverType(Enum):

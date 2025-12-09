@@ -23,6 +23,7 @@ ANNOTATIONS = [
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,
     SimilarityMethod.CO_ANNOTATION,
+    SimilarityMethod.WEIGHED_RELEVANCE,
 ]
 FILE_PATHS = ['omim/omim.csv']
 TIMESTAMP_FILE = 'omim/.timestamp'

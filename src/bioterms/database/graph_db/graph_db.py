@@ -44,10 +44,12 @@ class GraphDatabase(ABC):
     @abstractmethod
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
+                                   with_similarity: bool = False,
                                    ) -> nx.DiGraph:
         """
         Retrieve the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to retrieve.
+        :param with_similarity: Whether to include similarity relationships in the graph.
         :return: The vocabulary graph.
         """
 

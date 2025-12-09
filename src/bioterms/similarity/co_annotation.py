@@ -1,17 +1,20 @@
 import math
 import itertools
+from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor
 from typing import AsyncIterator
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import verbose_print, schedule_tasks
-from .utils import count_annotation_for_graph
+from .utils import count_annotation_for_graph, filter_edges_by_relationship
 
 
 METHOD_NAME = 'Co-Annotation Vector Method'
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
+CORPUS_REQUIRED = True
+CORPUS_GRAPH_REQUIRED = False
 
 
 _pruned_target_graph: nx.DiGraph | None = None
@@ -137,6 +140,13 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     :param annotation_graph: The directed graph of the annotation between target and corpus.
     :return: A generator yielding tuples of (concept_from, concept_to, similarity_score).
     """
+    target_graph = deepcopy(target_graph)
+    filter_edges_by_relationship(
+        graph=target_graph,
+        relationship_types={ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF},
+    )
+
+    verbose_print(f'Relationship filtered down to {len(target_graph.edges)} edges in target graph.')
     # Count the annotations for each node in the target graph
     count_annotation_for_graph(
         target_graph=target_graph,

@@ -1,11 +1,11 @@
 import asyncio
-from typing import LiteralString, AsyncIterator, Iterator, TypeVar
+from typing import LiteralString, AsyncIterator, TypeVar
 import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
-from bioterms.etc.utils import batch_iterable, verbose_print
+from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.related_term import RelatedTerm
@@ -147,16 +147,28 @@ class Neo4jGraphDatabase(GraphDatabase):
 
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
+                                   with_similarity: bool = False,
                                    ) -> nx.DiGraph:
         """
         Retrieve the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to retrieve.
+        :param with_similarity: Whether to include similarity relationships in the graph.
         :return: The vocabulary graph.
         """
         vocabulary_graph = nx.DiGraph()
 
         async with self._client.session() as session:
             # Retrieve all nodes first from neo4j
+            node_count_result = await self._execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                RETURN count(n) AS node_count
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+            node_count = (await node_count_result.single())['node_count']
+
             nodes_result = await self._execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
@@ -166,25 +178,77 @@ class Neo4jGraphDatabase(GraphDatabase):
                 parameters={'prefix': prefix.value},
             )
 
-            async for record in nodes_result:
+            async for record in aiter_progress(
+                nodes_result,
+                description='Retrieving nodes',
+                total=node_count,
+            ):
                 concept_id = record['concept_id']
                 vocabulary_graph.add_node(concept_id)
 
             # Retrieve all edges that connects WITHIN the vocabulary
-            edges_result = await self._execute_query_with_retry(
-                query="""
-                MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
-                RETURN source.id AS source_id, target.id AS target_id, type(r) AS rel_label
-                """,
-                session=session,
-                parameters={'prefix': prefix.value},
-            )
+            if with_similarity:
+                edge_count_result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                    RETURN count(DISTINCT(r)) AS edge_count
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value},
+                )
+                edge_count = (await edge_count_result.single())['edge_count']
 
-            async for record in edges_result:
-                source_id = record['source_id']
-                target_id = record['target_id']
-                rel_label = record['rel_label']
-                vocabulary_graph.add_edge(source_id, target_id, label=rel_label)
+                edges_result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                    RETURN DISTINCT source.id AS source_id, target.id AS target_id, type(r) AS rel_label
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value},
+                )
+
+                async for record in aiter_progress(
+                    edges_result,
+                    description='Retrieving edges',
+                    total=edge_count,
+                ):
+                    vocabulary_graph.add_edge(
+                        record['source_id'],
+                        record['target_id'],
+                        label=record['rel_label']
+                    )
+            else:
+                edge_count_result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                    WHERE type(r) <> 'similar_to'
+                    RETURN count(DISTINCT(r)) AS edge_count
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value},
+                )
+                edge_count = (await edge_count_result.single())['edge_count']
+
+                edges_result = await self._execute_query_with_retry(
+                    query="""
+                    MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                    WHERE type(r) <> 'similar_to'
+                    RETURN DISTINCT source.id AS source_id, target.id AS target_id, type(r) AS rel_label
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value},
+                )
+
+                async for record in aiter_progress(
+                    edges_result,
+                    description='Retrieving edges',
+                    total=edge_count,
+                ):
+                    vocabulary_graph.add_edge(
+                        record['source_id'],
+                        record['target_id'],
+                        label=record['rel_label']
+                    )
 
         return vocabulary_graph
 
@@ -336,10 +400,26 @@ class Neo4jGraphDatabase(GraphDatabase):
         annotation_graph = nx.DiGraph()
 
         async with self._client.session() as session:
+            annotation_count_result = await self._execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
+                RETURN count(DISTINCT(r)) AS annotation_count
+                """,
+                session=session,
+                parameters={
+                    'prefix_1': prefix_1.value,
+                    'prefix_2': prefix_2.value,
+                },
+            )
+            annotation_count = (await annotation_count_result.single())['annotation_count']
+
             result = await self._execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
-                RETURN source.id AS source_id, target.id AS target_id, type(r) AS rel_label, properties(r) AS rel_props
+                RETURN DISTINCT source.id AS source_id,
+                    target.id AS target_id,
+                    type(r) AS rel_label,
+                    properties(r) AS rel_props
                 """,
                 session=session,
                 parameters={
@@ -348,17 +428,16 @@ class Neo4jGraphDatabase(GraphDatabase):
                 },
             )
 
-            async for record in result:
-                source_id = record['source_id']
-                target_id = record['target_id']
-                rel_label = record['rel_label']
-                rel_props = record['rel_props']
-
+            async for record in aiter_progress(
+                result,
+                description='Retrieving annotations',
+                total=annotation_count,
+            ):
                 annotation_graph.add_edge(
-                    f'{prefix_1.value}:{source_id}',
-                    f'{prefix_2.value}:{target_id}',
-                    label=rel_label,
-                    **rel_props
+                    f'{prefix_1.value}:{record["source_id"]}',
+                    f'{prefix_2.value}:{record["target_id"]}',
+                    label=record['rel_label'],
+                    **record['rel_props']
                 )
 
         return annotation_graph

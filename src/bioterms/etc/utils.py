@@ -305,6 +305,7 @@ def iter_progress(iterable: Iterable[T],
                   *,
                   description: str = "Working...",
                   total: float | None = None,
+                  transient: bool = False,
                   **kwargs,
                   ) -> Iterator[T]:
     """
@@ -312,6 +313,7 @@ def iter_progress(iterable: Iterable[T],
     :param iterable: The iterable to wrap.
     :param description: Description to display alongside the progress bar.
     :param total: Total number of items in the iterable, if known.
+    :param transient: Whether the progress bar should be transient.
     :param kwargs: Additional keyword arguments to pass to the progress bar.
     :return: An iterator that yields items from the iterable with a progress bar.
     """
@@ -326,7 +328,7 @@ def iter_progress(iterable: Iterable[T],
         TextColumn("{task.completed}/{task.total}"),
         TimeElapsedColumn(),
         TimeRemainingColumn(),
-        transient=total is None,
+        transient=total is None or transient,
     ) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         for item in iterable:
@@ -338,12 +340,15 @@ async def aiter_progress(async_iterable: AsyncIterable[T],
                          *,
                          description: str = "Working...",
                          total: float | None = None,
-                         **kwargs) -> AsyncIterator[T]:
+                         transient: bool = False,
+                         **kwargs,
+                         ) -> AsyncIterator[T]:
     """
     Wrap an async iterable with a progress bar using rich.
     :param async_iterable: The async iterable to wrap.
     :param description: Description to display alongside the progress bar.
     :param total: Total number of items in the async iterable, if known.
+    :param transient: Whether the progress bar should be transient.
     :param kwargs: Additional keyword arguments to pass to the progress bar.
     :return: An async iterator that yields items from the async iterable with a progress bar.
     """
@@ -359,7 +364,7 @@ async def aiter_progress(async_iterable: AsyncIterable[T],
         TextColumn("{task.completed}/{task.total}"),
         TimeElapsedColumn(),
         TimeRemainingColumn(),
-        transient=total is None,
+        transient=total is None or transient,
     ) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         async for item in async_iterable:

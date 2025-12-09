@@ -19,7 +19,8 @@ VOCABULARY_PREFIX = ConceptPrefix.CTV3
 ANNOTATIONS = [ConceptPrefix.SNOMED]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,
-    SimilarityMethod.CO_ANNOTATION
+    SimilarityMethod.CO_ANNOTATION,
+    SimilarityMethod.WEIGHED_RELEVANCE,
 ]
 FILE_PATHS = [
     'ctv3/concept.v3',

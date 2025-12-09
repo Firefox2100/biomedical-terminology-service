@@ -1,6 +1,7 @@
 import importlib
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
+from bioterms.etc.utils import verbose_print
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
     get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
@@ -11,6 +12,7 @@ from bioterms.model.similarity_status import SimilarityCount, SimilarityStatus
 ALL_SIMILARITY_METHODS = {
     SimilarityMethod.CO_ANNOTATION: 'co_annotation',
     SimilarityMethod.RELEVANCE: 'relevance',
+    SimilarityMethod.WEIGHED_RELEVANCE: 'relevance_weight',
 }
 
 
@@ -40,16 +42,16 @@ def get_similarity_method_config(method: SimilarityMethod) -> dict:
     return {
         'name': similarity_module.METHOD_NAME,
         'defaultThreshold': similarity_module.DEFAULT_SIMILARITY_THRESHOLD,
+        'corpusRequired': similarity_module.CORPUS_REQUIRED,
+        'corpusGraphRequired': similarity_module.CORPUS_GRAPH_REQUIRED,
     }
 
 
-def get_all_similarity_combinations(prefix: ConceptPrefix,
-                                    annotations: list[ConceptPrefix],
+def get_all_similarity_combinations(annotations: list[ConceptPrefix],
                                     similarity_methods: list[SimilarityMethod],
                                     ) -> list[tuple[SimilarityMethod, ConceptPrefix | None]]:
     """
     Get all similarity combinations for the given prefix, annotations, and similarity methods.
-    :param prefix: The prefix of the target vocabulary.
     :param annotations: The prefixes of the vocabularies that are used to annotate the target vocabulary.
     :param similarity_methods: The similarity methods supported by the target vocabulary.
     :return: A list of tuples containing the similarity method and the corpus prefix
@@ -65,6 +67,11 @@ def get_all_similarity_combinations(prefix: ConceptPrefix,
     if SimilarityMethod.CO_ANNOTATION in similarity_methods:
         combinations.extend([
             (SimilarityMethod.CO_ANNOTATION, annotation_prefix)
+            for annotation_prefix in annotations
+        ])
+    if SimilarityMethod.WEIGHED_RELEVANCE in similarity_methods:
+        combinations.extend([
+            (SimilarityMethod.WEIGHED_RELEVANCE, annotation_prefix)
             for annotation_prefix in annotations
         ])
 
@@ -89,9 +96,10 @@ async def calculate_similarity(method: SimilarityMethod,
     :param graph_db: The graph database instance to use. If None, use the active graph database.
     """
     similarity_module = get_similarity_module(method)
+    similarity_config = get_similarity_method_config(method)
 
     if similarity_threshold is None:
-        similarity_threshold = similarity_module.DEFAULT_SIMILARITY_THRESHOLD
+        similarity_threshold = similarity_config['defaultThreshold']
     if doc_db is None:
         doc_db = await get_active_doc_db()
     if graph_db is None:
@@ -100,7 +108,10 @@ async def calculate_similarity(method: SimilarityMethod,
     if not (await get_vocabulary_status(target_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
         raise ValueError(f'Target vocabulary {target_prefix.value} is not loaded.')
 
-    if corpus_prefix is not None:
+    if similarity_config['corpusRequired'] and corpus_prefix is None:
+        raise ValueError(f'Similarity method {method} requires a corpus prefix.')
+
+    if corpus_prefix is not None and similarity_config['corpusRequired']:
         if not (await get_vocabulary_status(corpus_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
             raise ValueError(f'Corpus vocabulary {corpus_prefix.value} is not loaded.')
 
@@ -113,13 +124,21 @@ async def calculate_similarity(method: SimilarityMethod,
                 f'Annotation between {target_prefix.value} and {corpus_prefix.value} is not loaded.'
             )
 
+    verbose_print(f'Loading vocabulary graph for {target_prefix.value}...')
+
     target_graph = await graph_db.get_vocabulary_graph(target_prefix)
-    if corpus_prefix is not None:
-        corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
+    if corpus_prefix is not None and similarity_config['corpusRequired']:
+        verbose_print(f'Loading annotation graph between {target_prefix.value} and {corpus_prefix.value}...')
         annotation_graph = await graph_db.get_annotation_graph(
             prefix_1=target_prefix,
             prefix_2=corpus_prefix,
         )
+
+        if similarity_config['corpusGraphRequired']:
+            verbose_print(f'Loading corpus vocabulary graph for {corpus_prefix.value}...')
+            corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
+        else:
+            corpus_graph = None
     else:
         corpus_graph = None
         annotation_graph = None
@@ -199,7 +218,6 @@ async def get_similarity_status(prefix: ConceptPrefix,
     supported_methods = vocab_status.similarity_methods
 
     similarity_combinations = get_all_similarity_combinations(
-        prefix=prefix,
         annotations=annotations,
         similarity_methods=supported_methods,
     )

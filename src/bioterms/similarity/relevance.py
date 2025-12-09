@@ -8,11 +8,13 @@ import networkx as nx
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import iter_progress, verbose_print, schedule_tasks
-from .utils import count_annotation_for_graph, filter_edges_by_relationship
+from .utils import count_annotation_for_graph, filter_edges_by_relationship, calculate_relevance
 
 
 METHOD_NAME = 'Relevance Method'
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
+CORPUS_REQUIRED = True
+CORPUS_GRAPH_REQUIRED = False
 
 _populated_target_graph: nx.DiGraph | None = None
 _max_annotation_count: int | None = None
@@ -40,62 +42,6 @@ def _calculate_ic(target_graph: nx.DiGraph,
         )
 
 
-def _find_mica(node_1: str,
-               node_2: str,
-               graph: nx.DiGraph,
-               ) -> str | None:
-    """
-    Find the Most Informative Common Ancestor (MICA) of two nodes in the graph.
-    :param node_1: The first node.
-    :param node_2: The second node.
-    :param graph: The directed graph.
-    :return: The MICA node ID, or None if no common ancestor is found.
-    """
-    node_1_ancestors = set(nx.descendants(graph, node_1)) | {node_1}
-    node_2_ancestors = set(nx.descendants(graph, node_2)) | {node_2}
-
-    common_ancestors = node_1_ancestors.intersection(node_2_ancestors)
-
-    if not common_ancestors:
-        return None
-
-    max_ic = -1
-    mica = None
-
-    for ancestor in common_ancestors:
-        if 'ic' in graph.nodes[ancestor] and graph.nodes[ancestor]['ic'] > max_ic:
-            max_ic = graph.nodes[ancestor]['ic']
-            mica = ancestor
-
-    return mica
-
-
-def _calculate_relevance(node_1: str,
-                         node_2: str,
-                         graph: nx.DiGraph,
-                         max_annotation_count: int,
-                         ) -> float | None:
-    """
-    Calculate the Relevance similarity between two nodes.
-    :param node_1: The first node.
-    :param node_2: The second node.
-    :param graph: The directed graph.
-    :param max_annotation_count: The maximum annotation count in the graph.
-    :return: The Relevance similarity score, or None if it cannot be calculated.
-    """
-    mica = _find_mica(
-        node_1=node_1,
-        node_2=node_2,
-        graph=graph,
-    )
-
-    if mica is None:
-        return None
-
-    return 2 * graph.nodes[mica]['ic'] / (graph.nodes[node_1]['ic'] + graph.nodes[node_2]['ic']) * \
-        (1 - graph.nodes[mica]['annotation_count'] / max_annotation_count)
-
-
 def _relevance_worker(node_pair: tuple[str, str]) -> tuple[str, str, float | None]:
     """
     Worker function to calculate the Relevance similarity for a pair of nodes.
@@ -104,11 +50,11 @@ def _relevance_worker(node_pair: tuple[str, str]) -> tuple[str, str, float | Non
     """
     node_1, node_2 = node_pair
 
-    relevance = _calculate_relevance(
+    relevance = calculate_relevance(
         node_1=node_1,
         node_2=node_2,
         graph=_populated_target_graph,
-        max_annotation_count=_max_annotation_count,
+        max_annotation=_max_annotation_count,
     )
 
     return node_1, node_2, relevance

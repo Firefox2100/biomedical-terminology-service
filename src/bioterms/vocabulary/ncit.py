@@ -22,6 +22,7 @@ ANNOTATIONS = [
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,
     SimilarityMethod.CO_ANNOTATION,
+    SimilarityMethod.WEIGHED_RELEVANCE,
 ]
 FILE_PATHS = ['ncit/thesaurus.txt']
 TIMESTAMP_FILE = 'ncit/.timestamp'
