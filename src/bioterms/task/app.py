@@ -1,10 +1,12 @@
 from celery import Celery
 
+from bioterms.etc.consts import CONFIG
+
 
 celery_app = Celery(
     'bioterms_worker',
-    broker='redis://localhost:6379/1',
-    backend='redis://localhost:6379/2',
+    broker=CONFIG.celery_broker,
+    backend=CONFIG.celery_backend,
 )
 
 

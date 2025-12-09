@@ -1,7 +1,6 @@
 import os
 import logging
 import secrets
-from concurrent.futures import ProcessPoolExecutor
 from typing import Optional, Literal
 from argon2 import PasswordHasher
 from httpx import AsyncClient
@@ -80,6 +79,14 @@ class Settings(BaseSettings):
     environment: ServiceEnvironment = Field(
         ServiceEnvironment.DEVELOPMENT,
         description='The environment in which the service is running',
+    )
+    celery_broker: str = Field(
+        'redis://localhost:6379/1',
+        description='Celery backend URL for task result storage',
+    )
+    celery_backend: str = Field(
+        'redis://localhost:6379/2',
+        description='Celery broker URL for task messaging',
     )
 
     doc_database_driver: DocDatabaseDriverType = Field(
