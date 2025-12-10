@@ -1,17 +1,19 @@
 import secrets
-import importlib.resources as pkg_resources
 from contextlib import asynccontextmanager
 import uvicorn
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
 from asgi_csrf import asgi_csrf
+from pytheus.exposition import generate_metrics
+from pytheus.middleware import PytheusMiddlewareASGI
+from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from bioterms import __version__
-from bioterms.etc.consts import LOGGER, CONFIG
+from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import BtsError
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
@@ -143,7 +145,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Backend-only service, CORS set to allow all origins by default
     app.add_middleware(
         CORSMiddleware,
         allow_origins=(),
@@ -214,6 +215,13 @@ def create_app() -> FastAPI:
         https_only=CONFIG.use_https,
     )
 
+    if CONFIG.enable_metrics:
+        app.add_middleware(PytheusMiddlewareASGI)
+
+        @app.get('/metrics', response_class=PlainTextResponse, include_in_schema=False)
+        async def metrics_endpoint():
+            return generate_metrics()
+
     app.include_router(auto_complete_router)
     app.include_router(data_router)
     app.include_router(expand_router)
@@ -222,8 +230,7 @@ def create_app() -> FastAPI:
     app.include_router(similarity_router)
     app.include_router(ui_router)
 
-    static_file_path = pkg_resources.files('bioterms.data') / 'static'
-    app.mount('/static', StaticFiles(directory=str(static_file_path)), name='static')
+    app.mount('/static', StaticFiles(directory=str(STATIC_FILE_PATH)), name='static')
 
     @app.exception_handler(BtsError)
     async def bioterms_exception_handler(request: Request, exc: BtsError):

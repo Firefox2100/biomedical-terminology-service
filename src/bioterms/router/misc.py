@@ -1,8 +1,9 @@
 from datetime import date
 from xml.etree.ElementTree import Element, SubElement, tostring
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import Response, PlainTextResponse
+from fastapi.responses import Response, PlainTextResponse, FileResponse
 
+from bioterms.etc.consts import STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import Cache, get_active_cache
 
@@ -87,6 +88,19 @@ Sitemap: {base_url}/sitemap.xml
 """
 
     return PlainTextResponse(content)
+
+
+@misc_router.get('/favicon.ico', include_in_schema=False)
+async def favicon():
+    """
+    Serve the favicon.ico file. Backup route for non-HTML responses where it does not
+    point to static file paths. Uses the StaticFiles setup in the main application.
+    :return: The favicon.ico file response.
+    """
+    return FileResponse(
+        STATIC_FILE_PATH / 'img' / 'favicon.svg',
+        media_type='image/svg+xml',
+    )
 
 
 @misc_router.get('/health', include_in_schema=False)

@@ -1,6 +1,7 @@
 import os
 import logging
 import secrets
+import importlib.resources as pkg_resources
 from typing import Optional, Literal
 from argon2 import PasswordHasher
 from httpx import AsyncClient
@@ -12,6 +13,7 @@ from bioterms.etc.enums import DocDatabaseDriverType, GraphDatabaseDriverType, C
 
 
 SECRETS_DIR = '/run/secrets' if os.path.isdir('/run/secrets') else None
+STATIC_FILE_PATH = pkg_resources.files('bioterms.data') / 'static'
 
 
 class Settings(BaseSettings):
