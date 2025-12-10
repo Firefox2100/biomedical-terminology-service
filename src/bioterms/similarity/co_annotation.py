@@ -18,7 +18,8 @@ CORPUS_GRAPH_REQUIRED = False
 
 
 _pruned_target_graph: nx.DiGraph | None = None
-_annotation_graph: nx.DiGraph | None = None
+_annotation_graph: nx.Graph | None = None
+_target_prefix: ConceptPrefix | None = None
 _corpus_prefix: ConceptPrefix | None = None
 _total_annotation_count: int | None = None
 
@@ -26,8 +27,9 @@ _total_annotation_count: int | None = None
 def _calculate_co_annotation(node_1: str,
                              node_2: str,
                              target_graph: nx.DiGraph,
+                             target_prefix: ConceptPrefix,
                              corpus_prefix: ConceptPrefix,
-                             annotation_graph: nx.DiGraph,
+                             annotation_graph: nx.Graph,
                              total_annotation_count: int,
                              ) -> float | None:
     """
@@ -38,6 +40,7 @@ def _calculate_co_annotation(node_1: str,
     :param node_1: The first node.
     :param node_2: The second node.
     :param target_graph: The directed graph of the target vocabulary.
+    :param target_prefix: The prefix of the target vocabulary.
     :param corpus_prefix: The prefix of the corpus vocabulary.
     :param annotation_graph: The directed graph of the annotation between target and corpus.
     :param total_annotation_count: The total number of annotations in the annotation graph.
@@ -50,7 +53,7 @@ def _calculate_co_annotation(node_1: str,
     # Find their annotation sets
     annotation_set_1 = set()
     for desc in descendants_1:
-        annotation_name = f'{corpus_prefix.value}:{desc}'
+        annotation_name = f'{target_prefix.value}:{desc}'
         if annotation_name in annotation_graph:
             annotation_set_1.update(
                 neighbor for neighbor in annotation_graph.neighbors(annotation_name)
@@ -58,7 +61,7 @@ def _calculate_co_annotation(node_1: str,
             )
     annotation_set_2 = set()
     for desc in descendants_2:
-        annotation_name = f'{corpus_prefix.value}:{desc}'
+        annotation_name = f'{target_prefix.value}:{desc}'
         if annotation_name in annotation_graph:
             annotation_set_2.update(
                 neighbor for neighbor in annotation_graph.neighbors(annotation_name)
@@ -94,6 +97,7 @@ def _co_annotation_worker(node_pair: tuple[str, str]) -> tuple[str, str, float |
         node_1=node_1,
         node_2=node_2,
         target_graph=_pruned_target_graph,
+        target_prefix=_target_prefix,
         corpus_prefix=_corpus_prefix,
         annotation_graph=_annotation_graph,
         total_annotation_count=_total_annotation_count,
@@ -103,28 +107,31 @@ def _co_annotation_worker(node_pair: tuple[str, str]) -> tuple[str, str, float |
 
 
 def _worker_init(target_graph: nx.DiGraph,
+                 target_prefix: ConceptPrefix,
                  corpus_prefix: ConceptPrefix,
-                 annotation_graph: nx.DiGraph,
+                 annotation_graph: nx.Graph,
                  total_annotation_count: int
                  ):
     """
     Initialise global variables for worker processes.
     :param target_graph: The directed graph of the target vocabulary.
+    :param target_prefix: The prefix of the target vocabulary.
     :param corpus_prefix: The prefix of the corpus vocabulary.
     :param annotation_graph: The directed graph of the annotation between target and corpus.
     :param total_annotation_count: The total number of annotations in the annotation graph.
     """
-    global _pruned_target_graph, _annotation_graph, _corpus_prefix, _total_annotation_count
+    global _pruned_target_graph, _annotation_graph, _target_prefix, _corpus_prefix, _total_annotation_count
 
     _pruned_target_graph = target_graph
     _annotation_graph = annotation_graph
+    _target_prefix = target_prefix
     _corpus_prefix = corpus_prefix
     _total_annotation_count = total_annotation_count
 
 
-async def calculate_similarity(target_graph: nx.DiGraph,
+async def calculate_similarity(target_graph: nx.MultiDiGraph,
                                target_prefix: ConceptPrefix,
-                               corpus_graph: nx.DiGraph = None,
+                               corpus_graph: nx.MultiDiGraph = None,
                                corpus_prefix: ConceptPrefix = None,
                                annotation_graph: nx.DiGraph = None,
                                ) -> AsyncIterator[tuple[str, str, float]]:
@@ -145,8 +152,11 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         graph=target_graph,
         relationship_types={ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF},
     )
-
     verbose_print(f'Relationship filtered down to {len(target_graph.edges)} edges in target graph.')
+
+    target_graph = nx.DiGraph(target_graph)
+    annotation_graph = annotation_graph.to_undirected()
+
     # Count the annotations for each node in the target graph
     count_annotation_for_graph(
         target_graph=target_graph,
@@ -178,7 +188,7 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     with ProcessPoolExecutor(
         max_workers=CONFIG.process_limit,
         initializer=_worker_init,
-        initargs=(pruned_target_graph, corpus_prefix, annotation_graph, total_annotation_count),
+        initargs=(pruned_target_graph, target_prefix, corpus_prefix, annotation_graph, total_annotation_count),
     ) as executor:
         async for result in schedule_tasks(
             executor=executor,

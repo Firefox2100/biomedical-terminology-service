@@ -15,7 +15,7 @@ class MemoryGraphDatabase(GraphDatabase):
     An implementation of the GraphDatabase interface using an in-memory graph.
     """
 
-    _graphs: dict[ConceptPrefix, nx.DiGraph] = {}
+    _graphs: dict[ConceptPrefix, nx.MultiDiGraph] = {}
     _annotation_graphs: dict[ConceptPrefix, dict[ConceptPrefix, nx.DiGraph]] = {}
 
     async def close(self) -> None:
@@ -38,17 +38,22 @@ class MemoryGraphDatabase(GraphDatabase):
             return
 
         prefix = concepts[0].prefix
+
+        # Convert the graph from DiGraph to MultiDiGraph
+        graph = nx.MultiDiGraph(graph)
         self._graphs[prefix] = graph
 
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
-                                   ) -> nx.DiGraph:
+                                   with_similarity: bool = False,
+                                   ) -> nx.MultiDiGraph:
         """
         Retrieve the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to retrieve.
+        :param with_similarity: Whether to include similarity relationships. Ignored in memory DB.
         :return: The vocabulary graph.
         """
-        return self._graphs.get(prefix, nx.DiGraph())
+        return self._graphs.get(prefix, nx.MultiDiGraph())
 
     async def delete_vocabulary_graph(self,
                                       prefix: ConceptPrefix,

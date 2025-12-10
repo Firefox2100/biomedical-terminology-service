@@ -22,13 +22,13 @@ _tune_factor = 0.5
 _convergence_threshold = 1e-3
 
 
-def sum_annotation_for_graph(target_graph: nx.DiGraph,
-                             corpus_graph: nx.DiGraph,
-                             annotation_graph: nx.DiGraph,
-                             target_prefix: ConceptPrefix,
-                             corpus_prefix: ConceptPrefix,
-                             is_first_iteration: bool = False,
-                             ) -> None:
+def _sum_annotation_for_graph(target_graph: nx.DiGraph,
+                              corpus_graph: nx.DiGraph,
+                              annotation_graph: nx.Graph,
+                              target_prefix: ConceptPrefix,
+                              corpus_prefix: ConceptPrefix,
+                              is_first_iteration: bool = False,
+                              ) -> None:
     """
     Sum annotation contribution weights for each node in the target graph, and add them as node attributes.
     :param target_graph: The directed graph of the target vocabulary.
@@ -59,7 +59,7 @@ def sum_annotation_for_graph(target_graph: nx.DiGraph,
                     # Corpus node does not have a sum
                     if is_first_iteration:
                         # In the first iteration, we assign a default contribution weight
-                        direct_annotation_sum += 1
+                        direct_annotation_sum += 0.5
                     else:
                         # A directly annotated corpus node must have an IC
                         raise ValueError(f'Corpus node {corpus_node} does not have IC value.')
@@ -73,7 +73,7 @@ def sum_annotation_for_graph(target_graph: nx.DiGraph,
                 # A child should have been processed before the parent in topological order
                 raise ValueError(f'Child node {child} has not been processed yet.')
 
-        total_annotation_sum= direct_annotation_sum + child_annotation_sum
+        total_annotation_sum = direct_annotation_sum + child_annotation_sum
         target_graph.nodes[node]['annotation_sum'] = total_annotation_sum
 
 
@@ -145,9 +145,9 @@ def _worker_init(target_graph: nx.DiGraph,
     _max_annotation_sum = max_annotation_sum
 
 
-async def calculate_similarity(target_graph: nx.DiGraph,
+async def calculate_similarity(target_graph: nx.MultiDiGraph,
                                target_prefix: ConceptPrefix,
-                               corpus_graph: nx.DiGraph = None,
+                               corpus_graph: nx.MultiDiGraph = None,
                                corpus_prefix: ConceptPrefix = None,
                                annotation_graph: nx.DiGraph = None,
                                ) -> AsyncIterator[tuple[str, str, float]]:
@@ -178,11 +178,15 @@ async def calculate_similarity(target_graph: nx.DiGraph,
     )
     verbose_print(f'Relationship filtered down to {len(corpus_graph.edges)} edges in corpus graph.')
 
+    target_graph = nx.DiGraph(target_graph)
+    corpus_graph = nx.DiGraph(corpus_graph)
+    annotation_graph = annotation_graph.to_undirected()
+
     # Iteratively calculate annotation sums and information content until convergence
     iteration = 0
     while True:
         verbose_print(f'Iteration {iteration + 1}: Calculating annotation sums on target graph...')
-        sum_annotation_for_graph(
+        _sum_annotation_for_graph(
             target_graph=target_graph,
             corpus_graph=corpus_graph,
             annotation_graph=annotation_graph,
@@ -196,21 +200,23 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         verbose_print(f'Iteration {iteration + 1}: Maximum IC change on target = {max_delta_target:.6f}')
 
         verbose_print(f'Iteration {iteration + 1}: Calculating annotation sums on corpus graph...')
-        sum_annotation_for_graph(
+        _sum_annotation_for_graph(
             target_graph=corpus_graph,
-            corpus_graph=corpus_graph,
+            corpus_graph=target_graph,
             annotation_graph=annotation_graph,
             target_prefix=corpus_prefix,
-            corpus_prefix=corpus_prefix,
+            corpus_prefix=target_prefix,
         )
 
         verbose_print(f'Iteration {iteration + 1}: Calculating IC sum on corpus graph...')
         max_delta_corpus = _calculate_ic(target_graph=corpus_graph)
         verbose_print(f'Iteration {iteration + 1}: Maximum IC change on corpus = {max_delta_corpus:.6f}')
 
-        if max(max_delta_target, max_delta_corpus) < _convergence_threshold:
+        if iteration > 0 and max(max_delta_target, max_delta_corpus) < _convergence_threshold:
             verbose_print(f'Convergence reached after {iteration + 1} iterations.')
             break
+
+        iteration += 1
 
     # IC is ready, use the same formula as standard Relevance method
     nodes_with_ic = [node for node in target_graph.nodes if 'ic' in target_graph.nodes[node]]

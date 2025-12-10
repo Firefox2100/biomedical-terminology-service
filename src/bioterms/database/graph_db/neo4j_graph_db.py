@@ -148,14 +148,14 @@ class Neo4jGraphDatabase(GraphDatabase):
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
                                    with_similarity: bool = False,
-                                   ) -> nx.DiGraph:
+                                   ) -> nx.MultiDiGraph:
         """
         Retrieve the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to retrieve.
         :param with_similarity: Whether to include similarity relationships in the graph.
         :return: The vocabulary graph.
         """
-        vocabulary_graph = nx.DiGraph()
+        vocabulary_graph = nx.MultiDiGraph()
 
         async with self._client.session() as session:
             # Retrieve all nodes first from neo4j
@@ -260,10 +260,30 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param prefix: The node prefix of the vocabulary to delete.
         """
         async with self._client.session() as session:
+            # Separate batched delete to handle similarity connections
             await self._execute_query_with_retry(
                 query="""
-                MATCH (n:Concept {prefix: $prefix})
-                DETACH DELETE n
+                CALL apoc.periodic.commit(
+                    'MATCH (:Concept {prefix: $prefix})-[r]-()
+                    WITH r LIMIT $limit
+                    DELETE r
+                    RETURN count(r)',
+                    {limit: 50000, prefix: $prefix}
+                );
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+
+            await self._execute_query_with_retry(
+                query="""
+                CALL apoc.periodic.commit(
+                    'MATCH (n:Concept {prefix: $prefix})
+                    WITH n LIMIT $limit
+                    DELETE n
+                    RETURN count(n)',
+                    {limit: 50000, prefix: $prefix}
+                );
                 """,
                 session=session,
                 parameters={'prefix': prefix.value},

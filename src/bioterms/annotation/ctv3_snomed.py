@@ -79,9 +79,9 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
     ):
         annotations.append(Annotation(
             prefixFrom=ConceptPrefix.SNOMED,
-            conceptIdFrom=row['referencedComponentId'],
+            conceptIdFrom=str(row['referencedComponentId']),
             prefixTo=ConceptPrefix.CTV3,
-            conceptIdTo=row['mapTarget'],
+            conceptIdTo=str(row['mapTarget']),
         ))
 
     verbose_print(f'Inserting {len(annotations)} annotations into the graph database...')

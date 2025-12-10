@@ -4,7 +4,7 @@ from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import iter_progress, verbose_print
 
 
-def filter_edges_by_relationship(graph: nx.DiGraph,
+def filter_edges_by_relationship(graph: nx.MultiDiGraph | nx.DiGraph,
                                  relationship_types: set[ConceptRelationshipType],
                                  ):
     """
@@ -12,13 +12,24 @@ def filter_edges_by_relationship(graph: nx.DiGraph,
     """
     edges_to_remove = []
 
-    for u, v, data in iter_progress(
-        graph.edges(data=True),
-        description='Filtering edges by relationship types',
-        total=graph.number_of_edges(),
-    ):
-        if data.get('label') not in relationship_types:
-            edges_to_remove.append((u, v))
+    if isinstance(graph, nx.DiGraph):
+        for u, v, data in iter_progress(
+            graph.edges(data=True),
+            description='Filtering edges by relationship types',
+            total=graph.number_of_edges(),
+        ):
+            if data.get('label') not in relationship_types:
+                edges_to_remove.append((u, v))
+    elif isinstance(graph, nx.MultiDiGraph):
+        for u, v, key, data in iter_progress(
+            graph.edges(keys=True, data=True),
+            description='Filtering edges by relationship types',
+            total=graph.number_of_edges(),
+        ):
+            if data.get('label') not in relationship_types:
+                edges_to_remove.append((u, v, key))
+    else:
+        raise TypeError('Graph must be a DiGraph or MultiDiGraph.')
 
     verbose_print(f'Removing {len(edges_to_remove)} edges not matching specified relationship types.')
 
@@ -26,7 +37,7 @@ def filter_edges_by_relationship(graph: nx.DiGraph,
 
 
 def count_annotation_for_graph(target_graph: nx.DiGraph,
-                               annotation_graph: nx.DiGraph,
+                               annotation_graph: nx.Graph,
                                target_prefix: ConceptPrefix,
                                ) -> None:
     """

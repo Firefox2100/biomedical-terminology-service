@@ -74,9 +74,9 @@ def _worker_init(target_graph: nx.DiGraph,
     _max_annotation_count = max_annotation_count
 
 
-async def calculate_similarity(target_graph: nx.DiGraph,
+async def calculate_similarity(target_graph: nx.MultiDiGraph,
                                target_prefix: ConceptPrefix,
-                               corpus_graph: nx.DiGraph = None,
+                               corpus_graph: nx.MultiDiGraph = None,
                                corpus_prefix: ConceptPrefix = None,
                                annotation_graph: nx.DiGraph = None,
                                ) -> AsyncIterator[tuple[str, str, float]]:
@@ -95,8 +95,10 @@ async def calculate_similarity(target_graph: nx.DiGraph,
         graph=target_graph,
         relationship_types={ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF},
     )
-
     verbose_print(f'Relationship filtered down to {len(target_graph.edges)} edges in target graph.')
+
+    target_graph = nx.DiGraph(target_graph)
+    annotation_graph = annotation_graph.to_undirected()
 
     count_annotation_for_graph(
         target_graph=target_graph,
