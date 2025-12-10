@@ -228,7 +228,7 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
             reactome_graph.add_edge(
                 row['reaction_id'],
                 row['gene_id'],
-                label=ConceptRelationshipType(row['relationship']),
+                label=ConceptRelationshipType(f'has_{row["relationship"]}'),
             )
 
 

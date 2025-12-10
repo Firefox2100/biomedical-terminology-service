@@ -2,7 +2,7 @@ from ariadne import QueryType
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase
-from bioterms.vocabulary import get_vocabulary_status
+from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_config
 from ..data_loader import DataLoader
 
 
@@ -61,7 +61,7 @@ async def resolve_loaded_prefixes(_, info) -> list[str]:
 async def resolve_concept_info_fields(obj,
                                       info,
                                       prefix: ConceptPrefix,
-                                      ):
+                                      ) -> str | int | float | bool | list | None:
     concept_id = obj['conceptId']
     field_name = info.field_name
     data_loader: DataLoader = info.context['data_loader']
@@ -71,14 +71,14 @@ async def resolve_concept_info_fields(obj,
 
     if not concept:
         if field_name == 'prefix':
-            return prefix.value
+            return str(prefix.value)
 
         if field_name == 'status':
             return 'unknown'
 
         return None
 
-    return concept[field_name]
+    return concept.get(field_name)
 
 
 async def resolve_concept_replaces(obj,
@@ -207,10 +207,13 @@ async def resolve_auto_complete(info,
     # Auto-completion request cannot be repeated within the same GraphQL request,
     # and does not link to term identity, so no need for data loader
     doc_db: DocumentDatabase = info.context['doc_db']
+    config = get_vocabulary_config(prefix)
+
     concepts = await doc_db.auto_complete_search(
         prefix=prefix,
         query=query,
         limit=limit,
+        model_class=config['conceptClass'],
     )
 
     results = [

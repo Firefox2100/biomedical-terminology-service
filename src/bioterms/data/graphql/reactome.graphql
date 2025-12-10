@@ -18,6 +18,8 @@ type ReactomePathway implements ReactomeConcept & Concept {
     subPathways: [ReactomePathway!]!
     superPathways: [ReactomePathway!]!
 
+    reactions: [ReactomeReaction!]!
+
     similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
 }
 
@@ -48,7 +50,8 @@ type ReactomeGene implements ReactomeConcept & Concept & GeneConcept {
     inferred: Boolean
     status: ConceptStatus!
 
-    reactions: [ReactomeReaction!]!
+    isInput: [ReactomeReaction!]!
+    isOutput: [ReactomeReaction!]!
 
     symbols: [HgncSymbolConcept!]!
 

@@ -122,9 +122,11 @@ async def get_concept(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: The Concept instance.
     """
+    config = get_vocabulary_config(prefix)
     concept = await doc_db.get_terms_by_ids(
         prefix=prefix,
         concept_ids=[concept_id],
+        model_class=config['conceptClass'],
     )
 
     if not concept:
@@ -189,7 +191,11 @@ async def get_documents(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A stream response containing all documents in JSON format.
     """
-    concepts_iter = doc_db.get_terms_iter(prefix)
+    config = get_vocabulary_config(prefix)
+    concepts_iter = doc_db.get_terms_iter(
+        prefix=prefix,
+        model_class=config['conceptClass'],
+    )
 
     file_name = f'{prefix.value}_documents.json'
     headers = {

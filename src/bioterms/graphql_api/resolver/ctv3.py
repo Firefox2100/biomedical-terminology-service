@@ -61,9 +61,9 @@ async def resolve_ctv3_concept_parents(obj, info):
 
 @CTV3_CONCEPT.field('similarConcepts')
 async def resolve_ctv3_concept_similar_concepts(obj,
-                                               info,
-                                               threshold: float = 1.0,
-                                               ):
+                                                info,
+                                                threshold: float = 1.0,
+                                                ):
     return await resolve_concept_similar_concepts(
         obj=obj,
         info=info,

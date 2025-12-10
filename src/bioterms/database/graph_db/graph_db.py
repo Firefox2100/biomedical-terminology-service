@@ -11,6 +11,115 @@ from bioterms.model.similar_term import SimilarTerm, SimilarTermAggregate
 from bioterms.model.translated_term import TranslatedTerm
 
 
+class ReactomeRepository(ABC):
+    """
+    An interface for reactome operations specifically.
+
+    Reactome has classes and hierarchies within the database, making the generic graph
+    database queries insufficient to represent its structure.
+    """
+
+    @abstractmethod
+    async def get_sub_pathways(self,
+                               pathway_ids: list[str],
+                               ) -> list[RelatedTerm]:
+        """
+        Get the sub-pathways of given pathways.
+        :param pathway_ids: The IDs of the pathways to get sub-pathways for.
+        :return: A list of RelatedTerm instances representing the sub-pathways.
+        """
+
+    @abstractmethod
+    async def get_super_pathways(self,
+                                 pathway_ids: list[str],
+                                 ) -> list[RelatedTerm]:
+        """
+        Get the super-pathways of given pathways.
+        :param pathway_ids: The IDs of the pathways to get super-pathways for.
+        :return: A list of RelatedTerm instances representing the super-pathways.
+        """
+
+    @abstractmethod
+    async def get_reactions_in_pathway(self,
+                                       pathway_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the reactions within given pathways.
+        :param pathway_ids: The IDs of the pathways to get reactions for.
+        :return: A list of RelatedTerm instances representing the reactions.
+        """
+
+    @abstractmethod
+    async def get_pathways_of_reaction(self,
+                                       reaction_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the pathways that given reactions belongs to.
+        :param reaction_ids: The IDs of the reactions to get pathways for.
+        :return: A list of RelatedTerm instances representing the pathways.
+        """
+
+    @abstractmethod
+    async def get_preceding_reactions(self,
+                                      reaction_ids: list[str],
+                                      ) -> list[RelatedTerm]:
+        """
+        Get the preceding reactions of given reactions.
+        :param reaction_ids: The IDs of the reactions to get preceding reactions for.
+        :return: A list of RelatedTerm instances representing the preceding reactions.
+        """
+
+    @abstractmethod
+    async def get_subsequent_reactions(self,
+                                       reaction_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the subsequent reactions of given reactions.
+        :param reaction_ids: The IDs of the reactions to get subsequent reactions for.
+        :return: A list of RelatedTerm instances representing the subsequent reactions.
+        """
+
+    @abstractmethod
+    async def get_reaction_inputs(self,
+                                  reaction_ids: list[str],
+                                  ) -> list[RelatedTerm]:
+        """
+        Get the inputs of given reactions.
+        :param reaction_ids: The IDs of the reactions to get inputs for.
+        :return: A list of RelatedTerm instances representing the inputs.
+        """
+
+    @abstractmethod
+    async def get_reaction_outputs(self,
+                                   reaction_ids: list[str],
+                                   ) -> list[RelatedTerm]:
+        """
+        Get the outputs of given reactions.
+        :param reaction_ids: The IDs of the reactions to get outputs for.
+        :return: A list of RelatedTerm instances representing the outputs.
+        """
+
+    @abstractmethod
+    async def get_gene_input_reactions(self,
+                                       gene_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the reactions where the product that given genes encode are inputs.
+        :param gene_ids: The IDs of the genes to get input reactions for.
+        :return: A list of RelatedTerm instances representing the reactions.
+        """
+
+    @abstractmethod
+    async def get_gene_output_reactions(self,
+                                        gene_ids: list[str],
+                                        ) -> list[RelatedTerm]:
+        """
+        Get the reactions where the product that given genes encode are output.
+        :param gene_ids: The IDs of the genes to get output reactions for.
+        :return: A list of RelatedTerm instances representing the reactions.
+        """
+
+
 class GraphDatabase(ABC):
     """
     An interface for operating on the graph database.
@@ -502,6 +611,14 @@ class GraphDatabase(ABC):
         :param threshold: The similarity threshold to filter translations.
         :param limit: The maximum number of translations to return for each original concept ID.
         :return: An asynchronous iterator yielding TranslatedTerm instances.
+        """
+
+    @property
+    @abstractmethod
+    def reactome(self) -> ReactomeRepository:
+        """
+        Get the Reactome repository interface.
+        :return: An instance of ReactomeRepository.
         """
 
 

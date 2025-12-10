@@ -3,7 +3,7 @@ from typing import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import DocDatabaseDriverType, ConceptPrefix
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserRepository
 
 
@@ -85,27 +85,35 @@ class DocumentDatabase(ABC):
     def get_terms_iter(self,
                        prefix: ConceptPrefix,
                        limit: int = 0,
-                       ) -> AsyncIterator[Concept]:
+                       model_class: type[Concept] = Concept,
+                       ) -> AsyncIterator[ConceptUnion]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
         :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances.
         """
 
     async def get_terms(self,
                         prefix: ConceptPrefix,
                         limit: int = 0,
-                        ) -> list[Concept]:
+                        model_class: type[Concept] = Concept,
+                        ) -> list[ConceptUnion]:
         """
         Get all terms for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
         :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: A list of Concept instances.
         """
-        it = self.get_terms_iter(prefix, limit=limit)
+        it = self.get_terms_iter(
+            prefix=prefix,
+            limit=limit,
+            model_class=model_class
+        )
 
-        results: list[Concept] = []
+        results: list[ConceptUnion] = []
         async for concept in it:
             results.append(concept)
 
@@ -115,26 +123,35 @@ class DocumentDatabase(ABC):
     def get_terms_by_ids_iter(self,
                               prefix: ConceptPrefix,
                               concept_ids: list[str],
-                              ) -> AsyncIterator[Concept]:
+                              model_class: type[Concept] = Concept,
+                              ) -> AsyncIterator[ConceptUnion]:
         """
         Get terms by their IDs for a given prefix in the document database as an async iterator.
         :param prefix: The vocabulary prefix to get documents for.
         :param concept_ids: A list of concept IDs to retrieve.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances.
         """
 
     async def get_terms_by_ids(self,
                                prefix: ConceptPrefix,
                                concept_ids: list[str],
-                               ) -> list[Concept]:
+                               model_class: type[Concept] = Concept,
+                               ) -> list[ConceptUnion]:
         """
         Get terms by their IDs for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
         :param concept_ids: A list of concept IDs to retrieve.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: A list of Concept instances.
         """
-        it = self.get_terms_by_ids_iter(prefix, concept_ids)
-        results: list[Concept] = []
+        it = self.get_terms_by_ids_iter(
+            prefix=prefix,
+            concept_ids=concept_ids,
+            model_class=model_class
+        )
+
+        results: list[ConceptUnion] = []
         async for concept in it:
             results.append(concept)
 
@@ -165,12 +182,14 @@ class DocumentDatabase(ABC):
                            prefix: ConceptPrefix,
                            query: str,
                            limit: int = None,
-                           ) -> AsyncIterator[Concept]:
+                           model_class: type[Concept] = Concept,
+                           ) -> AsyncIterator[ConceptUnion]:
         """
         Run an auto-complete search query against the document database and return an async iterator.
         :param prefix: The vocabulary prefix to search within.
         :param query: The search query string.
         :param limit: The maximum number of results to return. If None, return all matches.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
         """
 
@@ -178,17 +197,24 @@ class DocumentDatabase(ABC):
                                    prefix: ConceptPrefix,
                                    query: str,
                                    limit: int = None,
-                                   ) -> list[Concept]:
+                                   model_class: type[Concept] = Concept,
+                                   ) -> list[ConceptUnion]:
         """
         Run an auto-complete search query against the document database.
         :param prefix: The vocabulary prefix to search within.
         :param query: The search query string.
         :param limit: The maximum number of results to return. If None, return all matches.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: A list of Concept instances matching the auto-complete query.
         """
-        it = self.auto_complete_iter(prefix, query, limit=limit)
+        it = self.auto_complete_iter(
+            prefix=prefix,
+            query=query,
+            limit=limit,
+            model_class=model_class
+        )
 
-        results: list[Concept] = []
+        results: list[ConceptUnion] = []
         async for concept in it:
             results.append(concept)
 

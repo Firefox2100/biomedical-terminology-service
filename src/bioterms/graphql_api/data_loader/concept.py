@@ -3,17 +3,20 @@ from aiodataloader import DataLoader
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, GraphDatabase
+from bioterms.vocabulary import get_vocabulary_config
 
 
 class ConceptLoaderById(DataLoader[str, Optional[dict]]):
     def __init__(self,
                  prefix: ConceptPrefix,
                  doc_db: DocumentDatabase,
+                 config: dict,
                  ):
         super().__init__()
 
         self._prefix = prefix
         self._doc_db = doc_db
+        self._config = config
 
     async def batch_load_fn(self,
                             concept_ids: list[str]
@@ -21,6 +24,7 @@ class ConceptLoaderById(DataLoader[str, Optional[dict]]):
         concepts = await self._doc_db.get_terms_by_ids(
             prefix=self._prefix,
             concept_ids=concept_ids,
+            model_class=self._config['conceptClass'],
         )
 
         concept_map = {concept.concept_id: concept.model_dump() for concept in concepts}
@@ -187,6 +191,7 @@ class ConceptLoader:
         self._prefix = prefix
         self._doc_db = doc_db
         self._graph_db = graph_db
+        self._config = get_vocabulary_config(prefix)
 
         self._id_loader = None
         self._children_loader = None
@@ -202,6 +207,7 @@ class ConceptLoader:
             self._id_loader = ConceptLoaderById(
                 prefix=self._prefix,
                 doc_db=self._doc_db,
+                config=self._config,
             )
 
         return self._id_loader

@@ -12,9 +12,360 @@ from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm, \
     SimilarTermAggregate
 from bioterms.model.translated_term import TranslatedTerm
-from .graph_db import GraphDatabase
+from .graph_db import ReactomeRepository, GraphDatabase
 
 T = TypeVar('T')
+
+
+async def _execute_query_with_retry(query: LiteralString,
+                                    session: AsyncSession,
+                                    parameters: dict = None,
+                                    backoff_retries: int = 3,
+                                    ):
+    """
+    Execute a Cypher query with retry logic.
+
+    This is in case there are deadlocks or transient errors in the database, which can
+    be safely retried.
+    :param query: The Cypher query to execute.
+    :param parameters: The parameters for the query.
+    :param backoff_retries: The number of retries to attempt on failure.
+    :return: The result of the query.
+    """
+    attempt = 0
+    backoff_time = 1
+
+    while attempt < backoff_retries:
+        try:
+            result = await session.run(
+                query,
+                **(parameters or {}),
+            )
+            return result
+        except TransientError as e:
+            if attempt < backoff_retries - 1:
+                attempt += 1
+                await asyncio.sleep(backoff_time)
+                backoff_time *= 2
+            else:
+                raise e
+
+    raise RuntimeError('Exceeded maximum retry attempts for query execution.')
+
+
+class Neo4jReactomeRepository(ReactomeRepository):
+    """
+    An implementation of the ReactomeRepository interface for Neo4j.
+    """
+    
+    def __init__(self,
+                 client: AsyncDriver,
+                 ):
+        """
+        Initialise the Neo4jReactomeRepository with an AsyncDriver instance.
+        :param client: AsyncDriver instance.
+        """
+        self._client = client
+
+    async def get_sub_pathways(self,
+                               pathway_ids: list[str],
+                               ) -> list[RelatedTerm]:
+        """
+        Get the sub-pathways of given pathways.
+        :param pathway_ids: The IDs of the pathways to get sub-pathways for.
+        :return: A list of RelatedTerm instances representing the sub-pathways.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $pathway_ids AS pid
+                MATCH (p:Concept:pathway {id: pid})
+                OPTIONAL MATCH (p)<-[:part_of]-(sub:Concept:pathway)
+                RETURN pid AS pathway_id, collect(DISTINCT sub.id) AS sub_pathways
+                """,
+                session=session,
+                parameters={'pathway_ids': pathway_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['pathway_id'],
+                    relatedConcepts=record['sub_pathways'],
+                ))
+
+            return related_terms
+
+    async def get_super_pathways(self,
+                                 pathway_ids: list[str],
+                                 ) -> list[RelatedTerm]:
+        """
+        Get the super-pathways of given pathways.
+        :param pathway_ids: The IDs of the pathways to get super-pathways for.
+        :return: A list of RelatedTerm instances representing the super-pathways.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $pathway_ids AS pid
+                MATCH (p:Concept:pathway {id: pid})
+                OPTIONAL MATCH (p)-[:part_of]->(super:Concept:pathway)
+                RETURN pid AS pathway_id, collect(DISTINCT super.id) AS super_pathways
+                """,
+                session=session,
+                parameters={'pathway_ids': pathway_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['pathway_id'],
+                    relatedConcepts=record['super_pathways'],
+                ))
+
+            return related_terms
+
+    async def get_reactions_in_pathway(self,
+                                       pathway_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the reactions within given pathways.
+        :param pathway_ids: The IDs of the pathways to get reactions for.
+        :return: A list of RelatedTerm instances representing the reactions.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $pathway_ids AS pid
+                MATCH (p:Concept:pathway {id: pid})
+                OPTIONAL MATCH (p)<-[:part_of]-(r:Concept:reaction)
+                RETURN pid AS pathway_id, collect(DISTINCT r.id) AS reactions
+                """,
+                session=session,
+                parameters={'pathway_ids': pathway_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['pathway_id'],
+                    relatedConcepts=record['reactions'],
+                ))
+
+            return related_terms
+
+    async def get_pathways_of_reaction(self,
+                                       reaction_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the pathways that given reactions belongs to.
+        :param reaction_ids: The IDs of the reactions to get pathways for.
+        :return: A list of RelatedTerm instances representing the pathways.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $reaction_ids AS rid
+                MATCH (r:Concept:reaction {id: rid})
+                OPTIONAL MATCH (r)-[:part_of]->(p:Concept:pathway)
+                RETURN rid AS reaction_id, collect(DISTINCT p.id) AS pathways
+                """,
+                session=session,
+                parameters={'reaction_ids': reaction_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['reaction_id'],
+                    relatedConcepts=record['pathways'],
+                ))
+
+            return related_terms
+
+    async def get_preceding_reactions(self,
+                                      reaction_ids: list[str],
+                                      ) -> list[RelatedTerm]:
+        """
+        Get the preceding reactions of given reactions.
+        :param reaction_ids: The IDs of the reactions to get preceding reactions for.
+        :return: A list of RelatedTerm instances representing the preceding reactions.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $reaction_ids AS rid
+                MATCH (r:Concept:reaction {id: rid})
+                OPTIONAL MATCH (r)-[:preceded_by]->(pre:Concept:reaction)
+                RETURN rid AS reaction_id, collect(DISTINCT pre.id) AS preceding_reactions
+                """,
+                session=session,
+                parameters={'reaction_ids': reaction_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['reaction_id'],
+                    relatedConcepts=record['preceding_reactions'],
+                ))
+
+            return related_terms
+
+    async def get_subsequent_reactions(self,
+                                       reaction_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the subsequent reactions of given reactions.
+        :param reaction_ids: The IDs of the reactions to get subsequent reactions for.
+        :return: A list of RelatedTerm instances representing the subsequent reactions.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $reaction_ids AS rid
+                MATCH (r:Concept:reaction {id: rid})
+                OPTIONAL MATCH (r)<-[:preceded_by]-(sub:Concept:reaction)
+                RETURN rid AS reaction_id, collect(DISTINCT sub.id) AS subsequent_reactions
+                """,
+                session=session,
+                parameters={'reaction_ids': reaction_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['reaction_id'],
+                    relatedConcepts=record['subsequent_reactions'],
+                ))
+
+            return related_terms
+
+    async def get_reaction_inputs(self,
+                                  reaction_ids: list[str],
+                                  ) -> list[RelatedTerm]:
+        """
+        Get the inputs of given reactions.
+        :param reaction_ids: The IDs of the reactions to get inputs for.
+        :return: A list of RelatedTerm instances representing the inputs.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $reaction_ids AS rid
+                MATCH (r:Concept:reaction {id: rid})
+                OPTIONAL MATCH (r)-[:has_input]->(input:Concept:gene)
+                RETURN rid AS reaction_id, collect(DISTINCT input.id) AS inputs
+                """,
+                session=session,
+                parameters={'reaction_ids': reaction_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['reaction_id'],
+                    relatedConcepts=record['inputs'],
+                ))
+
+            return related_terms
+
+    async def get_reaction_outputs(self,
+                                   reaction_ids: list[str],
+                                   ) -> list[RelatedTerm]:
+        """
+        Get the outputs of given reactions.
+        :param reaction_ids: The IDs of the reactions to get outputs for.
+        :return: A list of RelatedTerm instances representing the outputs.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $reaction_ids AS rid
+                MATCH (r:Concept:reaction {id: rid})
+                OPTIONAL MATCH (r)-[:has_output]->(output:Concept:gene)
+                RETURN rid AS reaction_id, collect(DISTINCT output.id) AS outputs
+                """,
+                session=session,
+                parameters={'reaction_ids': reaction_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['reaction_id'],
+                    relatedConcepts=record['outputs'],
+                ))
+
+            return related_terms
+
+    async def get_gene_input_reactions(self,
+                                       gene_ids: list[str],
+                                       ) -> list[RelatedTerm]:
+        """
+        Get the reactions where the product that given genes encode are inputs.
+        :param gene_ids: The IDs of the genes to get input reactions for.
+        :return: A list of RelatedTerm instances representing the reactions.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $gene_ids AS gid
+                MATCH (g:Concept:gene {id: gid})
+                OPTIONAL MATCH (r:Concept:reaction)-[:has_input]->(g)
+                RETURN gid AS gene_id, collect(DISTINCT r.id) AS input_reactions
+                """,
+                session=session,
+                parameters={'gene_ids': gene_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['gene_id'],
+                    relatedConcepts=record['input_reactions'],
+                ))
+
+            return related_terms
+
+    async def get_gene_output_reactions(self,
+                                        gene_ids: list[str],
+                                        ) -> list[RelatedTerm]:
+        """
+        Get the reactions where the product that given genes encode are output.
+        :param gene_ids: The IDs of the genes to get output reactions for.
+        :return: A list of RelatedTerm instances representing the reactions.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                UNWIND $gene_ids AS gid
+                MATCH (g:Concept:gene {id: gid})
+                OPTIONAL MATCH (r:Concept:reaction)-[:has_output]->(g)
+                RETURN gid AS gene_id, collect(DISTINCT r.id) AS output_reactions
+                """,
+                session=session,
+                parameters={'gene_ids': gene_ids},
+            )
+
+            related_terms = []
+
+            async for record in result:
+                related_terms.append(RelatedTerm(
+                    conceptId=record['gene_id'],
+                    relatedConcepts=record['output_reactions'],
+                ))
+
+            return related_terms
 
 
 class Neo4jGraphDatabase(GraphDatabase):
@@ -33,42 +384,6 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         if client is not None:
             self._client = client
-
-    @staticmethod
-    async def _execute_query_with_retry(query: LiteralString,
-                                        session: AsyncSession,
-                                        parameters: dict = None,
-                                        backoff_retries: int = 3,
-                                        ):
-        """
-        Execute a Cypher query with retry logic.
-
-        This is in case there are deadlocks or transient errors in the database, which can
-        be safely retried.
-        :param query: The Cypher query to execute.
-        :param parameters: The parameters for the query.
-        :param backoff_retries: The number of retries to attempt on failure.
-        :return: The result of the query.
-        """
-        attempt = 0
-        backoff_time = 1
-
-        while attempt < backoff_retries:
-            try:
-                result = await session.run(
-                    query,
-                    **(parameters or {}),
-                )
-                return result
-            except TransientError as e:
-                if attempt < backoff_retries - 1:
-                    attempt += 1
-                    await asyncio.sleep(backoff_time)
-                    backoff_time *= 2
-                else:
-                    raise e
-
-        raise RuntimeError('Exceeded maximum retry attempts for query execution.')
 
     @classmethod
     def set_client(cls,
@@ -110,7 +425,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             # Insert the concepts first before adding edges
             verbose_print(f'Inserting {len(concepts)} concepts into Neo4j...')
             for concept_batch in batch_iterable(concepts):
-                await self._execute_query_with_retry(
+                await _execute_query_with_retry(
                     query="""
                     UNWIND $concepts AS concept
                     WITH concept, coalesce(concept.conceptTypes, []) AS types
@@ -129,7 +444,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             # Insert the edges
             verbose_print(f'Inserting {len(edges)} edges into Neo4j...')
             for edge_batch in batch_iterable(edges):
-                await self._execute_query_with_retry(
+                await _execute_query_with_retry(
                     query="""
                     UNWIND $edges AS edge
                     MERGE (source:Concept {id: edge[0], prefix: $concept_prefix})
@@ -159,7 +474,7 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         async with self._client.session() as session:
             # Retrieve all nodes first from neo4j
-            node_count_result = await self._execute_query_with_retry(
+            node_count_result = await _execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
                 RETURN count(n) AS node_count
@@ -169,7 +484,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             )
             node_count = (await node_count_result.single())['node_count']
 
-            nodes_result = await self._execute_query_with_retry(
+            nodes_result = await _execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
                 RETURN n.id AS concept_id
@@ -188,7 +503,7 @@ class Neo4jGraphDatabase(GraphDatabase):
 
             # Retrieve all edges that connects WITHIN the vocabulary
             if with_similarity:
-                edge_count_result = await self._execute_query_with_retry(
+                edge_count_result = await _execute_query_with_retry(
                     query="""
                     MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
                     RETURN count(DISTINCT(r)) AS edge_count
@@ -198,7 +513,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
                 edge_count = (await edge_count_result.single())['edge_count']
 
-                edges_result = await self._execute_query_with_retry(
+                edges_result = await _execute_query_with_retry(
                     query="""
                     MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
                     RETURN DISTINCT source.id AS source_id, target.id AS target_id, type(r) AS rel_label
@@ -218,7 +533,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                         label=record['rel_label']
                     )
             else:
-                edge_count_result = await self._execute_query_with_retry(
+                edge_count_result = await _execute_query_with_retry(
                     query="""
                     MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
                     WHERE type(r) <> 'similar_to'
@@ -229,7 +544,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
                 edge_count = (await edge_count_result.single())['edge_count']
 
-                edges_result = await self._execute_query_with_retry(
+                edges_result = await _execute_query_with_retry(
                     query="""
                     MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
                     WHERE type(r) <> 'similar_to'
@@ -261,7 +576,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         async with self._client.session() as session:
             # Separate batched delete to handle similarity connections
-            await self._execute_query_with_retry(
+            await _execute_query_with_retry(
                 query="""
                 CALL apoc.periodic.commit(
                     'MATCH (:Concept {prefix: $prefix})-[r]-()
@@ -275,7 +590,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 parameters={'prefix': prefix.value},
             )
 
-            await self._execute_query_with_retry(
+            await _execute_query_with_retry(
                 query="""
                 CALL apoc.periodic.commit(
                     'MATCH (n:Concept {prefix: $prefix})
@@ -298,7 +613,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: The number of nodes with the given prefix.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
                 RETURN count(n) AS term_count
@@ -319,7 +634,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: The number of internal relationships within the vocabulary.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
                 RETURN count(r) AS relationship_count
@@ -354,7 +669,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         counts = []
 
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 UNWIND $attributes AS attr
                 WITH DISTINCT attr
@@ -391,7 +706,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             verbose_print(f'Inserting {len(annotations)} annotations into Neo4j...')
             for annotation_batch in batch_iterable(annotations):
-                await self._execute_query_with_retry(
+                await _execute_query_with_retry(
                     query="""
                     UNWIND $annotations AS annotation
                     MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
@@ -420,7 +735,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         annotation_graph = nx.DiGraph()
 
         async with self._client.session() as session:
-            annotation_count_result = await self._execute_query_with_retry(
+            annotation_count_result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
                 RETURN count(DISTINCT(r)) AS annotation_count
@@ -433,7 +748,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             )
             annotation_count = (await annotation_count_result.single())['annotation_count']
 
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
                 RETURN DISTINCT source.id AS source_id,
@@ -472,7 +787,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param prefix_2: The second vocabulary prefix.
         """
         async with self._client.session() as session:
-            await self._execute_query_with_retry(
+            await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
                 DELETE r
@@ -495,7 +810,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: The number of annotations between the two vocabularies.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
                 RETURN count(r) AS annotation_count
@@ -538,7 +853,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     for score in scores
                 ]
 
-                await self._execute_query_with_retry(
+                await _execute_query_with_retry(
                     query="""
                     UNWIND $similarities AS sim
                     MATCH (source:Concept {id: sim.concept_from, prefix: $prefix_from})
@@ -571,7 +886,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         Create indexes in Neo4J
         """
         async with self._client.session() as session:
-            await self._execute_query_with_retry(
+            await _execute_query_with_retry(
                 query="""
                 CREATE INDEX concept_prefix_index IF NOT EXISTS
                 FOR (n:Concept)
@@ -579,7 +894,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 """,
                 session=session,
             )
-            await self._execute_query_with_retry(
+            await _execute_query_with_retry(
                 query="""
                 CREATE INDEX concept_id_index IF NOT EXISTS
                 FOR (n:Concept)
@@ -587,7 +902,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 """,
                 session=session,
             )
-            await self._execute_query_with_retry(
+            await _execute_query_with_retry(
                 query="""
                 CREATE CONSTRAINT concept_prefix_id_unique IF NOT EXISTS
                 FOR (n:Concept)
@@ -617,11 +932,11 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         async with self._client.session() as session:
             if max_depth is None:
-                result = await self._execute_query_with_retry(
+                result = await _execute_query_with_retry(
                     query="""
                     MATCH (n:Concept {prefix: $prefix})
                     WHERE n.id IN $concept_ids
-                    OPTIONAL MATCH (n)-[:is_a*]->(ancestor:Concept)
+                    OPTIONAL MATCH (n)-[:is_a|part_of*]->(ancestor:Concept)
                     WITH n, [a IN collect(DISTINCT ancestor.id) WHERE a IS NOT NULL] AS all_anc
                     WITH n,
                         CASE
@@ -638,14 +953,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                     },
                 )
             else:
-                result = await self._execute_query_with_retry(
+                result = await _execute_query_with_retry(
                     query="""
                     MATCH (n:Concept {prefix: $prefix})
                     WHERE n.id IN $concept_ids
                     CALL apoc.path.expandConfig(
                         n,
                         {
-                            relationshipFilter: 'is_a>',
+                            relationshipFilter: 'is_a|part_of>',
                             labelFilter: '+Concept',
                             minLevel: 1,
                             maxLevel: $depth,
@@ -697,11 +1012,11 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         async with self._client.session() as session:
             if max_depth is None:
-                result = await self._execute_query_with_retry(
+                result = await _execute_query_with_retry(
                     query="""
                     MATCH (n:Concept {prefix: $prefix})
                     WHERE n.id IN $concept_ids
-                    OPTIONAL MATCH (n)<-[:is_a*]-(descendant:Concept)
+                    OPTIONAL MATCH (n)<-[:is_a|part_of*]-(descendant:Concept)
                     WITH n, [d IN collect(DISTINCT descendant.id) WHERE d IS NOT NULL] AS all_desc
                     WITH n,
                         CASE
@@ -718,14 +1033,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                     },
                 )
             else:
-                result = await self._execute_query_with_retry(
+                result = await _execute_query_with_retry(
                     query="""
                     MATCH (n:Concept {prefix: $prefix})
                     WHERE n.id IN $concept_ids
                     CALL apoc.path.expandConfig(
                         n,
                         {
-                            relationshipFilter: 'is_a<',
+                            relationshipFilter: 'is_a|part_of<',
                             labelFilter: '+Concept',
                             minLevel: 1,
                             maxLevel: $depth,
@@ -767,7 +1082,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: An asynchronous iterator yielding RelatedTerms instances.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
                 WHERE n.id IN $concept_ids
@@ -799,7 +1114,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: An asynchronous iterator yielding RelatedTerms instances.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
                 WHERE n.id IN $concept_ids
@@ -837,7 +1152,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: An asynchronous iterator yielding RelatedTerm instances.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (src:Concept {prefix: $prefix})
                 WHERE src.id IN $concept_ids
@@ -899,7 +1214,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: An asynchronous iterator yielding SimilarTerm instances.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 UNWIND $similarity_queries AS sim_query
                 MATCH (n:Concept {prefix: $prefix, id: sim_query.concept_id})
@@ -980,7 +1295,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             else:
                 target_prefixes = [p.value for p in ConceptPrefix]
 
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 MATCH (n:Concept {prefix: $prefix})
                 WHERE n.id IN $concept_ids
@@ -1109,7 +1424,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: An asynchronous iterator yielding TranslatedTerm instances.
         """
         async with self._client.session() as session:
-            result = await self._execute_query_with_retry(
+            result = await _execute_query_with_retry(
                 query="""
                 UNWIND keys($constraint_ids) AS constraint_prefix
 
@@ -1169,3 +1484,13 @@ class Neo4jGraphDatabase(GraphDatabase):
                     prefix=record['translated_prefix'],
                     score=record['similarity_score'],
                 )
+
+    @property
+    def reactome(self) -> Neo4jReactomeRepository:
+        """
+        Get the Reactome repository interface.
+        :return: Neo4jReactomeRepository instance.
+        """
+        return Neo4jReactomeRepository(
+            client=self._client,
+        )

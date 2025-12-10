@@ -68,11 +68,14 @@ def _calculate_co_annotation(node_1: str,
                 if neighbor.startswith(f'{corpus_prefix.value}:')
             )
 
+    if len(annotation_set_1) == 0 or len(annotation_set_2) == 0:
+        return None
+
     annotation_intersection = annotation_set_1 & annotation_set_2
     annotation_union = annotation_set_1 | annotation_set_2
 
-    if len(annotation_set_1) == 0 or len(annotation_set_2) == 0:
-        return None
+    if len(annotation_intersection) == 0:
+        return 0.0
 
     npmi = (1 +
             math.log(len(annotation_intersection) * total_annotation_count /

@@ -19,8 +19,6 @@ type EnsemblConcept implements Concept & GeneConcept {
     symbols: [HgncSymbolConcept!]!
 
     similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
-
-    annotatedHpo: [HpoConcept!]!
 }
 
 extend type HgncSymbolConcept {

@@ -11,7 +11,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.etc.utils import batch_iterable
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
 from .utils import generate_extra_data
@@ -313,11 +313,13 @@ class MongoDocumentDatabase(DocumentDatabase):
     async def get_terms_iter(self,
                              prefix: ConceptPrefix,
                              limit: int = 0,
-                             ) -> AsyncIterator[Concept]:
+                             model_class: type[Concept] = Concept,
+                             ) -> AsyncIterator[ConceptUnion]:
         """
         Get an asynchronous iterator over all items for a given prefix in the document database.
         :param prefix: The vocabulary prefix to get documents for.
         :param limit: The maximum number of documents to retrieve. If 0, retrieve all documents.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances.
         """
         collection = self.db[str(prefix.value)]
@@ -327,16 +329,18 @@ class MongoDocumentDatabase(DocumentDatabase):
         ).limit(limit if limit > 0 else 0)
 
         async for doc in cursor:
-            yield Concept.model_validate(doc)
+            yield model_class.model_validate(doc)
 
     async def get_terms_by_ids_iter(self,
                                     prefix: ConceptPrefix,
                                     concept_ids: list[str],
-                                    ) -> AsyncIterator[Concept]:
+                                    model_class: type[Concept] = Concept,
+                                    ) -> AsyncIterator[ConceptUnion]:
         """
         Get terms by their IDs for a given prefix in the document database as an async iterator.
         :param prefix: The vocabulary prefix to get documents for.
         :param concept_ids: A list of concept IDs to retrieve.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances.
         """
         collection = self.db[str(prefix.value)]
@@ -346,7 +350,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         )
 
         async for doc in cursor:
-            yield Concept.model_validate(doc)
+            yield model_class.model_validate(doc)
 
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
@@ -389,12 +393,14 @@ class MongoDocumentDatabase(DocumentDatabase):
                                  prefix: ConceptPrefix,
                                  query: str,
                                  limit: int = None,
-                                 ) -> AsyncIterator[Concept]:
+                                 model_class: type[Concept] = Concept,
+                                 ) -> AsyncIterator[ConceptUnion]:
         """
         Run an auto-complete search query against the document database and return an async iterator.
         :param prefix: The vocabulary prefix to search within.
         :param query: The search query string.
         :param limit: The maximum number of results to return. If None, return all matches.
+        :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
         """
         clean_query = re.sub(r'[()"\']', '', query.lower())
@@ -466,4 +472,4 @@ class MongoDocumentDatabase(DocumentDatabase):
         cursor = await collection.aggregate(pipeline)
 
         async for doc in cursor:
-            yield Concept.model_validate(doc)
+            yield model_class.model_validate(doc)

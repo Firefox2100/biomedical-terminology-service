@@ -4,6 +4,7 @@ type HgncConcept implements Concept & GeneConcept {
     label: String
     definition: String
     synonyms: [String!]
+    location: String
     status: ConceptStatus!
 
     replaces: [HgncConcept!]!

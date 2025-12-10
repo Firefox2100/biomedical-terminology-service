@@ -242,6 +242,7 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     if vector_db is None:
         vector_db = get_active_vector_db()
 
+    config = get_vocabulary_config(prefix)
     status = await get_vocabulary_status(
         prefix=prefix,
         doc_db=doc_db,
@@ -254,9 +255,15 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     if drop_existing:
         await vector_db.delete_vectors_for_prefix(prefix=prefix)
 
-    concept_iter = doc_db.get_terms_iter(prefix)
+    concept_iter = doc_db.get_terms_iter(
+        prefix=prefix,
+        model_class=config['conceptClass'],
+    )
 
-    id_map = await vector_db.insert_concepts(concept_iter)
+    id_map = await vector_db.insert_concepts(
+        concepts=concept_iter,
+        prefix=prefix,
+    )
 
     await doc_db.update_vector_mapping(
         prefix=prefix,

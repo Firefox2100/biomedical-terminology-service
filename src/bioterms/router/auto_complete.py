@@ -8,6 +8,7 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase, get_active_doc_db
 from bioterms.model.base import JsonModel
 from bioterms.model.concept import ConceptUnion
+from bioterms.vocabulary import get_vocabulary_config
 from .utils import response_generator
 
 
@@ -68,14 +69,14 @@ async def auto_complete_v1(prefix: ConceptPrefix,
     else:
         limit = 25
 
-    concepts = await doc_db.auto_complete_search(
+    concepts_iter = doc_db.auto_complete_iter(
         prefix=prefix,
         query=query_str,
         limit=limit,
     )
 
     results = []
-    for concept in concepts:
+    async for concept in concepts_iter:
         concept_str = f'{concept.prefix}:{concept.concept_id}'
 
         if concept.label:
@@ -117,10 +118,12 @@ async def auto_complete_v2(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of matching concepts, in V2 API format.
     """
+    config = get_vocabulary_config(prefix)
     concepts_iter = doc_db.auto_complete_iter(
         prefix=prefix,
         query=query,
         limit=result_threshold or None,
+        model_class=config['conceptClass'],
     )
 
     v2_concepts = []
@@ -158,10 +161,12 @@ async def auto_complete_v3(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of matching concepts.
     """
+    config = get_vocabulary_config(prefix)
     concepts_iter = doc_db.auto_complete_iter(
         prefix=prefix,
         query=query,
         limit=limit or None,
+        model_class=config['conceptClass'],
     )
 
     return StreamingResponse(
