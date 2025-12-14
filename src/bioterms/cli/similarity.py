@@ -14,21 +14,21 @@ app = typer.Typer(help='Manage similarity computations between biomedical terms.
 @app.command(name='calculate', help='Calculate similarity between two vocabularies and store the results.')
 @run_async
 async def calculate_command(target_prefix: Annotated[
-                                ConceptPrefix,
+                                Optional[ConceptPrefix],
                                 typer.Option(
                                     '--target',
                                     '-a',
                                     help='The prefix of the target vocabulary.'
                                 )
-                            ],
+                            ] = None,
                             corpus_prefix: Annotated[
-                                ConceptPrefix,
+                                Optional[ConceptPrefix],
                                 typer.Option(
                                     '--corpus',
                                     '-c',
                                     help='The prefix of the corpus vocabulary.'
                                 )
-                            ],
+                            ] = None,
                             method: Annotated[
                                 Optional[SimilarityMethod],
                                 typer.Option(
@@ -48,27 +48,40 @@ async def calculate_command(target_prefix: Annotated[
                                 )
                             ] = None,
                             ):
-    try:
-        if method:
-            methods = [method]
-        else:
-            vocab_config = get_vocabulary_config(target_prefix)
-            methods = vocab_config['similarityMethods']
+    if target_prefix:
+        targets = [target_prefix]
+    else:
+        targets = list(ConceptPrefix)
 
-        for sim_method in methods:
-            await calculate_similarity(
-                method=sim_method,
-                target_prefix=target_prefix,
-                corpus_prefix=corpus_prefix,
-                similarity_threshold=threshold,
-            )
-            CONSOLE.print(
-                f'[green]Successfully calculated similarity between '
-                f'{target_prefix.value} and {corpus_prefix.value} using {sim_method.value} method.[/green]'
-            )
-    except Exception as e:
-        CONSOLE.print(
-            f'[red]Failed to calculate similarity between '
-            f'{target_prefix.value} and {corpus_prefix.value}: {e}[/red]'
-        )
-        traceback.print_exc()
+    for target in targets:
+        target_config = get_vocabulary_config(target)
+
+        if corpus_prefix:
+            corpus = [corpus_prefix]
+        else:
+            corpus = target_config['annotations']
+
+        for corp in corpus:
+            if method:
+                methods = [method]
+            else:
+                methods = target_config['similarityMethods']
+
+            for method in methods:
+                try:
+                    await calculate_similarity(
+                        method=method,
+                        target_prefix=target,
+                        corpus_prefix=corp,
+                        similarity_threshold=threshold,
+                    )
+                    CONSOLE.print(
+                        f'[green]Successfully calculated similarity between '
+                        f'{target.value} and {corp.value} using {method.value} method.[/green]'
+                    )
+                except Exception as e:
+                    CONSOLE.print(
+                        f'[red]Failed to calculate similarity between '
+                        f'{target.value} and {corp.value} using {method.value} method: {e}[/red]'
+                    )
+                    traceback.print_exc()

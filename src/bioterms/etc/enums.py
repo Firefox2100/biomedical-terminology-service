@@ -1,4 +1,4 @@
-from enum import Enum, StrEnum
+from enum import Enum
 
 
 class AnnotationType(Enum):
@@ -20,7 +20,7 @@ class CacheDriverType(Enum):
     REDIS = 'redis'
 
 
-class ConceptPrefix(StrEnum):
+class ConceptPrefix(Enum):
     """
     The prefix used for concepts in the vocabularies.
     """
@@ -44,7 +44,7 @@ class ConceptStatus(Enum):
     DEPRECATED = 'deprecated'
 
 
-class ConceptType(StrEnum):
+class ConceptType(Enum):
     """
     The type of concept represented in the vocabularies.
     """
@@ -56,7 +56,7 @@ class ConceptType(StrEnum):
     PROTEIN = 'protein'
 
 
-class ConceptRelationshipType(StrEnum):
+class ConceptRelationshipType(Enum):
     """
     The type of relationship between concepts in the vocabularies.
     """

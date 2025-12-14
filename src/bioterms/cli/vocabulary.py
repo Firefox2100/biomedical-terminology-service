@@ -14,7 +14,18 @@ app = typer.Typer(help='Manage biomedical vocabularies.')
 
 @app.command(name='download', help='Download a given vocabulary.')
 @run_async
-async def download_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help='The vocabulary to download.')],
+async def download_command(vocabulary: Annotated[
+                               Optional[ConceptPrefix],
+                               typer.Argument(help='The vocabulary to download.')
+                           ] = None,
+                           download_all: Annotated[
+                               bool,
+                               typer.Option(
+                                   '--all',
+                                   '-a',
+                                   help='Download all available vocabularies.'
+                               )
+                           ] = False,
                            redownload: Annotated[
                                bool,
                                typer.Option(
@@ -24,8 +35,16 @@ async def download_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(h
                            ] = False
                            ):
     try:
-        await download_vocabulary(vocabulary, redownload)
-        CONSOLE.print(f'[green]Successfully downloaded vocabulary {vocabulary.value}.[/green]')
+        if download_all:
+            target_vocabularies = list(ConceptPrefix)
+        elif vocabulary:
+            target_vocabularies = [vocabulary]
+        else:
+            CONSOLE.print('[red]Either specify a vocabulary to download or use the --all flag.[/red]')
+            return
+        for vocabulary in target_vocabularies:
+            await download_vocabulary(vocabulary, redownload)
+            CONSOLE.print(f'[green]Successfully downloaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to download vocabulary {vocabulary.value}: {e}[/red]')
         traceback.print_exc()
@@ -33,7 +52,18 @@ async def download_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(h
 
 @app.command(name='load', help='Load a vocabulary into database.')
 @run_async
-async def load_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help='The vocabulary to load.')],
+async def load_command(vocabulary: Annotated[
+                           Optional[ConceptPrefix],
+                           typer.Argument(help='The vocabulary to load.')
+                       ] = None,
+                       load_all: Annotated[
+                           bool,
+                           typer.Option(
+                                '--all',
+                                '-a',
+                                help='Load all available vocabularies.'
+                           )
+                       ] = False,
                        overwrite: Annotated[
                            bool,
                            typer.Option(
@@ -43,8 +73,16 @@ async def load_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help=
                        ] = False
                        ):
     try:
-        await load_vocabulary(vocabulary, drop_existing=overwrite)
-        CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value} into the database.[/green]')
+        if load_all:
+            target_vocabularies = list(ConceptPrefix)
+        elif vocabulary:
+            target_vocabularies = [vocabulary]
+        else:
+            CONSOLE.print('[red]Either specify a vocabulary to load or use the --all flag.[/red]')
+            return
+        for vocabulary in target_vocabularies:
+            await load_vocabulary(vocabulary, drop_existing=overwrite)
+            CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value} into the database.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value} into the database: {e}[/red]')
         traceback.print_exc()
@@ -52,7 +90,18 @@ async def load_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help=
 
 @app.command(name='embed', help='Embed a vocabulary into vector database.')
 @run_async
-async def embed_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help='The vocabulary to embed.')],
+async def embed_command(vocabulary: Annotated[
+                            Optional[ConceptPrefix],
+                            typer.Argument(help='The vocabulary to embed.')
+                        ] = None,
+                        embed_all: Annotated[
+                            bool,
+                            typer.Option(
+                                '--all',
+                                '-a',
+                                help='Embed all available vocabularies.'
+                            )
+                        ] = False,
                         overwrite: Annotated[
                             bool,
                             typer.Option(
@@ -62,8 +111,16 @@ async def embed_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help
                         ] = False
                         ):
     try:
-        await embed_vocabulary(vocabulary, drop_existing=overwrite)
-        CONSOLE.print(f'[green]Successfully embedded vocabulary {vocabulary.value} into the vector database.[/green]')
+        if embed_all:
+            target_vocabularies = list(ConceptPrefix)
+        elif vocabulary:
+            target_vocabularies = [vocabulary]
+        else:
+            CONSOLE.print('[red]Either specify a vocabulary to embed or use the --all flag.[/red]')
+            return
+        for vocabulary in target_vocabularies:
+            await embed_vocabulary(vocabulary, drop_existing=overwrite)
+            CONSOLE.print(f'[green]Successfully embedded vocabulary {vocabulary.value} into the vector database.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to embed vocabulary {vocabulary.value} into the vector database: {e}[/red]')
         traceback.print_exc()
@@ -71,11 +128,30 @@ async def embed_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help
 
 @app.command(name='delete', help='Delete a vocabulary from database.')
 @run_async
-async def delete_command(vocabulary: Annotated[ConceptPrefix, typer.Argument(help='The vocabulary to delete.')],
+async def delete_command(vocabulary: Annotated[
+                             Optional[ConceptPrefix],
+                             typer.Argument(help='The vocabulary to delete.')
+                         ] = None,
+                         delete_all: Annotated[
+                             bool,
+                             typer.Option(
+                                 '--all',
+                                 '-a',
+                                 help='Delete all available vocabularies.'
+                             )
+                         ] = False
                          ):
     try:
-        await delete_vocabulary(vocabulary)
-        CONSOLE.print(f'[green]Successfully deleted vocabulary {vocabulary.value} from the database.[/green]')
+        if delete_all:
+            target_vocabularies = list(ConceptPrefix)
+        elif vocabulary:
+            target_vocabularies = [vocabulary]
+        else:
+            CONSOLE.print('[red]Either specify a vocabulary to delete or use the --all flag.[/red]')
+            return
+        for vocabulary in target_vocabularies:
+            await delete_vocabulary(vocabulary)
+            CONSOLE.print(f'[green]Successfully deleted vocabulary {vocabulary.value} from the database.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to delete vocabulary {vocabulary.value} from the database: {e}[/red]')
         traceback.print_exc()

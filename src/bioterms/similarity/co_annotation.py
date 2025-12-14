@@ -68,6 +68,8 @@ def _calculate_co_annotation(node_1: str,
                 if neighbor.startswith(f'{corpus_prefix.value}:')
             )
 
+    if total_annotation_count == 0:
+        return None
     if len(annotation_set_1) == 0 or len(annotation_set_2) == 0:
         return None
 
@@ -77,11 +79,24 @@ def _calculate_co_annotation(node_1: str,
     if len(annotation_intersection) == 0:
         return 0.0
 
-    npmi = (1 +
-            math.log(len(annotation_intersection) * total_annotation_count /
-                     (len(annotation_set_1) * len(annotation_set_2))) /
-            math.log(total_annotation_count / len(annotation_intersection))
-            ) / 2
+    intersection_len = len(annotation_intersection)
+
+    # 0 division error when intersection_len == total_annotation_count, in this case it's likely
+    # close to root node, which should have max similarity
+    if math.isclose(total_annotation_count, intersection_len):
+        npmi = 1.0
+    else:
+        numerator = (intersection_len * total_annotation_count) / (len(annotation_set_1) * len(annotation_set_2))
+        try:
+            num_log = math.log(numerator)
+            denom_log = math.log(total_annotation_count / intersection_len)
+            if denom_log == 0:
+                npmi = 1.0
+            else:
+                npmi = (1 + num_log / denom_log) / 2
+        except (ValueError, ZeroDivisionError):
+            npmi = 0.0
+
     jaccard_index = len(annotation_intersection) / len(annotation_union)
     similarity = npmi * jaccard_index
 
