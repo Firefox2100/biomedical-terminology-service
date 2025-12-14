@@ -45,7 +45,7 @@ def _sum_annotation_for_graph(target_graph: nx.DiGraph,
         description='Calculating annotation sums for target graph',
         total=len(order),
     ):
-        annotation_name = f'{target_prefix}:{node}'
+        annotation_name = f'{target_prefix.value}:{node}'
 
         direct_annotation_nodes = annotation_graph.neighbors(annotation_name) \
             if annotation_name in annotation_graph else []

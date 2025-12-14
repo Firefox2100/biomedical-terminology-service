@@ -53,7 +53,7 @@ def count_annotation_for_graph(target_graph: nx.DiGraph,
         description='Calculating annotation counts for target graph',
         total=len(order),
     ):
-        annotation_name = f'{target_prefix}:{node}'
+        annotation_name = f'{target_prefix.value}:{node}'
 
         direct_annotation_count = annotation_graph.degree[annotation_name] \
             if annotation_name in annotation_graph else 0

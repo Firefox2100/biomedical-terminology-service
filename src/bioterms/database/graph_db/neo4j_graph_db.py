@@ -4,7 +4,7 @@ import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
-from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
+from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
 from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
@@ -57,7 +57,7 @@ class Neo4jReactomeRepository(ReactomeRepository):
     """
     An implementation of the ReactomeRepository interface for Neo4j.
     """
-    
+
     def __init__(self,
                  client: AsyncDriver,
                  ):
@@ -415,7 +415,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param graph: The vocabulary graph to save.
         """
         edges = [
-            (str(source), str(target), data.get('label'))
+            (str(source), str(target), data['label'].value if data.get('label') else None)
             for source, target, data in graph.edges(data=True)
         ]
 
@@ -530,7 +530,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     vocabulary_graph.add_edge(
                         record['source_id'],
                         record['target_id'],
-                        label=record['rel_label']
+                        label=ConceptRelationshipType(record['rel_label'])
                     )
             else:
                 edge_count_result = await _execute_query_with_retry(
@@ -562,7 +562,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     vocabulary_graph.add_edge(
                         record['source_id'],
                         record['target_id'],
-                        label=record['rel_label']
+                        label=ConceptRelationshipType(record['rel_label'])
                     )
 
         return vocabulary_graph
@@ -771,7 +771,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 annotation_graph.add_edge(
                     f'{prefix_1.value}:{record["source_id"]}',
                     f'{prefix_2.value}:{record["target_id"]}',
-                    label=record['rel_label'],
+                    label=AnnotationType(record['rel_label']),
                     **record['rel_props']
                 )
 
@@ -888,18 +888,18 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             await _execute_query_with_retry(
                 query="""
-                CREATE INDEX concept_prefix_index IF NOT EXISTS
-                FOR (n:Concept)
-                ON (n.prefix)
-                """,
+                      CREATE INDEX concept_prefix_index IF NOT EXISTS
+                          FOR (n:Concept)
+                          ON (n.prefix)
+                      """,
                 session=session,
             )
             await _execute_query_with_retry(
                 query="""
-                CREATE INDEX concept_id_index IF NOT EXISTS
-                FOR (n:Concept)
-                ON (n.id)
-                """,
+                      CREATE INDEX concept_id_index IF NOT EXISTS
+                          FOR (n:Concept)
+                          ON (n.id)
+                      """,
                 session=session,
             )
             await _execute_query_with_retry(
