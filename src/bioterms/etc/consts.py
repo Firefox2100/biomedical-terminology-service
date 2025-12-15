@@ -119,9 +119,13 @@ class Settings(BaseSettings):
         'admin',
         description='Authentication source database for MongoDB',
     )
-    sqlite_db_path: str = Field(
-        'data/bioterms.db',
-        description='File path for the SQLite database',
+    sql_db_url: str = Field(
+        'sqlite+aiosqlite:///./bts.sqlite3',
+        description='Database URL for the SQL database',
+    )
+    sql_batch_size: int = Field(
+        5000,
+        description='Batch size for SQL database operations',
     )
 
     graph_database_driver: GraphDatabaseDriverType = Field(

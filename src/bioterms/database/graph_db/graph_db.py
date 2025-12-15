@@ -650,12 +650,6 @@ def get_active_graph_db() -> GraphDatabase:
         _active_graph_db = Neo4jGraphDatabase()
         return _active_graph_db
 
-    if CONFIG.graph_database_driver == GraphDatabaseDriverType.MEMORY:
-        from .memory_graph_db import MemoryGraphDatabase
-
-        _active_graph_db = MemoryGraphDatabase()
-        return _active_graph_db
-
     raise ValueError(
         f'Unsupported graph database driver type: {CONFIG.graph_db.driver_type}'
     )

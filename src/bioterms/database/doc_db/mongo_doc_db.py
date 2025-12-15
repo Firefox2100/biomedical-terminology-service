@@ -171,6 +171,13 @@ class MongoDocumentDatabase(DocumentDatabase):
         """
         cls._client = client
 
+    async def initialize(self):
+        """
+        Initialise the database driver/connection.
+        """
+        # MongoDB does not need explicit initialisation on the schemas
+        pass
+
     async def close(self) -> None:
         """
         Close the MongoDB connection.

@@ -28,6 +28,12 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
+    async def initialize(self):
+        """
+        Initialise the database driver/connection.
+        """
+
+    @abstractmethod
     async def close(self):
         """
         Close the database driver/connection.
@@ -249,19 +255,25 @@ async def get_active_doc_db() -> DocumentDatabase:
 
         MongoDocumentDatabase.set_client(mongo_client)
 
-        _active_doc_db = MongoDocumentDatabase(mongo_client)
+        _active_doc_db = MongoDocumentDatabase()
 
         return _active_doc_db
 
-    if CONFIG.doc_database_driver == DocDatabaseDriverType.SQLITE:
-        import aiosqlite
-        from .sqlite_doc_db import SqliteDocumentDatabase
+    if CONFIG.doc_database_driver == DocDatabaseDriverType.SQL:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from .sql_doc_db import SqlDocumentDatabase
 
-        connection = await aiosqlite.connect(CONFIG.sqlite_db_path)
+        sql_engine = create_async_engine(
+            CONFIG.sql_db_url,
+            pool_pre_ping=True,
+            future=True,
+        )
 
-        SqliteDocumentDatabase.set_client(connection)
+        async with sql_engine.connect() as conn:
+            await conn.execute(text('SELECT 1'))
 
-        _active_doc_db = SqliteDocumentDatabase(connection)
+        _active_doc_db = SqlDocumentDatabase(sql_engine, batch_size=CONFIG.sql_batch_size)
 
         return _active_doc_db
 

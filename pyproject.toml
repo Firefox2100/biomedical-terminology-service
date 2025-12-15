@@ -65,6 +65,7 @@ test = [
     "pymongo~=4.15.5",
     "qdrant-client~=1.16.1",
     "redis~=7.1.0",
+    "sqlalchemy~=2.0.45",
 ]
 aiosqlite = [
     "aiosqlite~=0.21.0",
@@ -80,6 +81,9 @@ qdrant = [
 ]
 redis = [
     "redis~=7.1.0",
+]
+sql = [
+    "sqlalchemy~=2.0.45",
 ]
 all = [
     "pymongo~=4.15.5",
