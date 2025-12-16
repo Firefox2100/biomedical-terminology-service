@@ -2,6 +2,7 @@ from uuid import uuid4
 from typing import AsyncIterator
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.http.models import HnswConfigDiff
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
@@ -111,8 +112,17 @@ class QdrantVectorDatabase(VectorDatabase):
         if isinstance(concepts, list):
             total_concepts: int = len(concepts)
 
+        # Disable HNSW indexing for faster bulk inserts
+        await self.client.update_collection(
+            collection_name=collection_name,
+            hnsw_config=HnswConfigDiff(
+                m=0,
+                ef_construction=0,
+            )
+        )
+
+        points = []
         async for embedded_batch in self.embed_concepts(concepts, total_concepts=total_concepts):
-            points = []
             for concept_id, vector in embedded_batch:
                 point_id = str(uuid4())
                 points.append(PointStruct(
@@ -123,10 +133,28 @@ class QdrantVectorDatabase(VectorDatabase):
 
                 id_map[concept_id] = point_id
 
+            if len(points) > 1000:
+                await self.client.upsert(
+                    collection_name=collection_name,
+                    points=points,
+                )
+
+                points = []
+
+        if points:
             await self.client.upsert(
                 collection_name=collection_name,
                 points=points,
             )
+
+        # Re-enable HNSW indexing after inserts
+        await self.client.update_collection(
+            collection_name=collection_name,
+            hnsw_config=HnswConfigDiff(
+                m=16,
+                ef_construction=100,
+            )
+        )
 
         return id_map
 

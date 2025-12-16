@@ -36,7 +36,7 @@
         <tbody>
         {% for v in vocabularies %}
           <tr>
-            <td class="text-monospace small">{{ v.prefix }}</td>
+            <td class="text-monospace small">{{ v.prefix.value }}</td>
             <td>{{ v.name }}</td>
             <td class="text-end">
               {% if v.loaded %}
@@ -48,7 +48,7 @@
             <td class="text-end">{{ v.concept_count }}</td>
             <td class="text-end">{{ v.relationship_count }}</td>
             <td class="text-end">
-              <a class="btn btn-sm btn-outline-primary" href="/vocabularies/{{ v.prefix }}">View</a>
+              <a class="btn btn-sm btn-outline-primary" href="/vocabularies/{{ v.prefix.value }}">View</a>
             </td>
           </tr>
         {% endfor %}

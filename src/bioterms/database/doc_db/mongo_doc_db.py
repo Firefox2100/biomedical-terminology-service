@@ -332,7 +332,8 @@ class MongoDocumentDatabase(DocumentDatabase):
         collection = self.db[str(prefix.value)]
         cursor = collection.find(
             {},
-            {'_id': 0, 'nGrams': 0, 'searchText': 0}
+            {'_id': 0, 'nGrams': 0, 'searchText': 0},
+            no_cursor_timeout=True,
         ).limit(limit if limit > 0 else 0)
 
         async for doc in cursor:
