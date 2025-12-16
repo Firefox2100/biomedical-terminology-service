@@ -87,11 +87,13 @@ class QdrantVectorDatabase(VectorDatabase):
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
                               prefix: ConceptPrefix,
+                              total_concepts: int | None = None,
                               ) -> dict[str, str]:
         """
         Insert concepts into the Qdrant collection.
         :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
         :param prefix: The prefix of the concepts being inserted
+        :param total_concepts: Optional total number of concepts, used for progress tracking
         :return: A mapping of concept IDs to their assigned point IDs in Qdrant
         """
         if not concepts:
@@ -106,7 +108,10 @@ class QdrantVectorDatabase(VectorDatabase):
         if collection_name not in existing:
             await self.create_collection(collection_name=collection_name)
 
-        async for embedded_batch in self.embed_concepts(concepts):
+        if isinstance(concepts, list):
+            total_concepts: int = len(concepts)
+
+        async for embedded_batch in self.embed_concepts(concepts, total_concepts=total_concepts):
             points = []
             for concept_id, vector in embedded_batch:
                 point_id = str(uuid4())

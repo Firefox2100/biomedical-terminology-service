@@ -10,7 +10,7 @@ from pymongo.errors import OperationFailure
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
-from bioterms.etc.utils import batch_iterable
+from bioterms.etc.utils import batch_iterable, iter_progress
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
@@ -385,13 +385,21 @@ class MongoDocumentDatabase(DocumentDatabase):
 
         # Batch update with default overwrite behaviour
         operations = []
-        for concept_id, vector_id in mapping.items():
+        for concept_id, vector_id in iter_progress(
+            mapping.items(),
+            description='Updating vector mappings',
+            total=len(mapping),
+        ):
             operations.append(
                 UpdateOne(
                     {'conceptId': concept_id},
                     {'$set': {'vectorId': vector_id}}
                 )
             )
+
+            if len(operations) >= 1000:
+                await collection.bulk_write(operations)
+                operations = []
 
         if operations:
             await collection.bulk_write(operations)

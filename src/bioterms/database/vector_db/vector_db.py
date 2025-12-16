@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix
-from bioterms.etc.utils import get_transformer
+from bioterms.etc.utils import get_transformer, aiter_progress
 from bioterms.model.concept import Concept
 
 
@@ -16,9 +16,14 @@ class VectorDatabase(ABC):
     async def embed_concepts(concepts: list[Concept] | AsyncIterator[Concept],
                              batch_size: int = 32,
                              transformer: SentenceTransformer = None,
+                             total_concepts: int = None,
                              ) -> AsyncIterator[list[tuple[str, list[float]]]]:
         """
         Embed concept texts using the configured SentenceTransformer model.
+        :param concepts: A list or async iterator of Concept instances to embed
+        :param batch_size: Number of concepts to process in each batch
+        :param transformer: Optional SentenceTransformer instance to use for embedding
+        :param total_concepts: Optional total number of concepts, used for progress tracking
         :return: An iterator of chunks of tuples containing concept IDs and their embedding vectors
         """
         if transformer is None:
@@ -37,7 +42,11 @@ class VectorDatabase(ABC):
         if isinstance(concepts, AsyncIterator):
             batch = []
 
-            async for concept in concepts:
+            async for concept in aiter_progress(
+                concepts,
+                description='Embedding concepts',
+                total=total_concepts,
+            ):
                 batch.append(concept)
 
                 if len(batch) >= batch_size:
