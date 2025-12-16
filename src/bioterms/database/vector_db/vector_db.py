@@ -73,11 +73,13 @@ class VectorDatabase(ABC):
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
                               prefix: ConceptPrefix,
+                              total_concepts: int | None = None,
                               ) -> dict[str, str]:
         """
         Insert concepts into the Qdrant collection.
         :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
         :param prefix: The prefix of the concepts being inserted
+        :param total_concepts: Optional total number of concepts, used for progress tracking
         :return: A mapping of concept IDs to their assigned point IDs in Qdrant
         """
 

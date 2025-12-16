@@ -263,6 +263,7 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     id_map = await vector_db.insert_concepts(
         concepts=concept_iter,
         prefix=prefix,
+        total_concepts=status.concept_count,
     )
 
     await doc_db.update_vector_mapping(
