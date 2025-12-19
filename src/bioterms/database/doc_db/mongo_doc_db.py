@@ -2,6 +2,7 @@ import re
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
 from typing import AsyncIterator
+from bson import ObjectId
 import pymongo
 from pymongo import AsyncMongoClient, UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
@@ -330,14 +331,44 @@ class MongoDocumentDatabase(DocumentDatabase):
         :return: An asynchronous iterator yielding Concept instances.
         """
         collection = self.db[str(prefix.value)]
-        cursor = collection.find(
-            {},
-            {'_id': 0, 'nGrams': 0, 'searchText': 0},
-            no_cursor_timeout=True,
-        ).limit(limit if limit > 0 else 0)
 
-        async for doc in cursor:
-            yield model_class.model_validate(doc)
+        page_size = 5000
+        remaining = limit if limit and limit > 0 else None
+        last_id: ObjectId | None = None
+
+        while True:
+            if remaining is not None and remaining <= 0:
+                return
+
+            this_page = page_size if remaining is None else min(page_size, remaining)
+
+            query = {} if last_id is None else {'_id': {'$gt': last_id}}
+
+            async with self._client.start_session() as session:
+                cursor = collection.find(
+                    query,
+                    {'nGrams': 0, 'searchText': 0},
+                    session=session,
+                    no_cursor_timeout=True,
+                ).sort('_id', 1).limit(this_page)
+
+                yielded_any = False
+                try:
+                    async for doc in cursor:
+                        yielded_any = True
+                        last_id = doc['_id']
+                        doc.pop('_id', None)
+                        yield model_class.model_validate(doc)
+
+                        if remaining is not None:
+                            remaining -= 1
+                            if remaining <= 0:
+                                return
+                finally:
+                    await cursor.close()
+
+            if not yielded_any:
+                return
 
     async def get_terms_by_ids_iter(self,
                                     prefix: ConceptPrefix,

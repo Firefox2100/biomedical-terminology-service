@@ -117,7 +117,6 @@ class QdrantVectorDatabase(VectorDatabase):
             collection_name=collection_name,
             hnsw_config=HnswConfigDiff(
                 m=0,
-                ef_construction=0,
             )
         )
 
@@ -152,7 +151,7 @@ class QdrantVectorDatabase(VectorDatabase):
             collection_name=collection_name,
             hnsw_config=HnswConfigDiff(
                 m=16,
-                ef_construction=100,
+                ef_construct=100,
             )
         )
 

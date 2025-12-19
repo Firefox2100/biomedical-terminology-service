@@ -56,8 +56,9 @@ class VectorDatabase(ABC):
             if batch:
                 yield process_batch(batch)
         elif isinstance(concepts, list):
-            for i in range(0, len(concepts), batch_size):
-                batch = concepts[i:i + batch_size]
+            while concepts:
+                batch = concepts[:batch_size]
+                del concepts[:batch_size]
 
                 yield process_batch(batch)
         else:
