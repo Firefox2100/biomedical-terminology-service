@@ -3,6 +3,7 @@ from typing import AsyncIterator
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 from qdrant_client.http.models import HnswConfigDiff
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
@@ -157,6 +158,25 @@ class QdrantVectorDatabase(VectorDatabase):
 
         return id_map
 
+    async def count_vectors(self,
+                            prefix: ConceptPrefix,
+                            ) -> int:
+        """
+        Count the number of concept vectors for a given prefix in the vector database.
+        :param prefix: The vocabulary prefix to count vectors for.
+        :return: The number of vectors as an integer.
+        """
+        collection_name = prefix.value
+
+        try:
+            collection_info = await self.client.get_collection(
+                collection_name=collection_name
+            )
+
+            return collection_info.points_count
+        except UnexpectedResponse:
+            return 0
+
     async def get_vectors_for_prefix_iter(self,
                                           prefix: ConceptPrefix,
                                           ) -> AsyncIterator[tuple[str, list[float]]]:
@@ -196,6 +216,36 @@ class QdrantVectorDatabase(VectorDatabase):
                 break
 
             offset = new_offset
+
+    async def search_concepts_iter(self,
+                                   query: str,
+                                   prefix: ConceptPrefix,
+                                   limit: int = 10,
+                                   ) -> AsyncIterator[str]:
+        """
+        Search for concepts matching the query within the specified vocabulary prefix, and
+        return an async iterator of matching concept IDs.
+        :param query: The search query string.
+        :param prefix: The vocabulary prefix to search within.
+        :param limit: The top number of concepts to return.
+        :return: A list of matching Concept instances.
+        """
+        collection_name = prefix.value
+        query_vector = self._embed_strings(
+            texts=[query],
+        )[0]
+
+        response = await self.client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            limit=limit,
+            with_payload=True,
+        )
+
+        for p in response.points:
+            concept_id = p.payload.get('conceptId')
+            if concept_id is not None:
+                yield concept_id
 
     async def delete_vectors_for_prefix(self,
                                         prefix: ConceptPrefix,

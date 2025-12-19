@@ -22,7 +22,7 @@ from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
 from bioterms.router import auto_complete_router, data_router, expand_router, map_router, misc_router, \
-    similarity_router, ui_router
+    search_router, similarity_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
@@ -130,6 +130,10 @@ def create_app() -> FastAPI:
                 'description': 'Endpoints for mapping biomedical terms between different vocabularies.',
             },
             {
+                'name': 'Search',
+                'description': 'Endpoints for searching biomedical terms with imprecise queries.',
+            },
+            {
                 'name': 'Similarity',
                 'description': 'Endpoints for retrieving similar biomedical terms.',
             },
@@ -227,6 +231,7 @@ def create_app() -> FastAPI:
     app.include_router(expand_router)
     app.include_router(map_router)
     app.include_router(misc_router)
+    app.include_router(search_router)
     app.include_router(similarity_router)
     app.include_router(ui_router)
 

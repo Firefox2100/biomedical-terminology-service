@@ -7,8 +7,8 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import VocabularyNotLoaded
 from bioterms.etc.utils import check_files_exist
-from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, \
-    get_active_doc_db, get_active_graph_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
+    get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.vocabulary_status import VocabularyStatus
 
 
@@ -45,6 +45,7 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
                                 cache: Cache = None,
                                 doc_db: DocumentDatabase = None,
                                 graph_db: GraphDatabase = None,
+                                vector_db: VectorDatabase = None,
                                 use_cache: bool = True,
                                 ) -> VocabularyStatus:
     """
@@ -53,6 +54,7 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
     :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
+    :param vector_db: The vector database instance.
     :param use_cache: Whether to use the cache. Defaults to True.
     :return: The vocabulary status.
     """
@@ -68,12 +70,14 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
 
     if doc_db is None:
         doc_db = await get_active_doc_db()
-
     if graph_db is None:
         graph_db = get_active_graph_db()
+    if vector_db is None:
+        vector_db = get_active_vector_db()
 
     concept_count = await doc_db.count_terms(prefix)
     relationship_count = await graph_db.count_internal_relationships(prefix)
+    vector_count = await vector_db.count_vectors(prefix)
     annotations = vocabulary_module.ANNOTATIONS
     downloaded = check_files_exist(vocabulary_module.FILE_PATHS)
 
@@ -93,6 +97,7 @@ async def get_vocabulary_status(prefix: ConceptPrefix,
         loaded=concept_count > 0,
         conceptCount=concept_count,
         relationshipCount=relationship_count,
+        vectorCount=vector_count,
         annotations=annotations,
         similarityMethods=vocabulary_module.SIMILARITY_METHODS,
     )

@@ -1,3 +1,4 @@
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from sentence_transformers import SentenceTransformer
@@ -12,8 +13,40 @@ class VectorDatabase(ABC):
     """
     Abstract base class for vector databases.
     """
-    @staticmethod
-    async def embed_concepts(concepts: list[Concept] | AsyncIterator[Concept],
+    _embed_lock = threading.Lock()
+
+    @classmethod
+    def _embed_strings(cls,
+                       texts: list[str],
+                       transformer: SentenceTransformer = None,
+                       ) -> list[list[float]]:
+        """
+        Embed a list of strings using the provided SentenceTransformer.
+        :param texts: The list of strings to embed
+        :param transformer: The SentenceTransformer instance to use for embedding; if None,
+            the default transformer will be used
+        :return:
+        """
+        if transformer is None:
+            transformer = get_transformer()
+
+            with cls._embed_lock:
+                vectors = transformer.encode(
+                    sentences=texts,
+                    normalize_embeddings=True,
+                )
+        else:
+            # Assume the provided transformer is thread-safe or already managed
+            vectors = transformer.encode(
+                sentences=texts,
+                normalize_embeddings=True,
+            )
+
+        return [vector.tolist() for vector in vectors]
+
+    @classmethod
+    async def embed_concepts(cls,
+                             concepts: list[Concept] | AsyncIterator[Concept],
                              batch_size: int = 32,
                              transformer: SentenceTransformer = None,
                              total_concepts: int = None,
@@ -26,18 +59,13 @@ class VectorDatabase(ABC):
         :param total_concepts: Optional total number of concepts, used for progress tracking
         :return: An iterator of chunks of tuples containing concept IDs and their embedding vectors
         """
-        if transformer is None:
-            transformer = get_transformer()
-
         def process_batch(b: list[Concept]) -> list[tuple[str, list[float]]]:
-            texts = [c.canonical_text() for c in b]
-
-            vectors = transformer.encode(
-                sentences=texts,
-                normalize_embeddings=True,
+            vectors = cls._embed_strings(
+                texts=[c.canonical_text() for c in b],
+                transformer=transformer,
             )
 
-            return [(c.concept_id, vectors[idx].tolist()) for idx, c in enumerate(b)]
+            return [(c.concept_id, vectors[idx]) for idx, c in enumerate(b)]
 
         if isinstance(concepts, AsyncIterator):
             batch = []
@@ -85,6 +113,16 @@ class VectorDatabase(ABC):
         """
 
     @abstractmethod
+    async def count_vectors(self,
+                            prefix: ConceptPrefix,
+                            ) -> int:
+        """
+        Count the number of concept vectors for a given prefix in the vector database.
+        :param prefix: The vocabulary prefix to count vectors for.
+        :return: The number of vectors as an integer.
+        """
+
+    @abstractmethod
     def get_vectors_for_prefix_iter(self,
                                     prefix: ConceptPrefix,
                                     ) -> AsyncIterator[tuple[str, list[float]]]:
@@ -109,6 +147,45 @@ class VectorDatabase(ABC):
             results[concept_id] = vector
 
         return results
+
+    @abstractmethod
+    def search_concepts_iter(self,
+                             query: str,
+                             prefix: ConceptPrefix,
+                             limit: int = 10,
+                             ) -> AsyncIterator[str]:
+        """
+        Search for concepts matching the query within the specified vocabulary prefix, and
+        return an async iterator of matching concept IDs.
+        :param query: The search query string.
+        :param prefix: The vocabulary prefix to search within.
+        :param limit: The top number of concepts to return.
+        :return: A list of matching Concept instances.
+        """
+
+    async def search_concepts(self,
+                              query: str,
+                              prefix: ConceptPrefix,
+                              limit: int = 10,
+                              ) -> list[str]:
+        """
+        Search for concepts matching the query within the specified vocabulary prefix.
+        :param query: The search query string.
+        :param prefix: The vocabulary prefix to search within.
+        :param limit: The top number of concepts to return.
+        :return: A list of matching Concept instances.
+        """
+        concept_ids = []
+        concept_iter = self.search_concepts_iter(
+            query=query,
+            prefix=prefix,
+            limit=limit,
+        )
+
+        async for concept_id in concept_iter:
+            concept_ids.append(concept_id)
+
+        return concept_ids
 
     @abstractmethod
     async def delete_vectors_for_prefix(self,

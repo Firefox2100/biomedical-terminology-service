@@ -48,6 +48,11 @@ class VocabularyStatus(JsonModel):
         description='The number of relationships in the vocabulary.',
         alias='relationshipCount',
     )
+    vector_count: int = Field(
+        0,
+        description='The number of vectors associated with the vocabulary.',
+        alias='vectorCount',
+    )
     annotations: List[ConceptPrefix] = Field(
         default_factory=list,
         description='A list of annotation vocabularies associated with this vocabulary.',
