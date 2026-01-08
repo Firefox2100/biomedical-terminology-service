@@ -1,3 +1,7 @@
+"""
+Enumeration types used throughout the bioterms service.
+"""
+
 from enum import Enum
 
 

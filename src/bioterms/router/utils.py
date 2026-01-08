@@ -1,3 +1,7 @@
+"""
+Utility functions for FastAPI route handlers.
+"""
+
 import re
 import posixpath
 import hashlib

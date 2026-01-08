@@ -1,3 +1,7 @@
+"""
+Data loaders for concept-related data fetching.
+"""
+
 from typing import Optional
 from aiodataloader import DataLoader
 
@@ -7,11 +11,21 @@ from bioterms.vocabulary import get_vocabulary_config
 
 
 class ConceptLoaderById(DataLoader[str, Optional[dict]]):
+    """
+    Data loader to fetch concepts by their IDs.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  doc_db: DocumentDatabase,
                  config: dict,
                  ):
+        """
+        Initialize the ConceptLoaderById.
+        :param prefix: The vocabulary prefix.
+        :param doc_db: The document database instance.
+        :param config: The vocabulary configuration dictionary.
+        """
         super().__init__()
 
         self._prefix = prefix
@@ -21,6 +35,11 @@ class ConceptLoaderById(DataLoader[str, Optional[dict]]):
     async def batch_load_fn(self,
                             concept_ids: list[str]
                             ) -> list[Optional[dict]]:
+        """
+        Batch load function to fetch concepts by their IDs.
+        :param concept_ids: List of concept IDs to fetch.
+        :return: List of concept data dictionaries or None if not found.
+        """
         concepts = await self._doc_db.get_terms_by_ids(
             prefix=self._prefix,
             concept_ids=concept_ids,
@@ -34,10 +53,19 @@ class ConceptLoaderById(DataLoader[str, Optional[dict]]):
 
 
 class ConceptLoaderByParent(DataLoader[str, list[str]]):
+    """
+    Data loader to fetch child concepts given parent concept IDs.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoaderByParent.
+        :param prefix: The vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
         super().__init__()
 
         self._prefix = prefix
@@ -46,6 +74,11 @@ class ConceptLoaderByParent(DataLoader[str, list[str]]):
     async def batch_load_fn(self,
                             parent_ids: list[str]
                             ) -> list[list[str]]:
+        """
+        Batch load function to fetch child concepts for given parent IDs.
+        :param parent_ids: List of parent concept IDs.
+        :return: List of lists of child concept IDs.
+        """
         expansion_results = await self._graph_db.expand_terms(
             prefix=self._prefix,
             concept_ids=parent_ids,
@@ -59,10 +92,19 @@ class ConceptLoaderByParent(DataLoader[str, list[str]]):
 
 
 class ConceptLoaderByChild(DataLoader[str, list[str]]):
+    """
+    Data loader to fetch parent concepts given child concept IDs.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoaderByChild.
+        :param prefix: The vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
         super().__init__()
 
         self._prefix = prefix
@@ -71,6 +113,11 @@ class ConceptLoaderByChild(DataLoader[str, list[str]]):
     async def batch_load_fn(self,
                             child_ids: list[str]
                             ) -> list[list[str]]:
+        """
+        Batch load function to fetch parent concepts for given child IDs.
+        :param child_ids: List of child concept IDs.
+        :return: List of lists of parent concept IDs.
+        """
         expansion_results = await self._graph_db.trace_ancestors(
             prefix=self._prefix,
             concept_ids=child_ids,
@@ -84,10 +131,19 @@ class ConceptLoaderByChild(DataLoader[str, list[str]]):
 
 
 class ConceptLoaderByReplacement(DataLoader[str, list[str]]):
+    """
+    Data loader to fetch replacing concepts given concept IDs.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoaderByReplacement.
+        :param prefix: The vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
         super().__init__()
 
         self._prefix = prefix
@@ -96,6 +152,11 @@ class ConceptLoaderByReplacement(DataLoader[str, list[str]]):
     async def batch_load_fn(self,
                             concept_ids: list[str],
                             ) -> list[list[str]]:
+        """
+        Batch load function to fetch replacing concepts for given concept IDs.
+        :param concept_ids: List of concept IDs.
+        :return: List of lists of replacing concept IDs.
+        """
         replacements = await self._graph_db.get_replacing_terms(
             prefix=self._prefix,
             concept_ids=concept_ids,
@@ -108,10 +169,19 @@ class ConceptLoaderByReplacement(DataLoader[str, list[str]]):
 
 
 class ConceptLoaderByReplaced(DataLoader[str, list[str]]):
+    """
+    Data loader to fetch replaced concepts given concept IDs.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoaderByReplaced.
+        :param prefix: The vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
         super().__init__()
 
         self._prefix = prefix
@@ -120,6 +190,11 @@ class ConceptLoaderByReplaced(DataLoader[str, list[str]]):
     async def batch_load_fn(self,
                             concept_ids: list[str],
                             ) -> list[list[str]]:
+        """
+        Batch load function to fetch replaced concepts for given concept IDs.
+        :param concept_ids: List of concept IDs.
+        :return: List of lists of replaced concept IDs.
+        """
         replaced_terms = await self._graph_db.get_replaced_terms(
             prefix=self._prefix,
             concept_ids=concept_ids,
@@ -132,10 +207,19 @@ class ConceptLoaderByReplaced(DataLoader[str, list[str]]):
 
 
 class ConceptLoaderBySimilarity(DataLoader[tuple[str, float], list[tuple[str, float]]]):
+    """
+    Data loader to fetch similar concepts given concept ID and similarity threshold.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoaderBySimilarity.
+        :param prefix: The vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
         super().__init__()
 
         self._prefix = prefix
@@ -144,6 +228,11 @@ class ConceptLoaderBySimilarity(DataLoader[tuple[str, float], list[tuple[str, fl
     async def batch_load_fn(self,
                             queries: list[tuple[str, float]],
                             ) -> list[list[tuple[str, float]]]:
+        """
+        Batch load function to fetch similar concepts for given queries.
+        :param queries: List of tuples containing concept ID and similarity threshold.
+        :return: List of lists of tuples containing similar concept IDs and their similarity scores.
+        """
         similar_concepts = await self._graph_db.get_similar_terms_aggregate(
             prefix=self._prefix,
             similarity_queries=queries,
@@ -156,11 +245,21 @@ class ConceptLoaderBySimilarity(DataLoader[tuple[str, float], list[tuple[str, fl
 
 
 class ConceptLoaderByAnnotatedConcepts(DataLoader[str, list[str]]):
+    """
+    Data loader to fetch mapped concepts from source prefix to target prefix.
+    """
+
     def __init__(self,
                  source_prefix: ConceptPrefix,
                  target_prefix: ConceptPrefix,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoaderByAnnotatedConcepts.
+        :param source_prefix: The source vocabulary prefix.
+        :param target_prefix: The target vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
         super().__init__()
 
         self._source_prefix = source_prefix
@@ -170,6 +269,11 @@ class ConceptLoaderByAnnotatedConcepts(DataLoader[str, list[str]]):
     async def batch_load_fn(self,
                             concept_ids: list[str],
                             ) -> list[list[str]]:
+        """
+        Batch load function to fetch mapped concepts for given concept IDs.
+        :param concept_ids: List of concept IDs.
+        :return: List of lists of mapped concept IDs.
+        """
         mapped_concepts = await self._graph_db.map_terms(
             prefix=self._source_prefix,
             target_prefix=self._target_prefix,
@@ -183,11 +287,21 @@ class ConceptLoaderByAnnotatedConcepts(DataLoader[str, list[str]]):
 
 
 class ConceptLoader:
+    """
+    Concept data loader providing various methods to load concept-related data.
+    """
+
     def __init__(self,
                  prefix: ConceptPrefix,
                  doc_db: DocumentDatabase,
                  graph_db: GraphDatabase,
                  ):
+        """
+        Initialize the ConceptLoader.
+        :param prefix: The vocabulary prefix.
+        :param doc_db: The document database instance.
+        :param graph_db: The graph database instance.
+        """
         self._prefix = prefix
         self._doc_db = doc_db
         self._graph_db = graph_db
@@ -203,6 +317,10 @@ class ConceptLoader:
 
     @property
     def id(self) -> ConceptLoaderById:
+        """
+        Get the ConceptLoaderById instance.
+        :return: The ConceptLoaderById instance.
+        """
         if self._id_loader is None:
             self._id_loader = ConceptLoaderById(
                 prefix=self._prefix,
@@ -214,6 +332,10 @@ class ConceptLoader:
 
     @property
     def children(self) -> ConceptLoaderByParent:
+        """
+        Get the ConceptLoaderByParent instance.
+        :return: The ConceptLoaderByParent instance.
+        """
         if self._children_loader is None:
             self._children_loader = ConceptLoaderByParent(
                 prefix=self._prefix,
@@ -224,6 +346,10 @@ class ConceptLoader:
 
     @property
     def parents(self) -> ConceptLoaderByChild:
+        """
+        Get the ConceptLoaderByChild instance.
+        :return: The ConceptLoaderByChild instance.
+        """
         if self._parents_loader is None:
             self._parents_loader = ConceptLoaderByChild(
                 prefix=self._prefix,
@@ -234,6 +360,10 @@ class ConceptLoader:
 
     @property
     def replaced(self) -> ConceptLoaderByReplaced:
+        """
+        Get the ConceptLoaderByReplaced instance.
+        :return: The ConceptLoaderByReplaced instance.
+        """
         if self._replaced_loader is None:
             self._replaced_loader = ConceptLoaderByReplaced(
                 prefix=self._prefix,
@@ -244,6 +374,10 @@ class ConceptLoader:
 
     @property
     def replacement(self) -> ConceptLoaderByReplacement:
+        """
+        Get the ConceptLoaderByReplacement instance.
+        :return: The ConceptLoaderByReplacement instance.
+        """
         if self._replacement_loader is None:
             self._replacement_loader = ConceptLoaderByReplacement(
                 prefix=self._prefix,
@@ -254,6 +388,10 @@ class ConceptLoader:
 
     @property
     def similar(self) -> ConceptLoaderBySimilarity:
+        """
+        Get the ConceptLoaderBySimilarity instance.
+        :return: The ConceptLoaderBySimilarity instance.
+        """
         if self._similarity_loader is None:
             self._similarity_loader = ConceptLoaderBySimilarity(
                 prefix=self._prefix,
@@ -265,6 +403,11 @@ class ConceptLoader:
     def get_mapping_loader(self,
                            target_prefix: ConceptPrefix,
                            ) -> ConceptLoaderByAnnotatedConcepts:
+        """
+        Get the ConceptLoaderByAnnotatedConcepts for the specified target prefix.
+        :param target_prefix: The target vocabulary prefix.
+        :return: The ConceptLoaderByAnnotatedConcepts instance.
+        """
         if target_prefix not in self._mapping_loaders:
             self._mapping_loaders[target_prefix] = ConceptLoaderByAnnotatedConcepts(
                 source_prefix=self._prefix,

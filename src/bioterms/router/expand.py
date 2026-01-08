@@ -1,3 +1,7 @@
+"""
+Router for expanding terms in vocabularies.
+"""
+
 from typing import List
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
@@ -67,13 +71,14 @@ async def expand_terms_v1(prefix: ConceptPrefix,
                           ),
                           result_threshold: int = Query(
                               0,
-                              description='The maximum number of terms to return in the response. 0 for no limit.'
+                              description='The maximum number of terms to return in the response. '
+                                          '0 for no limit.'
                           ),
                           graph_db: GraphDatabase = Depends(get_active_graph_db),
                           ):
     """
-    Expand terms to their descendants up to a specified depth (V1). This API is compatible with Cafe Variome
-    V3 backend.
+    Expand terms to their descendants up to a specified depth (V1). This API is compatible with
+    Cafe Variome V3 backend.
     \f
     :param prefix: The vocabulary prefix.
     :param requested_terms: The request body containing term IDs to expand.

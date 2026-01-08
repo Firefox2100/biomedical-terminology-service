@@ -1,3 +1,7 @@
+"""
+Router for mapping concepts between different vocabularies.
+"""
+
 from typing import List
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
@@ -66,7 +70,8 @@ async def map_terms_v1(prefix: ConceptPrefix,
                        requested_terms: MapRequestV1,
                        result_threshold: int = Query(
                            0,
-                           description='The maximum number of terms to return in the response. 0 for no limit.'
+                           description='The maximum number of terms to return in the response. '
+                                       '0 for no limit.'
                        ),
                        graph_db: GraphDatabase = Depends(get_active_graph_db),
                        ):
@@ -109,8 +114,9 @@ async def map_terms_v2(prefix: ConceptPrefix,
                        ),
                        max_hops: int = Query(
                            1,
-                           description='Maximum number of hops between source and target terms. Set this '
-                                       'to higher for going across more than one vocabulary.',
+                           description='Maximum number of hops between source and target terms. '
+                                       'Set this to higher for going across more than one '
+                                       'vocabulary.',
                            ge=1,
                        ),
                        limit: int | None = Query(
@@ -125,8 +131,8 @@ async def map_terms_v2(prefix: ConceptPrefix,
     :param prefix: The prefix of the input terms.
     :param target_prefix: The prefix of the target terms.
     :param concept_ids: List of concept IDs to map.
-    :param max_hops: Maximum number of hops between source and target terms. Set this to higher for going
-                     across more than one vocabulary.
+    :param max_hops: Maximum number of hops between source and target terms. Set this to higher
+        for going across more than one vocabulary.
     :param limit: Maximum number of descendants to return for each term.
     :param graph_db: The active graph database.
     :return: A list of mapped terms.

@@ -1,3 +1,7 @@
+"""
+Constants and configuration settings for the Biomedical Terminology Service.
+"""
+
 import os
 import logging
 import secrets
@@ -51,8 +55,8 @@ class Settings(BaseSettings):
     )
     use_https: bool = Field(
         False,
-        description='Whether this application is behind an HTTPS proxy. This affects cookie settings, '
-                    'redirect URLs, and security headers.',
+        description='Whether this application is behind an HTTPS proxy. This affects cookie '
+                    'settings, redirect URLs, and security headers.',
     )
     enable_metrics: bool = Field(
         True,

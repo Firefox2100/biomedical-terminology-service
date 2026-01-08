@@ -1,3 +1,7 @@
+"""
+Router for similarity and translation endpoints.
+"""
+
 from typing import List, Optional, Union
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
@@ -127,7 +131,8 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
                                requested_terms: SimilarityRequestV1,
                                result_threshold: int = Query(
                                    0,
-                                   description='The maximum number of terms to return in the response. 0 for no limit.'
+                                   description='The maximum number of terms to return in the '
+                                               'response. 0 for no limit.'
                                ),
                                graph_db: GraphDatabase = Depends(get_active_graph_db),
                                ):
@@ -150,7 +155,8 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
 
     v1_similar_terms = []
     async for similar_term in similarity_iter:
-        similar_concepts = similar_term.similar_groups[0].similar_concepts if similar_term.similar_groups else []
+        similar_concepts = similar_term.similar_groups[0].similar_concepts \
+            if similar_term.similar_groups else []
 
         v1_similar_terms.append(
             SimilarTermV1(
@@ -172,37 +178,56 @@ async def get_similar_terms_v2(prefix: ConceptPrefix,
                                ),
                                threshold: float = Query(
                                    1.0,
-                                   description='Minimum similarity score to consider a term as similar. '
-                                               '0 to return all. Please note that the server may have chosen to '
-                                               'store only connections which similarity score are above a '
-                                               'certain value. In this case, since the data is not stored, '
-                                               'they will not be returned even if the threshold is set to lower.',
+                                   description='Minimum similarity score to consider a term as '
+                                               'similar. 0 to return all. Please note that the '
+                                               'server may have chosen to store only connections '
+                                               'which similarity score are above a certain value. '
+                                               'In this case, since the data is not stored, '
+                                               'they will not be returned even if the threshold '
+                                               'is set to lower.',
                                    ge=0.0,
                                    le=1.0,
                                ),
                                same_prefix: bool = Query(
                                    True,
-                                   description='Whether to only return similar terms with the same prefix as the '
-                                               'original term.',
+                                   description='Whether to only return similar terms with the '
+                                               'same prefix as the original term.',
                                    alias='same-prefix',
                                ),
                                corpus: Optional[ConceptPrefix] = Query(
                                    None,
-                                   description='If specified, only consider similarity scores calculated within '
-                                               'the given corpus/prefix.',
+                                   description='If specified, only consider similarity scores '
+                                               'calculated within the given corpus/prefix.',
                                ),
                                method: Optional[SimilarityMethod] = Query(
                                    None,
-                                   description='If specified, only consider similarity scores calculated with the '
-                                               'given method.',
+                                   description='If specified, only consider similarity scores '
+                                               'calculated with the given method.',
                                ),
                                limit: Optional[int] = Query(
                                    None,
-                                   description='Maximum number of descendants to return for each term.',
+                                   description='Maximum number of descendants to return for '
+                                               'each term.',
                                    ge=1,
                                ),
                                graph_db: GraphDatabase = Depends(get_active_graph_db),
                                ):
+    """
+    Get similar terms for the requested term IDs (V2).
+    \f
+    :param prefix: The vocabulary prefix.
+    :param concept_ids: List of concept IDs to get similar concepts for.
+    :param threshold: Minimum similarity score to consider a term as similar.
+    :param same_prefix: Whether to only return similar terms with the same prefix as the
+        original term.
+    :param corpus: If specified, only consider similarity scores calculated within the
+        given corpus/prefix.
+    :param method: If specified, only consider similarity scores calculated with the
+        given method.
+    :param limit: Maximum number of descendants to return for each term.
+    :param graph_db: The graph database instance.
+    :return: A list of similar terms with their similarity scores.
+    """
     similarity_iter = graph_db.get_similar_terms_iter(
         prefix=prefix,
         concept_ids=concept_ids,
@@ -224,12 +249,14 @@ async def translate_terms_v1(prefix: ConceptPrefix,
                              translate_request: TranslateRequestV1,
                              result_threshold: int = Query(
                                  0,
-                                 description='The maximum number of terms to return in the response. 0 for no limit.'
+                                 description='The maximum number of terms to return in the '
+                                             'response. 0 for no limit.'
                              ),
                              graph_db: GraphDatabase = Depends(get_active_graph_db),
                              ):
     """
-    Translate terms for the requested term IDs (V1). This endpoint is compatible with Cafe Variome V3 backend.
+    Translate terms for the requested term IDs (V1). This endpoint is compatible with
+    Cafe Variome V3 backend.
     \f
     :param prefix: The vocabulary prefix.
     :param translate_request: The requested terms for translation.
@@ -265,22 +292,25 @@ async def translate_terms_v2(prefix: ConceptPrefix,
                              ),
                              constraint_concepts: List[str] = Query(
                                  ...,
-                                 description='List of constraint concept IDs to filter the translations. '
-                                             'In prefix:id format.'
+                                 description='List of constraint concept IDs to filter the '
+                                             'translations. In prefix:id format.'
                              ),
                              threshold: float = Query(
                                  1.0,
-                                 description='Minimum similarity score to consider a term as similar. '
-                                             '0 to return all. Please note that the server may have chosen to '
-                                             'store only connections which similarity score are above a '
-                                             'certain value. In this case, since the data is not stored, '
-                                             'they will not be returned even if the threshold is set to lower.',
+                                 description='Minimum similarity score to consider a term as '
+                                             'similar. 0 to return all. Please note that the '
+                                             'server may have chosen to store only connections '
+                                             'which similarity score are above a certain value. '
+                                             'In this case, since the data is not stored, '
+                                             'they will not be returned even if the threshold '
+                                             'is set to lower.',
                                  ge=0.0,
                                  le=1.0,
                              ),
                              limit: Optional[int] = Query(
                                  None,
-                                 description='Maximum number of descendants to return for each term.',
+                                 description='Maximum number of descendants to return for '
+                                             'each term.',
                                  ge=1,
                              ),
                              graph_db: GraphDatabase = Depends(get_active_graph_db),
@@ -301,8 +331,10 @@ async def translate_terms_v2(prefix: ConceptPrefix,
         try:
             concept_prefix_str, concept_id = concept.split(':', 1)
             concept_prefix = ConceptPrefix(concept_prefix_str)
-        except ValueError:
-            raise ValueError(f'Invalid constraint concept format: {concept}. Expected format is prefix:id')
+        except ValueError as e:
+            raise ValueError(
+                f'Invalid constraint concept format: {concept}. Expected format is prefix:id'
+            ) from e
 
         if concept_prefix not in constraint_dict:
             constraint_dict[concept_prefix] = set()

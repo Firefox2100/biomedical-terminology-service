@@ -1,10 +1,16 @@
-from typing import List, Optional, Union
-from pydantic import Field, ConfigDict
+"""
+API router for searching terms within vocabularies. This is a more advanced search
+endpoint that utilizes embedding-based search to find relevant terms based on the input
+query.
+"""
+
+from typing import List, Optional
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
-from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
-from bioterms.database import DocumentDatabase, VectorDatabase, get_active_doc_db, get_active_vector_db
+from bioterms.etc.enums import ConceptPrefix
+from bioterms.database import DocumentDatabase, VectorDatabase, get_active_doc_db, \
+    get_active_vector_db
 from bioterms.vocabulary import get_vocabulary_config
 from bioterms.model.concept import Concept
 from .utils import response_generator

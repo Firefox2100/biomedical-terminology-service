@@ -1,8 +1,13 @@
+"""
+Setup Pytheus metrics backend based on configuration.
+"""
+
 from pytheus.backends import load_backend
 from pytheus.backends.redis import MultiProcessRedisBackend
 
 from .consts import CONFIG
 from .enums import CacheDriverType
+
 
 if CONFIG.enable_metrics:
     if CONFIG.cache_driver == CacheDriverType.REDIS:
@@ -18,4 +23,3 @@ if CONFIG.enable_metrics:
     else:
         # Use the default backend (in-memory)
         load_backend()
-

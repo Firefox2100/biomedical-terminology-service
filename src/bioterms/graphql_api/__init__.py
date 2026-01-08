@@ -1,3 +1,7 @@
+"""
+Module containing the GraphQL API implementation using Ariadne.
+"""
+
 from typing import Any
 from ariadne import ObjectType, make_executable_schema
 from ariadne.asgi import GraphQL
@@ -156,8 +160,8 @@ async def create_graphql_app() -> GraphQL:
         graphql_queries.append(ORDO_QUERY)
     if vocabulary_statuses[ConceptPrefix.REACTOME].loaded:
         from .schemas import REACTOME_SCHEMA
-        from .resolver.reactome import REACTOME_PATHWAY, REACTOME_REACTION, REACTOME_GENE, REACTOME_QUERY, \
-            REACTOME_CONCEPT
+        from .resolver.reactome import REACTOME_PATHWAY, REACTOME_REACTION, REACTOME_GENE, \
+            REACTOME_QUERY, REACTOME_CONCEPT
 
         graphql_schemas.append(REACTOME_SCHEMA)
         graphql_objects.extend([

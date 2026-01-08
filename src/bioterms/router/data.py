@@ -1,11 +1,17 @@
+"""
+API router for data management endpoints. These endpoints are for manipulating the data
+directly, such as ingesting new documents, deleting vocabularies, and retrieving
+vocabulary status information.
+"""
+
 import zlib
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
-    get_active_doc_db, get_active_graph_db, get_active_vector_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, \
+    get_active_cache, get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.base import JsonModel
 from bioterms.model.concept import ConceptUnion
 from bioterms.model.vocabulary_status import VocabularyStatus
@@ -218,8 +224,8 @@ async def ingest_documents(prefix: ConceptPrefix,
     Ingest documents into the specified vocabulary database.
 
     This endpoint is used to upload the vocabulary directly into the database, without the need
-    to download and parse the original upstream release files, or in case of modified vocabulary files.
-    The server expects a stream upload with one document per line in JSON format.
+    to download and parse the original upstream release files, or in case of modified vocabulary
+    files. The server expects a stream upload with one document per line in JSON format.
     \f
     :param prefix: The vocabulary prefix.
     :param request: The FastAPI request object.
@@ -280,11 +286,11 @@ async def ingest_documents(prefix: ConceptPrefix,
             batch.append(obj)
 
         await flush_batch()
-    except Exception as err:
+    except Exception as e:
         raise HTTPException(
             status_code=400,
-            detail=f'Failed to ingest documents: {err}'
-        )
+            detail=f'Failed to ingest documents: {e}'
+        ) from e
 
     concept_count = await doc_db.count_terms(prefix)
 

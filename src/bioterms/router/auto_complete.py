@@ -1,3 +1,10 @@
+"""
+Auto-complete API endpoints for vocabulary concepts. Note that the auto-complete is meant
+strictly for completing a concept that is partially typed by a user, and does not account
+for things like typos, synonyms, or semantic similarity. For more advanced searching,
+please use the search endpoints. These endpoints are optimised for speed and low latency.
+"""
+
 from typing import List, Optional
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
@@ -50,9 +57,10 @@ async def auto_complete_v1(prefix: ConceptPrefix,
                            doc_db: DocumentDatabase = Depends(get_active_doc_db),
                            ):
     """
-    Auto-complete search endpoint (v1). This endpoint is meant to support Cafe Variome V2 frontend searches.
-    In newer applications, please use later versions of the auto-complete endpoint.
-    400 responses are not actually returned here to maintain compatibility with the legacy API.
+    Auto-complete search endpoint (v1). This endpoint is meant to support Cafe Variome V2
+    frontend searches. In newer applications, please use later versions of the auto-complete
+    endpoint. 400 responses are not actually returned here to maintain compatibility with the
+    legacy API.
     \f
     :param prefix: The vocabulary prefix to search within.
     :param query_str: The search query string.
@@ -104,12 +112,14 @@ async def auto_complete_v2(prefix: ConceptPrefix,
                            result_threshold: int = Query(
                                0,
                                ge=0,
-                               description='The maximum number of terms to return in the response. 0 for no limit.'
+                               description='The maximum number of terms to return in the response. '
+                                           '0 for no limit.'
                            ),
                            doc_db: DocumentDatabase = Depends(get_active_doc_db),
                            ):
     """
-    Auto-complete search endpoint (v2). This endpoint is compatible with Cafe Variome V3 frontend searches.
+    Auto-complete search endpoint (v2). This endpoint is compatible with Cafe Variome V3
+    frontend searches.
     \f
     :param prefix: The vocabulary prefix to search within.
     :param query: The search query string.

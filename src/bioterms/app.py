@@ -1,16 +1,26 @@
+"""
+FastAPI application for the BioMedical Terminology Service.
+
+This service uses an application factory pattern to create and configure the FastAPI
+application. It includes middleware for CORS, session management, CSRF protection,
+and Prometheus metrics. The application also sets up various API routers for different
+functionalities, such as auto-completion, data management, term expansion, mapping,
+searching, and similarity retrieval. Custom exception handling is implemented for
+service-specific errors and HTTP exceptions.
+"""
+
 import secrets
 from contextlib import asynccontextmanager
 import uvicorn
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import PlainTextResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
 from asgi_csrf import asgi_csrf
 from pytheus.exposition import generate_metrics
 from pytheus.middleware import PytheusMiddlewareASGI
-from fastapi.responses import PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
@@ -21,8 +31,8 @@ from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
-from bioterms.router import auto_complete_router, data_router, expand_router, map_router, misc_router, \
-    search_router, similarity_router, ui_router
+from bioterms.router import auto_complete_router, data_router, expand_router, map_router, \
+    misc_router, search_router, similarity_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
@@ -44,7 +54,7 @@ async def lifespan(app: FastAPI):
         app.mount('/api/graphql', graphql_app)
         yield
     except Exception as e:
-        LOGGER.critical(f'Fatal error during application lifespan: {e}', exc_info=True)
+        LOGGER.critical('Fatal error during application lifespan: %s', str(e), exc_info=True)
         raise e
     finally:
         LOGGER.info('Shutting down application...')
@@ -110,7 +120,8 @@ def create_app() -> FastAPI:
         },
         license_info={
             'name': 'MIT',
-            'url': 'https://github.com/Firefox2100/biomedical-terminology-service/blob/main/LICENSE',
+            'url': 'https://github.com/Firefox2100/biomedical-terminology-service/'
+                   'blob/main/LICENSE',
         },
         openapi_tags=[
             {
@@ -127,11 +138,13 @@ def create_app() -> FastAPI:
             },
             {
                 'name': 'Mapping',
-                'description': 'Endpoints for mapping biomedical terms between different vocabularies.',
+                'description': 'Endpoints for mapping biomedical terms between '
+                               'different vocabularies.',
             },
             {
                 'name': 'Search',
-                'description': 'Endpoints for searching biomedical terms with imprecise queries.',
+                'description': 'Endpoints for searching biomedical terms with imprecise '
+                               'queries.',
             },
             {
                 'name': 'Similarity',

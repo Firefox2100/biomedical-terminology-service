@@ -1,3 +1,7 @@
+"""
+Exceptions definitions for the Bioterms package.
+"""
+
 class BtsError(Exception):
     """
     Base class for all Bioterms exceptions.

@@ -1,3 +1,11 @@
+"""
+UI Router for the BioMedical Terminology Service.
+
+This router handles the web interface endpoints, serving HTML pages for
+various functionalities such as home page, login, API key management,
+vocabulary listing, and vocabulary details.
+"""
+
 import secrets
 import hmac
 import hashlib
@@ -10,8 +18,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
-    get_active_graph_db
+from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, \
+    get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
@@ -88,7 +96,8 @@ async def get_login_page(request: Request,
     :param doc_db: Document database instance.
     :return: An HTML response with the login page content.
     """
-    sanitised_next_url = sanitise_next_url(next_url) if next_url else str(request.url_for('get_home_page'))
+    sanitised_next_url = sanitise_next_url(next_url) if next_url \
+        else str(request.url_for('get_home_page'))
 
     if request.session.get('username'):
         # User is already logged in, redirect to next_url or home page
@@ -127,7 +136,8 @@ async def post_login_credentials(request: Request,
     :return: A redirect response to the next URL or home page upon successful login,
         or back to the login page with an error message upon failure.
     """
-    sanitised_next_url = sanitise_next_url(next_url) if next_url else str(request.url_for('get_home_page'))
+    sanitised_next_url = sanitise_next_url(next_url) if next_url \
+        else str(request.url_for('get_home_page'))
 
     def login_redirect(error: str | None = None):
         params = {}
@@ -179,7 +189,10 @@ async def handle_logout(request: Request):
     """
     request.session.clear()
 
-    return RedirectResponse(request.url_for('get_login_page'), status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        request.url_for('get_login_page'),
+        status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @ui_router.get('/api-keys', response_class=HTMLResponse)
@@ -286,14 +299,12 @@ async def post_new_api_key(request: Request,
 
 @ui_router.delete('/api-keys/{key_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_api_key(key_id: str,
-                         request: Request,
                          doc_db: DocumentDatabase = Depends(get_active_doc_db),
                          username: str = Depends(login_required),
                          ):
     """
     Delete an API key for the logged-in user.
     :param key_id: The ID of the API key to delete.
-    :param request: The incoming request object.
     :param doc_db: The document database instance.
     :param username: The username of the logged-in user.
     :return: A redirect response to the API keys management page.
@@ -362,7 +373,8 @@ async def list_vocabularies(request: Request,
             '@type': 'CollectionPage',
             'name': 'Vocabularies',
             'url': base_url + '/vocabularies',
-            'description': 'A list of all available vocabularies in the BioMedical Terminology Service.',
+            'description': 'A list of all available vocabularies in the BioMedical '
+                           'Terminology Service.',
             'hasPart': dataset_lds,
         })
 
@@ -504,8 +516,8 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
                 '@type': 'WebPage',
                 'name': f'{vocab_status.name} Vocabulary',
                 'url': page_url,
-                'description': f'Details and statistics for the {vocab_status.name} vocabulary in the '
-                               f'BioMedical Terminology Service.',
+                'description': f'Details and statistics for the {vocab_status.name} vocabulary '
+                               f'in the BioMedical Terminology Service.',
             },
             dataset_ld,
         ])

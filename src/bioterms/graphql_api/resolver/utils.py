@@ -1,3 +1,7 @@
+"""
+Utility functions for GraphQL resolvers.
+"""
+
 from ariadne import QueryType
 
 from bioterms.etc.enums import ConceptPrefix
@@ -41,6 +45,12 @@ def assemble_response(data: dict | list[dict] = None,
 
 @GRAPHQL_QUERY_TYPE.field('loadedPrefixes')
 async def resolve_loaded_prefixes(_, info) -> list[str]:
+    """
+    Resolve the list of loaded vocabulary prefixes.
+    :param _: The GraphQL parent object, not used.
+    :param info: The GraphQL resolver info.
+    :return: A list of loaded vocabulary prefixes as strings.
+    """
     doc_db = info.context['doc_db']
     graph_db = info.context['graph_db']
 
@@ -62,6 +72,13 @@ async def resolve_concept_info_fields(obj,
                                       info,
                                       prefix: ConceptPrefix,
                                       ) -> str | int | float | bool | list | None:
+    """
+    Resolve fields for ConceptInfo type.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The vocabulary prefix.
+    :return: The value of the requested field.
+    """
     concept_id = obj['conceptId']
     field_name = info.field_name
     data_loader: DataLoader = info.context['data_loader']
@@ -84,7 +101,14 @@ async def resolve_concept_info_fields(obj,
 async def resolve_concept_replaces(obj,
                                    info,
                                    prefix: ConceptPrefix,
-                                   ):
+                                   ) -> list[dict]:
+    """
+    Resolve the 'replaces' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The vocabulary prefix.
+    :return: A list of replaced concepts.
+    """
     concept_id = obj['conceptId']
     data_loader: DataLoader = info.context['data_loader']
 
@@ -100,6 +124,13 @@ async def resolve_concept_replaced_by(obj,
                                       info,
                                       prefix: ConceptPrefix,
                                       ):
+    """
+    Resolve the 'replacedBy' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The vocabulary prefix.
+    :return: A list of concepts that replace the given concept.
+    """
     concept_id = obj['conceptId']
     data_loader: DataLoader = info.context['data_loader']
 
@@ -114,7 +145,14 @@ async def resolve_concept_replaced_by(obj,
 async def resolve_concept_children(obj,
                                    info,
                                    prefix: ConceptPrefix,
-                                   ):
+                                   ) -> list[dict]:
+    """
+    Resolve the 'children' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The vocabulary prefix.
+    :return: A list of child concepts.
+    """
     concept_id = obj['conceptId']
     data_loader: DataLoader = info.context['data_loader']
 
@@ -129,7 +167,14 @@ async def resolve_concept_children(obj,
 async def resolve_concept_parents(obj,
                                   info,
                                   prefix: ConceptPrefix,
-                                  ):
+                                  ) -> list[dict]:
+    """
+    Resolve the 'parents' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The vocabulary prefix.
+    :return: A list of parent concepts.
+    """
     concept_id = obj['conceptId']
     data_loader: DataLoader = info.context['data_loader']
 
@@ -145,7 +190,15 @@ async def resolve_concept_similar_concepts(obj,
                                            info,
                                            prefix: ConceptPrefix,
                                            threshold: float = 1.0,
-                                           ):
+                                           ) -> list[dict]:
+    """
+    Resolve the 'similarConcepts' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The vocabulary prefix.
+    :param threshold: The similarity score threshold.
+    :return: A list of similar concepts with their scores.
+    """
     concept_id = obj['conceptId']
     data_loader: DataLoader = info.context['data_loader']
 
@@ -169,7 +222,15 @@ async def resolve_concept_annotated_concepts(obj,
                                              info,
                                              source_prefix: ConceptPrefix,
                                              target_prefix: ConceptPrefix,
-                                             ):
+                                             ) -> list[dict]:
+    """
+    Resolve the 'annotatedConcepts' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param source_prefix: The source vocabulary prefix.
+    :param target_prefix: The target vocabulary prefix.
+    :return: A list of annotated concepts.
+    """
     concept_id = obj['conceptId']
     data_loader: DataLoader = info.context['data_loader']
     concept_loader = data_loader.get_concept_loader(source_prefix)
@@ -186,6 +247,13 @@ async def resolve_get_concept(info,
                               concept_id: str,
                               prefix: ConceptPrefix,
                               ) -> dict:
+    """
+    Resolve a concept by its ID.
+    :param info: The GraphQL resolver info.
+    :param concept_id: The ID of the concept to retrieve.
+    :param prefix: The vocabulary prefix.
+    :return: A dictionary containing the concept data or an error message.
+    """
     data_loader: DataLoader = info.context['data_loader']
     concept_loader = data_loader.get_concept_loader(prefix)
     concept = await concept_loader.id.load(concept_id)
@@ -204,8 +272,17 @@ async def resolve_auto_complete(info,
                                 prefix: ConceptPrefix,
                                 limit: int = None,
                                 ) -> dict:
-    # Auto-completion request cannot be repeated within the same GraphQL request,
-    # and does not link to term identity, so no need for data loader
+    """
+    Resolve auto-completion for concepts.
+
+    Auto-completion request cannot be repeated within the same GraphQL request,
+    and does not link to term identity, so no need for data loader.
+    :param info: The GraphQL resolver info.
+    :param query: The search query string.
+    :param prefix: The vocabulary prefix.
+    :param limit: Maximum number of concepts to return.
+    :return: A dictionary containing the auto-complete results.
+    """
     doc_db: DocumentDatabase = info.context['doc_db']
     config = get_vocabulary_config(prefix)
 

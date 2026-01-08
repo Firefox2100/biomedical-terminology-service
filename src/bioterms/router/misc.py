@@ -1,3 +1,9 @@
+"""
+Miscellaneous routes for the BioTerms application. These routes are not included
+in the main API documentation and serve auxiliary functions such as sitemap,
+robots.txt, favicon, and health checks.
+"""
+
 from datetime import date
 from xml.etree.ElementTree import Element, SubElement, tostring
 from fastapi import APIRouter, Request, Depends

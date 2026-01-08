@@ -1,3 +1,7 @@
+"""
+Utility functions for data management, downloading, extraction, and processing.
+"""
+
 import asyncio
 import os
 import io
@@ -16,13 +20,14 @@ import aiofiles.os
 import httpx
 import pandas as pd
 from sentence_transformers import SentenceTransformer
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, \
+    TimeRemainingColumn
 
 from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT
 from .errors import FilesNotFound
 
 
-_transformer: SentenceTransformer | None = None
+_TRANSFORMER: SentenceTransformer | None = None
 T = TypeVar('T')
 R = TypeVar('R')
 
@@ -251,8 +256,7 @@ async def download_rf2(release_url: str,
     :param file_mapping: List of tuples mapping relative file patterns to extracted file names
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    temp_folder = tempfile.TemporaryDirectory()
-    try:
+    with tempfile.TemporaryDirectory() as temp_folder:
         temp_id = str(uuid.uuid4())
         zip_path = os.path.join(temp_folder.name, f'{temp_id}.zip')
 
@@ -266,8 +270,6 @@ async def download_rf2(release_url: str,
             zip_path=zip_path,
             file_mapping=file_mapping,
         )
-    finally:
-        temp_folder.cleanup()
 
 
 def rf2_dataframe_deduplicate(df: pd.DataFrame) -> pd.DataFrame:
@@ -293,12 +295,12 @@ def get_transformer() -> SentenceTransformer:
     Get the global SentenceTransformer instance, initializing it if necessary.
     :return: The SentenceTransformer instance
     """
-    global _transformer
+    global _TRANSFORMER
 
-    if _transformer is None:
-        _transformer = SentenceTransformer(CONFIG.transformer_model_name)
+    if _TRANSFORMER is None:
+        _TRANSFORMER = SentenceTransformer(CONFIG.transformer_model_name)
 
-    return _transformer
+    return _TRANSFORMER
 
 
 def iter_progress(iterable: Iterable[T],
@@ -449,8 +451,7 @@ async def schedule_tasks(executor: Executor,
             except StopIteration:
                 continue
 
-            new_fut = loop.run_in_executor(executor, func, next_arg)
-            pending.add(new_fut)
+            pending.add(loop.run_in_executor(executor, func, next_arg))
 
     if progress is not None:
         progress.stop()

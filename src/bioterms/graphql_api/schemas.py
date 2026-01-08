@@ -1,3 +1,7 @@
+"""
+Module for loading GraphQL schema files for the BioTerms GraphQL API.
+"""
+
 import importlib.resources as pkg_resources
 from ariadne import load_schema_from_path
 
