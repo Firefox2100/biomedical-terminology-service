@@ -34,6 +34,16 @@
   line-height: 1;
 }
 
+.term-search__menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  width: 100%;
+  z-index: 10;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 .term-tree__button:hover {
   background-color: #f1f3f5;
 }

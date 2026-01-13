@@ -1,9 +1,9 @@
 import './App.css'
 import TermBrowser from './components/TermBrowser.jsx'
 
-function App({ ontologyId }) {
+function App({ ontologyId, rootConceptIds }) {
   return (
-    <TermBrowser ontologyId={ontologyId} />
+    <TermBrowser ontologyId={ontologyId} rootConceptIds={rootConceptIds} />
   )
 }
 

@@ -5,9 +5,13 @@ import App from './App.jsx'
 
 const params = new URLSearchParams(window.location.search)
 const ontologyId = params.get('ontology')
+const rootParams = params.getAll('root')
+const rootConceptIds = rootParams.flatMap((value) =>
+  value.split(',').map((entry) => entry.trim()),
+).filter(Boolean)
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <App ontologyId={ontologyId} />
+    <App ontologyId={ontologyId} rootConceptIds={rootConceptIds} />
   </StrictMode>,
 )

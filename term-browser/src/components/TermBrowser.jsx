@@ -1,27 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import SearchBar from './SearchBar.jsx'
 import TreeView from './TreeView.jsx'
 import DetailsPanel from './DetailsPanel.jsx'
-import { sampleOntology } from '../data/sampleOntology.js'
+import { ontologyConfig } from '../data/ontologyConfig.js'
 import {
-  buildOntologyQueryFromSchema,
+  buildAutoCompleteQuery,
+  buildChildrenQuery,
+  buildTermDetailQuery,
+  fetchGraphQL,
   fetchIntrospectionSchema,
 } from '../services/graphql.js'
-
-const lazyChildren = {
-  'DX:101': [
-    {
-      id: 'DX:101.001',
-      label: 'Respiratory Infection',
-      description: 'Infections affecting the respiratory tract.',
-    },
-    {
-      id: 'DX:101.002',
-      label: 'Gastrointestinal Infection',
-      description: 'Infections affecting the gastrointestinal tract.',
-    },
-  ],
-}
 
 function updateNodeById(nodes, nodeId, updater) {
   return nodes.map((node) => {
@@ -40,16 +28,40 @@ function updateNodeById(nodes, nodeId, updater) {
   })
 }
 
-function TermBrowser({ ontologyId }) {
+function TermBrowser({ ontologyId, rootConceptIds }) {
   const [query, setQuery] = useState('')
   const [selectedTerm, setSelectedTerm] = useState(null)
-  const [treeData, setTreeData] = useState(sampleOntology)
+  const [selectedDetails, setSelectedDetails] = useState(null)
+  const [treeData, setTreeData] = useState([])
   const [expandedIds, setExpandedIds] = useState(() => new Set())
   const [loadingIds, setLoadingIds] = useState(() => new Set())
   const [schema, setSchema] = useState(null)
   const [schemaError, setSchemaError] = useState(null)
+  const [treeError, setTreeError] = useState(null)
+  const [detailError, setDetailError] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [searchResults, setSearchResults] = useState([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState(null)
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const detailCache = useRef(new Map())
+  const searchRequestId = useRef(0)
 
   const filteredData = useMemo(() => treeData, [treeData])
+  const resolvedRootIds = useMemo(() => {
+    const configValue =
+      ontologyConfig.rootConceptIdByOntologyId[ontologyId?.toLowerCase()]
+    const baseIds =
+      rootConceptIds?.length
+        ? rootConceptIds
+        : Array.isArray(configValue)
+          ? configValue
+          : configValue
+            ? [configValue]
+            : []
+    return baseIds.filter(Boolean)
+  }, [ontologyId, rootConceptIds])
+  const fieldOverrides = ontologyConfig.queryFieldByOntologyId
 
   useEffect(() => {
     let isMounted = true
@@ -63,7 +75,6 @@ function TermBrowser({ ontologyId }) {
         }
 
         setSchema(data.__schema)
-        buildOntologyQueryFromSchema(data.__schema, ontologyId)
       } catch (error) {
         if (!isMounted) {
           return
@@ -81,6 +92,167 @@ function TermBrowser({ ontologyId }) {
       isMounted = false
     }
   }, [ontologyId])
+
+  useEffect(() => {
+    setExpandedIds(new Set())
+    setLoadingIds(new Set())
+    setSelectedTerm(null)
+    setSelectedDetails(null)
+    setTreeError(null)
+    setDetailError(null)
+    setSearchResults([])
+    setSearchError(null)
+    setShowSuggestions(false)
+    detailCache.current.clear()
+  }, [ontologyId])
+
+  useEffect(() => {
+    if (!schema || !ontologyId) {
+      return
+    }
+
+    if (!resolvedRootIds.length) {
+      setTreeData([])
+      return
+    }
+
+    const rootNodes = resolvedRootIds.map((rootId) => ({
+      id: rootId,
+      label: rootId,
+      hasChildren: true,
+    }))
+    setTreeData(rootNodes)
+  }, [schema, ontologyId, resolvedRootIds])
+
+  useEffect(() => {
+    if (!schema || !ontologyId || !resolvedRootIds.length) {
+      return
+    }
+
+    let isMounted = true
+
+    async function loadRootLabels() {
+      try {
+        const detailConfig = buildTermDetailQuery({
+          schema,
+          ontologyId,
+          fieldOverrides,
+        })
+
+        if (!detailConfig) {
+          return
+        }
+
+        const results = await Promise.all(
+          resolvedRootIds.map(async (rootId) => {
+            const data = await fetchGraphQL({
+              query: detailConfig.query,
+              variables: { conceptId: rootId },
+            })
+            const responseBlock = data?.[detailConfig.rootFieldName]
+            const detail = responseBlock?.[detailConfig.conceptFieldName]?.data
+            return { rootId, label: detail?.label }
+          }),
+        )
+
+        if (!isMounted) {
+          return
+        }
+
+        setTreeData((current) =>
+          current.map((node) => {
+            const match = results.find((item) => item.rootId === node.id)
+            if (!match?.label) {
+              return node
+            }
+            return { ...node, label: match.label }
+          }),
+        )
+      } catch (error) {
+        if (!isMounted) {
+          return
+        }
+        setTreeError(error.message)
+      }
+    }
+
+    loadRootLabels()
+
+    return () => {
+      isMounted = false
+    }
+  }, [schema, ontologyId, resolvedRootIds, fieldOverrides])
+
+  useEffect(() => {
+    const trimmedQuery = query.trim()
+    if (!trimmedQuery) {
+      setSearchResults([])
+      setSearchError(null)
+      setShowSuggestions(false)
+      setSearchLoading(false)
+      return
+    }
+
+    if (!schema || !ontologyId) {
+      return
+    }
+
+    const currentRequest = searchRequestId.current + 1
+    searchRequestId.current = currentRequest
+    setSearchLoading(true)
+    setSearchError(null)
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const queryConfig = buildAutoCompleteQuery({
+          schema,
+          ontologyId,
+          fieldOverrides,
+        })
+
+        if (!queryConfig) {
+          throw new Error('Unable to resolve auto-complete query fields.')
+        }
+
+        const result = await fetchGraphQL({
+          query: queryConfig.query,
+          variables: {
+            search: trimmedQuery,
+          },
+        })
+
+        if (searchRequestId.current !== currentRequest) {
+          return
+        }
+
+        const items =
+          result?.[queryConfig.rootFieldName]?.[queryConfig.autoCompleteFieldName]
+            ?.data || []
+        const mapped = items.map((item) => ({
+          id: item.conceptId || item.id,
+          label: item.label || item.conceptId || item.id,
+          raw: item,
+        }))
+        setSearchResults(mapped)
+        setShowSuggestions(true)
+      } catch (error) {
+        if (searchRequestId.current !== currentRequest) {
+          return
+        }
+        setSearchError(error.message)
+        setSearchResults([])
+        setShowSuggestions(true)
+      } finally {
+        if (searchRequestId.current === currentRequest) {
+          setSearchLoading(false)
+        }
+      }
+    }, 2000)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [query, schema, ontologyId, fieldOverrides])
 
   const handleToggle = async (node) => {
     const hasChildren =
@@ -101,23 +273,101 @@ function TermBrowser({ ontologyId }) {
       return next
     })
 
+    if (!schema || !ontologyId) {
+      return
+    }
+
     if (!isExpanded && !node.children && node.hasChildren) {
       setLoadingIds((current) => new Set(current).add(node.id))
+      setTreeError(null)
 
-      const children = lazyChildren[node.id] || []
-      setTreeData((current) =>
-        updateNodeById(current, node.id, (currentNode) => ({
-          ...currentNode,
-          children,
-          hasChildren: children.length > 0,
-        })),
-      )
+      try {
+        const queryConfig = buildChildrenQuery({
+          schema,
+          ontologyId,
+          fieldOverrides,
+        })
+        if (!queryConfig) {
+          throw new Error('Unable to resolve ontology query fields.')
+        }
 
-      setLoadingIds((current) => {
-        const next = new Set(current)
-        next.delete(node.id)
-        return next
+        const result = await fetchGraphQL({
+          query: queryConfig.query,
+          variables: { conceptId: node.id },
+        })
+
+        const children =
+          result?.[queryConfig.rootFieldName]?.[queryConfig.conceptFieldName]?.data
+            ?.children || []
+
+        const mappedChildren = (children || []).map((child) => ({
+          id: child.conceptId || child.id,
+          label: child.label || child.conceptId,
+          hasChildren: true,
+        }))
+
+        setTreeData((current) =>
+          updateNodeById(current, node.id, (currentNode) => ({
+            ...currentNode,
+            children: mappedChildren,
+            hasChildren: mappedChildren.length > 0,
+          })),
+        )
+      } catch (error) {
+        setTreeError(error.message)
+      } finally {
+        setLoadingIds((current) => {
+          const next = new Set(current)
+          next.delete(node.id)
+          return next
+        })
+      }
+    }
+  }
+
+  const handleSelect = async (node) => {
+    setSelectedTerm(node)
+    setSelectedDetails(null)
+    setDetailError(null)
+
+    if (!schema || !ontologyId) {
+      return
+    }
+
+    if (detailCache.current.has(node.id)) {
+      setSelectedDetails(detailCache.current.get(node.id))
+      return
+    }
+
+    const detailConfig = buildTermDetailQuery({
+      schema,
+      ontologyId,
+      fieldOverrides,
+    })
+
+    if (!detailConfig) {
+      setDetailError('Unable to resolve ontology query fields.')
+      return
+    }
+
+    setDetailLoading(true)
+    try {
+      const result = await fetchGraphQL({
+        query: detailConfig.query,
+        variables: { conceptId: node.id },
       })
+
+      const responseBlock = result?.[detailConfig.rootFieldName]
+      const data = responseBlock?.[detailConfig.conceptFieldName]?.data
+      const resolved = data || null
+      if (resolved) {
+        detailCache.current.set(node.id, resolved)
+      }
+      setSelectedDetails(resolved)
+    } catch (error) {
+      setDetailError(error.message)
+    } finally {
+      setDetailLoading(false)
     }
   }
 
@@ -137,18 +387,30 @@ function TermBrowser({ ontologyId }) {
                 <div className="flex-grow-1 flex-lg-grow-0" style={{ minWidth: '280px' }}>
                   <SearchBar
                     value={query}
-                    onChange={setQuery}
-                    onClear={() => setQuery('')}
+                    onChange={(value) => {
+                      setQuery(value)
+                      setShowSuggestions(Boolean(value.trim()))
+                    }}
+                    onClear={() => {
+                      setQuery('')
+                      setSearchResults([])
+                      setShowSuggestions(false)
+                    }}
+                    suggestions={searchResults}
+                    onSelectSuggestion={(item) => {
+                      setQuery(item.label)
+                      setShowSuggestions(false)
+                      handleSelect({ id: item.id, label: item.label })
+                    }}
+                    isLoading={searchLoading}
+                    error={searchError}
+                    showSuggestions={showSuggestions}
                   />
                 </div>
               </div>
               {schemaError ? (
                 <div className="text-danger small mt-2">
                   Unable to load schema: {schemaError}
-                </div>
-              ) : schema ? (
-                <div className="text-muted small mt-2">
-                  Schema loaded for ontology {ontologyId}.
                 </div>
               ) : null}
             </div>
@@ -159,12 +421,21 @@ function TermBrowser({ ontologyId }) {
           <div className="card term-browser__panel shadow-sm">
             <div className="card-header bg-white fw-semibold">Ontology Tree</div>
             <div className="card-body">
+              {!ontologyId ? (
+                <div className="text-muted">Select an ontology to begin.</div>
+              ) : !resolvedRootIds.length ? (
+                <div className="text-muted">
+                  Set root concept ids via URL or config to load the tree.
+                </div>
+              ) : treeError ? (
+                <div className="text-danger">Tree load failed: {treeError}</div>
+              ) : null}
               <TreeView
                 data={filteredData}
                 selectedId={selectedTerm?.id}
                 expandedIds={expandedIds}
                 loadingIds={loadingIds}
-                onSelect={setSelectedTerm}
+                onSelect={handleSelect}
                 onToggle={handleToggle}
               />
             </div>
@@ -173,7 +444,9 @@ function TermBrowser({ ontologyId }) {
 
         <div className="col-12 col-lg-8">
           <DetailsPanel
-            term={selectedTerm}
+            term={selectedDetails || selectedTerm}
+            isLoading={detailLoading}
+            error={detailError}
             className="term-browser__panel shadow-sm"
           />
         </div>
