@@ -9,6 +9,7 @@ from ariadne.graphql import GraphQLSchema
 from ariadne.explorer import ExplorerGraphiQL
 from ariadne.utils import convert_camel_case_to_snake
 from fastapi import Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
@@ -218,4 +219,8 @@ async def create_graphql_app() -> GraphQL:
         ),
     )
 
-    return graphql_app
+    return CORSMiddleware(
+        graphql_app,
+        allow_origins=['*'],
+        allow_methods=("GET", "POST", "OPTIONS")
+    )
