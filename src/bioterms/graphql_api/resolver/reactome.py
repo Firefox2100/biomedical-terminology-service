@@ -1,9 +1,14 @@
+"""
+Resolvers for Reactome concepts.
+"""
+
 from ariadne import ObjectType, InterfaceType
 
 from bioterms.etc.enums import ConceptPrefix
 from ..data_loader import DataLoader
-from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_similar_concepts, \
-    resolve_get_concept, resolve_auto_complete, resolve_concept_annotated_concepts
+from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, \
+    resolve_concept_similar_concepts, resolve_get_concept, resolve_auto_complete, \
+    resolve_concept_annotated_concepts
 
 
 REACTOME_CONCEPT = InterfaceType('ReactomeConcept')
@@ -26,6 +31,12 @@ REACTOME_QUERY = ObjectType('ReactomeQuery')
 @REACTOME_GENE.field('inferred')
 @REACTOME_GENE.field('status')
 async def resolve_reactome_info_fields(obj, info):
+    """
+    Resolve Reactome concept info fields.
+    :param obj: The Reactome concept object.
+    :param info: The GraphQL resolve info.
+    :return: The value of the requested field.
+    """
     return await resolve_concept_info_fields(
         obj=obj,
         info=info,
@@ -35,6 +46,12 @@ async def resolve_reactome_info_fields(obj, info):
 
 @REACTOME_PATHWAY.field('subPathways')
 async def resolve_reactome_pathway_sub_pathways(obj, info):
+    """
+    Resolve Reactome pathway subPathways field.
+    :param obj: The Reactome pathway object.
+    :param info: The GraphQL resolve info.
+    :return: The list of sub-pathway concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     sub_pathway_ids = await data_loader.reactome.sub_pathway.load(obj['conceptId'])
 
@@ -45,6 +62,12 @@ async def resolve_reactome_pathway_sub_pathways(obj, info):
 
 @REACTOME_PATHWAY.field('superPathways')
 async def resolve_reactome_pathway_super_pathways(obj, info):
+    """
+    Resolve Reactome pathway superPathways field.
+    :param obj: The Reactome pathway object.
+    :param info: The GraphQL resolve info.
+    :return: The list of super-pathway concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     super_pathway_ids = await data_loader.reactome.super_pathway.load(obj['conceptId'])
 
@@ -55,6 +78,12 @@ async def resolve_reactome_pathway_super_pathways(obj, info):
 
 @REACTOME_PATHWAY.field('reactions')
 async def resolve_reactome_pathway_reactions(obj, info):
+    """
+    Resolve Reactome pathway reactions field.
+    :param obj: The Reactome pathway object.
+    :param info: The GraphQL resolve info.
+    :return: The list of reaction concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     reaction_ids = await data_loader.reactome.pathway_reactions.load(obj['conceptId'])
 
@@ -65,6 +94,12 @@ async def resolve_reactome_pathway_reactions(obj, info):
 
 @REACTOME_REACTION.field('precedingReactions')
 async def resolve_reactome_reaction_preceding_reactions(obj, info):
+    """
+    Resolve Reactome reaction precedingReactions field.
+    :param obj: The Reactome reaction object.
+    :param info: The GraphQL resolve info.
+    :return: The list of preceding reaction concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     preceding_reaction_ids = await data_loader.reactome.preceding_reaction.load(obj['conceptId'])
 
@@ -75,6 +110,12 @@ async def resolve_reactome_reaction_preceding_reactions(obj, info):
 
 @REACTOME_REACTION.field('subsequentReactions')
 async def resolve_reactome_reaction_subsequent_reactions(obj, info):
+    """
+    Resolve Reactome reaction subsequentReactions field.
+    :param obj: The Reactome reaction object.
+    :param info: The GraphQL resolve info.
+    :return: The list of subsequent reaction concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     subsequent_reaction_ids = await data_loader.reactome.subsequent_reaction.load(obj['conceptId'])
 
@@ -85,6 +126,12 @@ async def resolve_reactome_reaction_subsequent_reactions(obj, info):
 
 @REACTOME_REACTION.field('inputs')
 async def resolve_reactome_reaction_inputs(obj, info):
+    """
+    Resolve Reactome reaction inputs field.
+    :param obj: The Reactome reaction object.
+    :param info: The GraphQL resolve info.
+    :return: The list of input gene concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     input_gene_ids = await data_loader.reactome.reaction_inputs.load(obj['conceptId'])
 
@@ -95,6 +142,12 @@ async def resolve_reactome_reaction_inputs(obj, info):
 
 @REACTOME_REACTION.field('outputs')
 async def resolve_reactome_reaction_outputs(obj, info):
+    """
+    Resolve Reactome reaction outputs field.
+    :param obj: The Reactome reaction object.
+    :param info: The GraphQL resolve info.
+    :return: The list of output gene concepts.
+    """
     data_loader: DataLoader = info.context['data_loader']
     output_gene_ids = await data_loader.reactome.reaction_outputs.load(obj['conceptId'])
 
@@ -105,6 +158,12 @@ async def resolve_reactome_reaction_outputs(obj, info):
 
 @REACTOME_GENE.field('isInput')
 async def resolve_reactome_gene_is_input(obj, info):
+    """
+    Resolve Reactome gene isInput field.
+    :param obj: The Reactome gene object.
+    :param info: The GraphQL resolve info.
+    :return: The list of reaction concepts where the gene is an input.
+    """
     data_loader: DataLoader = info.context['data_loader']
     reaction_ids = await data_loader.reactome.gene_as_input.load(obj['conceptId'])
 
@@ -115,6 +174,12 @@ async def resolve_reactome_gene_is_input(obj, info):
 
 @REACTOME_GENE.field('isOutput')
 async def resolve_reactome_gene_is_output(obj, info):
+    """
+    Resolve Reactome gene isOutput field.
+    :param obj: The Reactome gene object.
+    :param info: The GraphQL resolve info.
+    :return: The list of reaction concepts where the gene is an output.
+    """
     data_loader: DataLoader = info.context['data_loader']
     reaction_ids = await data_loader.reactome.gene_as_output.load(obj['conceptId'])
 
@@ -125,6 +190,12 @@ async def resolve_reactome_gene_is_output(obj, info):
 
 @REACTOME_GENE.field('symbols')
 async def resolve_reactome_gene_symbols(obj, info):
+    """
+    Resolve Reactome gene symbols field.
+    :param obj: The Reactome gene object.
+    :param info: The GraphQL resolve info.
+    :return: The list of HGNC symbol concepts annotated to this gene.
+    """
     return await resolve_concept_annotated_concepts(
         obj=obj,
         info=info,
@@ -140,6 +211,13 @@ async def resolve_reactome_similar_concepts(obj,
                                             info,
                                             threshold: float = 1.0,
                                             ):
+    """
+    Resolve Reactome concept similarConcepts field.
+    :param obj: The Reactome concept object.
+    :param info: The GraphQL resolve info.
+    :param threshold: The similarity threshold.
+    :return: The list of similar concepts.
+    """
     return await resolve_concept_similar_concepts(
         obj=obj,
         info=info,
@@ -150,20 +228,33 @@ async def resolve_reactome_similar_concepts(obj,
 
 @REACTOME_CONCEPT.type_resolver
 def reactome_concept_type_resolver(obj, *_):
+    """
+    Resolve the Reactome concept type.
+    :param obj: The Reactome concept object.
+    :param _: Additional arguments.
+    :return: The GraphQL type name for the Reactome concept.
+    """
     concept_type = obj['conceptTypes'][0]
 
     if concept_type == 'pathway':
         return 'ReactomePathway'
-    elif concept_type == 'reaction':
+    if concept_type == 'reaction':
         return 'ReactomeReaction'
-    elif concept_type == 'gene':
+    if concept_type == 'gene':
         return 'ReactomeGene'
-    else:
-        raise ValueError(f'Unknown Reactome concept type: {concept_type}')
+
+    raise ValueError(f'Unknown Reactome concept type: {concept_type}')
 
 
 @REACTOME_QUERY.field('reactomeConcept')
 async def resolve_get_reactome_concept(_, info, concept_id: str) -> dict:
+    """
+    Resolve Reactome concept by ID.
+    :param _: The parent object, not used.
+    :param info: The GraphQL resolve info.
+    :param concept_id: The Reactome concept ID.
+    :return: The Reactome concept object.
+    """
     return await resolve_get_concept(
         info=info,
         concept_id=concept_id,
@@ -173,6 +264,14 @@ async def resolve_get_reactome_concept(_, info, concept_id: str) -> dict:
 
 @REACTOME_QUERY.field('autoComplete')
 async def resolve_reactome_autocomplete(_, info, query: str, limit: int = None) -> dict:
+    """
+    Resolve Reactome auto-complete.
+    :param _: The parent object, not used.
+    :param info: The GraphQL resolve info.
+    :param query: The auto-complete query string.
+    :param limit: The maximum number of results to return.
+    :return: The auto-complete results.
+    """
     return await resolve_auto_complete(
         info=info,
         query=query,
@@ -183,4 +282,10 @@ async def resolve_reactome_autocomplete(_, info, query: str, limit: int = None) 
 
 @GRAPHQL_QUERY_TYPE.field('reactome')
 async def resolve_reactome_query(_, __) -> dict:
+    """
+    Resolve Reactome query root.
+    :param _: The parent object, not used.
+    :param __: The GraphQL resolve info, not used.
+    :return: An empty dictionary representing the Reactome query root.
+    """
     return {}

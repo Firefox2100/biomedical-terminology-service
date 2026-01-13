@@ -10,11 +10,12 @@ import secrets
 import hmac
 import hashlib
 import base64
+import importlib.resources
 from uuid import UUID
 from urllib.parse import urlencode, urlparse
 from markdown import markdown
 from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
@@ -537,6 +538,16 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@ui_router.get('/term-browser', response_class=HTMLResponse)
+async def get_term_browser():
+    """
+    Serve the term browser page.
+    :return:
+    """
+    html_path = importlib.resources.files('bioterms.data.static.term-browser') / 'index.html'
+    return FileResponse(html_path)
 
 
 @ui_router.post('/rebuild-cache', status_code=status.HTTP_202_ACCEPTED)

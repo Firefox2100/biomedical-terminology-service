@@ -222,5 +222,6 @@ async def create_graphql_app() -> GraphQL:
     return CORSMiddleware(
         graphql_app,
         allow_origins=['*'],
-        allow_methods=("GET", "POST", "OPTIONS")
+        allow_credentials=False,
+        allow_methods=("GET", "POST", "OPTIONS"),
     )

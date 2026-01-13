@@ -1,8 +1,13 @@
+"""
+Resolvers for NCIT concepts.
+"""
+
 from ariadne import ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_children, \
-    resolve_concept_parents, resolve_get_concept, resolve_concept_similar_concepts, resolve_auto_complete
+    resolve_concept_parents, resolve_get_concept, resolve_concept_similar_concepts, \
+    resolve_auto_complete
 
 
 NCIT_CONCEPT = ObjectType('NcitConcept')

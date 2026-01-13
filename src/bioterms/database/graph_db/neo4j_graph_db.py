@@ -1040,7 +1040,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     CALL apoc.path.expandConfig(
                         n,
                         {
-                            relationshipFilter: 'is_a|part_of<',
+                            relationshipFilter: 'is_a<|part_of<',
                             labelFilter: '+Concept',
                             minLevel: 1,
                             maxLevel: $depth,
