@@ -152,10 +152,21 @@ async def get_concept(prefix: ConceptPrefix,
         max_depth=1,
     )
 
+    children_concepts = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=[c.concept_id for c in (children[0].related_concepts if children else [])],
+        model_class=config['conceptClass'],
+    )
+    parents_concepts = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=[p.concept_id for p in (parents[0].related_concepts if parents else [])],
+        model_class=config['conceptClass'],
+    )
+
     return ConceptInfoResponse(
         concept=concept[0],
-        children=children[0].related_concepts if children else [],
-        parents=parents[0].related_concepts if parents else [],
+        children=children_concepts,
+        parents=parents_concepts,
     )
 
 

@@ -90,7 +90,7 @@ async def expand_terms_v1(prefix: ConceptPrefix,
     expand_iter = graph_db.expand_terms_iter(
         prefix=prefix,
         concept_ids=requested_terms.term_ids,
-        max_depth=depth,
+        max_depth=depth if depth > 0 else None,
         limit=result_threshold if result_threshold > 0 else None,
     )
 
