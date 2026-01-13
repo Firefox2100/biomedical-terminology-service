@@ -1,42 +1,61 @@
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  min-height: 100vh;
+  background-color: #f8f9fa;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.term-browser {
+  min-height: 100vh;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
+.term-browser__panel {
+  height: calc(100vh - 190px);
+  min-height: 320px;
+  overflow: auto;
+}
+
+.term-tree__group {
+  margin-top: 0.25rem;
+  padding-left: 0;
+}
+
+.term-tree__item {
+  margin-bottom: 0.35rem;
+}
+
+.term-tree__button {
+  border: 1px solid transparent;
+  background-color: #ffffff;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.term-tree__toggle {
+  min-width: 32px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.term-tree__button:hover {
+  background-color: #f1f3f5;
+}
+
+.term-tree__button.is-active {
+  border-color: var(--bs-primary);
+  background-color: rgba(13, 110, 253, 0.1);
+}
+
+.term-tree__meta {
+  font-size: 0.8rem;
+}
+
+.term-details__label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6c757d;
+}
+
+@media (max-width: 991.98px) {
+  .term-browser__panel {
+    height: auto;
   }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
 }
