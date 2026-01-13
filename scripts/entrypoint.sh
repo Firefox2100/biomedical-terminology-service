@@ -26,7 +26,7 @@ case "${1:-web}" in
         ;;
     worker)
         shift
-        exec celery -A bioterms worker "$@"
+        exec celery -A bioterms.task.app.celery_app worker "$@"
         ;;
     *)
         echo "Unknown command: $1"

@@ -59,8 +59,8 @@
             <tbody>
               {% for ann in annotations %}
                 <tr>
-                  <td><code class="small">{{ ann.prefix_source }}</code></td>
-                  <td><code class="small">{{ ann.prefix_target }}</code></td>
+                  <td><code class="small">{{ ann.prefix_source.value }}</code></td>
+                  <td><code class="small">{{ ann.prefix_target.value }}</code></td>
                   <td>{{ ann.name }}</td>
                   <td class="text-end">
                     {% if ann.loaded %}
