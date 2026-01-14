@@ -28,7 +28,7 @@ function updateNodeById(nodes, nodeId, updater) {
   })
 }
 
-function TermBrowser({ ontologyId, rootConceptIds }) {
+function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   const [query, setQuery] = useState('')
   const [selectedTerm, setSelectedTerm] = useState(null)
   const [selectedDetails, setSelectedDetails] = useState(null)
@@ -371,6 +371,12 @@ function TermBrowser({ ontologyId, rootConceptIds }) {
     }
   }
 
+  const handleReturn = () => {
+    if (returnPath) {
+      window.location.assign(returnPath)
+    }
+  }
+
   return (
     <div className="term-browser container-fluid py-4">
       <div className="row g-3">
@@ -384,28 +390,39 @@ function TermBrowser({ ontologyId, rootConceptIds }) {
                     Search and explore terminology structures.
                   </p>
                 </div>
-                <div className="flex-grow-1 flex-lg-grow-0" style={{ minWidth: '280px' }}>
-                  <SearchBar
-                    value={query}
-                    onChange={(value) => {
-                      setQuery(value)
-                      setShowSuggestions(Boolean(value.trim()))
-                    }}
-                    onClear={() => {
-                      setQuery('')
-                      setSearchResults([])
-                      setShowSuggestions(false)
-                    }}
-                    suggestions={searchResults}
-                    onSelectSuggestion={(item) => {
-                      setQuery(item.label)
-                      setShowSuggestions(false)
-                      handleSelect({ id: item.id, label: item.label })
-                    }}
-                    isLoading={searchLoading}
-                    error={searchError}
-                    showSuggestions={showSuggestions}
-                  />
+                <div className="d-flex align-items-center gap-2 flex-grow-1 flex-lg-grow-0">
+                  <div style={{ minWidth: '280px' }}>
+                    <SearchBar
+                      value={query}
+                      onChange={(value) => {
+                        setQuery(value)
+                        setShowSuggestions(Boolean(value.trim()))
+                      }}
+                      onClear={() => {
+                        setQuery('')
+                        setSearchResults([])
+                        setShowSuggestions(false)
+                      }}
+                      suggestions={searchResults}
+                      onSelectSuggestion={(item) => {
+                        setQuery(item.label)
+                        setShowSuggestions(false)
+                        handleSelect({ id: item.id, label: item.label })
+                      }}
+                      isLoading={searchLoading}
+                      error={searchError}
+                      showSuggestions={showSuggestions}
+                    />
+                  </div>
+                  {returnPath ? (
+                    <button
+                      type="button"
+                      className="btn btn-outline-secondary"
+                      onClick={handleReturn}
+                    >
+                      Back
+                    </button>
+                  ) : null}
                 </div>
               </div>
               {schemaError ? (

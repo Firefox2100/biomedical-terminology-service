@@ -527,7 +527,9 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.NCIT, ConceptPrefix.OMIM,
             ConceptPrefix.ORDO, ConceptPrefix.SNOMED
         ]:
-            term_browser_url = str(request.url_for('get_term_browser')) + f'?ontology={prefix.value}'
+            term_browser_url = str(request.url_for('get_term_browser')) \
+                               + f'?ontology={prefix.value}' \
+                               + f'&returnTo=/vocabularies/{prefix.value}'
         else:
             term_browser_url = None
 
