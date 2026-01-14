@@ -12,7 +12,7 @@ import hashlib
 import base64
 import importlib.resources
 from uuid import UUID
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, quote
 from markdown import markdown
 from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
@@ -527,9 +527,11 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.NCIT, ConceptPrefix.OMIM,
             ConceptPrefix.ORDO, ConceptPrefix.SNOMED
         ]:
-            term_browser_url = str(request.url_for('get_term_browser')) \
-                               + f'?ontology={prefix.value}' \
-                               + f'&returnTo=/vocabularies/{prefix.value}'
+            params = {
+                'ontology': prefix.value,
+                'returnTo': f'/vocabularies/{prefix.value}',
+            }
+            term_browser_url = f'{request.url_for("get_term_browser")}?{urlencode(params)}'
         else:
             term_browser_url = None
 

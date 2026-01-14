@@ -456,7 +456,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     session=session,
                     parameters={
                         'edges': edge_batch,
-                        'concept_prefix': concept_prefix,
+                        'concept_prefix': concept_prefix.value,
                     },
                 )
 

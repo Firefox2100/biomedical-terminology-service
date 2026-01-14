@@ -109,7 +109,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             for parent in row['Parents'].split('|'):
                 omim_graph.add_edge(
                     concept.concept_id,
-                    parent,
+                    parent.split('/')[-1],
                     label=ConceptRelationshipType.IS_A
                 )
 
