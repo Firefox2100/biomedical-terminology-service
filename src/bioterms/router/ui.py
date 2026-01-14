@@ -75,6 +75,7 @@ async def get_home_page(request: Request,
                 'vocabulary_count': loaded_sum,
                 'concept_count': concept_sum,
                 'nav_links': nav_links,
+                'google_site_verification_id': CONFIG.google_site_verification_id,
                 'structured_data': structured_data,
             }
         )

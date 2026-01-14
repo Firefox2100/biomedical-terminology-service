@@ -62,6 +62,11 @@ class Settings(BaseSettings):
         True,
         description='Enable Prometheus metrics collection and export',
     )
+    google_site_verification_id: Optional[str] = Field(
+        None,
+        description='Google site verification ID for webmaster tools. Set this to inject '
+                    'the verification meta tag into HTML pages.',
+    )
     data_dir: str = Field(
         'data',
         description='Directory for storing data files',

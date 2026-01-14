@@ -8,6 +8,10 @@
         content="{{ meta_description or 'A service for using with biomedical terminologies, such as ontologies or vocabularies.' }}"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
+  {% if google_site_verification_id %}
+    <meta name="google-site-verification" content="{{ google_site_verification_id }}"/>
+  {% endif %}
+
   <link href="{{ url_for('static', path='vendor/bootstrap/5.3.8/css/bootstrap.min.css') }}" rel="stylesheet"/>
   <link href="{{ url_for('static', path='vendor/bootstrap-icons/1.13.1/bootstrap-icons.css') }}" rel="stylesheet"/>
   <link rel="stylesheet" href="{{ url_for('static', path='css/custom.css') }}"/>
