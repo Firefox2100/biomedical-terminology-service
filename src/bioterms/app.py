@@ -214,8 +214,9 @@ def create_app() -> FastAPI:
             "font-src 'self'",
             "style-src 'self'",
             f"script-src 'self' 'nonce-{nonce}'",
-            "upgrade-insecure-requests",
         ])
+        if CONFIG.use_https or request.url.scheme == 'https':
+            policy += "; upgrade-insecure-requests"
 
         response.headers['Content-Security-Policy'] = policy
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'

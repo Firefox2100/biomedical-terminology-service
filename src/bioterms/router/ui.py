@@ -21,7 +21,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db
-from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_license
+from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_config, get_vocabulary_license
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
 from bioterms.task.cache import rebuild_cache_task
@@ -547,6 +547,58 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
                 'structured_data': structured_data,
             }
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@ui_router.get('/vocabularies/{prefix}/{concept_id}', response_class=HTMLResponse)
+async def get_concept_detail(prefix: ConceptPrefix,
+                             concept_id: str,
+                             request: Request,
+                             cache: Cache = Depends(get_active_cache),
+                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             ):
+    """
+    Get detailed information about a specific concept within a vocabulary.
+    :param prefix: The vocabulary prefix.
+    :param concept_id: The ID of the concept.
+    :param request: Request object.
+    :param cache: Cache instance.
+    :param doc_db: Document database instance.
+    :param graph_db: Graph database instance.
+    :return: An HTML response with the concept details.
+    """
+    try:
+        vocab_config = get_vocabulary_config(prefix)
+
+        concept = await doc_db.get_terms_by_ids(
+            prefix=prefix,
+            concept_ids=[concept_id],
+            model_class=vocab_config['conceptClass']
+        )
+
+        if not concept:
+            raise HTTPException(status_code=404, detail='Concept not found')
+
+        concept = concept[0]
+        nav_links = await build_nav_links(request, doc_db)
+        base_url = str(request.base_url).rstrip('/')
+        structured_data = build_structured_data(base_url)
+
+        return TEMPLATES.TemplateResponse(
+            'concept_detail.html',
+            {
+                'request': request,
+                'page_title': f'{concept.label} | {prefix.value} Concept | BioMedical Terminology Service',
+                'concept': concept,
+                'vocabulary_prefix': prefix,
+                'nav_links': nav_links,
+                'structured_data': structured_data,
+            }
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
