@@ -6,6 +6,9 @@
       <h1 class="h4 mb-1">{{ vocabulary.name }}</h1>
       <div class="text-muted small">Vocabulary details</div>
     </div>
+    {% if term_browser_url %}
+      <a class="btn btn-outline-secondary" href="{{ term_browser_url }}">&laquo; Browse</a>
+    {% endif %}
     <a class="btn btn-outline-secondary" href="{{ url_for('list_vocabularies') }}">&laquo; Back to Vocabularies</a>
   </div>
 

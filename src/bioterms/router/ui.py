@@ -523,6 +523,14 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             dataset_ld,
         ])
 
+        if prefix in [
+            ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.NCIT, ConceptPrefix.OMIM,
+            ConceptPrefix.ORDO, ConceptPrefix.SNOMED
+        ]:
+            term_browser_url = str(request.url_for('get_term_browser')) + f'?ontology={prefix.value}'
+        else:
+            term_browser_url = None
+
         return TEMPLATES.TemplateResponse(
             'vocabulary_detail.html',
             {
@@ -533,6 +541,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
                 'annotations': annotation_statuses,
                 'nav_links': nav_links,
                 'license_html': license_html,
+                'term_browser_url': term_browser_url,
                 'structured_data': structured_data,
             }
         )
@@ -546,7 +555,7 @@ async def get_term_browser():
     Serve the term browser page.
     :return:
     """
-    html_path = importlib.resources.files('bioterms.data.static.term-browser') / 'index.html'
+    html_path = importlib.resources.files('bioterms.data.static') / 'term-browser' / 'index.html'
     return FileResponse(html_path)
 
 
