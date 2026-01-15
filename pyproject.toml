@@ -57,6 +57,7 @@ dynamic = [
 test = [
     "aiosqlite~=0.21.0",
     "deepdiff~=8.6.1",
+    "locust~=2.43.1",
     "neo4j~=6.0.3",
     "pytest~=9.0.1",
     "pytest-asyncio~=1.3.0",
@@ -102,3 +103,6 @@ bioterms-cli = "bioterms.cli.cli:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "bioterms.__version__"}
+
+[tool.locust]
+locustfile = "tests/load_test/users/"
