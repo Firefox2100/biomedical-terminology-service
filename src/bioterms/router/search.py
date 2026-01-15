@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.metrics import SEARCH_ITEMS, SEARCH_LIMIT, SEARCH_QUERY_LEN
 from bioterms.database import DocumentDatabase, VectorDatabase, get_active_doc_db, \
     get_active_vector_db
 from bioterms.vocabulary import get_vocabulary_config
@@ -46,6 +47,9 @@ async def search_terms_v1(prefix: ConceptPrefix,
     :param vector_db: The vector database instance.
     :return: A list of matching Concept instances.
     """
+    SEARCH_QUERY_LEN.labels(prefix=prefix.value).observe(len(query))
+    SEARCH_LIMIT.labels(prefix=prefix.value).observe(limit)
+
     config = get_vocabulary_config(prefix)
 
     concept_ids = await vector_db.search_concepts(
@@ -53,6 +57,8 @@ async def search_terms_v1(prefix: ConceptPrefix,
         prefix=prefix,
         limit=limit or 10,
     )
+
+    SEARCH_ITEMS.labels(prefix=prefix.value).observe(len(concept_ids))
 
     concepts_iter = doc_db.get_terms_by_ids_iter(
         prefix=prefix,

@@ -1,3 +1,8 @@
+"""
+Abstract base class for vector databases.
+"""
+
+import time
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -6,6 +11,8 @@ from sentence_transformers import SentenceTransformer
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix
 from bioterms.etc.utils import get_transformer, aiter_progress
+from bioterms.etc.metrics import EMBED_LOCK_WAIT, EMBED_DURATION, EMBED_TEXTS, EMBED_CHARS, \
+    EMBED_ERRORS
 from bioterms.model.concept import Concept
 
 
@@ -28,19 +35,40 @@ class VectorDatabase(ABC):
         :return:
         """
         if transformer is None:
+            managed = False
             transformer = get_transformer()
-
-            with cls._embed_lock:
-                vectors = transformer.encode(
-                    sentences=texts,
-                    normalize_embeddings=True,
-                )
         else:
-            # Assume the provided transformer is thread-safe or already managed
-            vectors = transformer.encode(
+            managed = True
+
+        model = transformer.model_card_data.base_model if transformer.model_card_data else 'custom'
+        EMBED_TEXTS.labels(model=model).observe(len(texts))
+        EMBED_CHARS.labels(model=model).observe(sum(len(t) for t in texts))
+
+        def encode_with_metrics():
+            enc_start = time.perf_counter()
+            vs = transformer.encode(
                 sentences=texts,
                 normalize_embeddings=True,
             )
+            enc_end = time.perf_counter()
+            EMBED_DURATION.labels(model=model, result='ok').observe(enc_end - enc_start)
+            return vs
+
+        wait_start = time.perf_counter()
+        try:
+            if not managed:
+                with cls._embed_lock:
+                    wait_end = time.perf_counter()
+                    EMBED_LOCK_WAIT.labels(model=model).observe(wait_end - wait_start)
+
+                    vectors = encode_with_metrics()
+            else:
+                # Assume the provided transformer is thread-safe or already managed
+                vectors = encode_with_metrics()
+        except Exception as e:
+            EMBED_DURATION.labels(model=model, result='error').observe(0.0)
+            EMBED_ERRORS.labels(model=model, error_type=type(e).__name__).inc()
+            raise
 
         return [vector.tolist() for vector in vectors]
 

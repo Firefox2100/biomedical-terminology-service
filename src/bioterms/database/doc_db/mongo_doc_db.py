@@ -1,4 +1,9 @@
+"""
+MongoDB implementation of the DocumentDatabase interface.
+"""
+import asyncio
 import re
+import time
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
 from typing import AsyncIterator
@@ -12,6 +17,7 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.etc.utils import batch_iterable, iter_progress
+from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
@@ -240,7 +246,9 @@ class MongoDocumentDatabase(DocumentDatabase):
                     name=index_name,
                 )
             else:
-                raise IndexCreationError(f'Failed to create index on {prefix.value}.{field}: {e}') from e
+                raise IndexCreationError(
+                    f'Failed to create index on {prefix.value}.{field}: {e}'
+                ) from e
 
     async def delete_index(self,
                            prefix: ConceptPrefix,
@@ -382,14 +390,49 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances.
         """
-        collection = self.db[str(prefix.value)]
-        cursor = collection.find(
-            {'conceptId': {'$in': concept_ids}},
-            {'_id': 0, 'nGrams': 0, 'searchText': 0}
-        )
+        start = time.perf_counter()
+        first_item_at = None
+        result_label = 'ok'
 
-        async for doc in cursor:
-            yield model_class.model_validate(doc)
+        try:
+            collection = self.db[str(prefix.value)]
+            cursor = collection.find(
+                {'conceptId': {'$in': concept_ids}},
+                {'_id': 0, 'nGrams': 0, 'searchText': 0}
+            )
+
+            async for doc in cursor:
+                if first_item_at is None:
+                    first_item_at = time.perf_counter()
+                yield model_class.model_validate(doc)
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            DOCDB_OP_ERRORS.labels(
+                backend='mongo',
+                op='get_terms_by_ids',
+                prefix=prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            DOCDB_OP_DURATION.labels(
+                backend='mongo',
+                op='get_terms_by_ids',
+                prefix=prefix.value,
+                result=result_label,
+            ).observe(end - start)
+
+            if first_item_at is not None:
+                DOCDB_OP_TTFI.labels(
+                    backend='mongo',
+                    op='get_terms_by_ids',
+                    prefix=prefix.value,
+                    result=result_label,
+                ).observe(first_item_at - start)
 
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
@@ -450,6 +493,11 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param model_class: The Concept subclass to instantiate for results.
         :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
         """
+        start = time.perf_counter()
+        first_item_at = None
+        items = 0
+        result_label = 'ok'
+
         clean_query = re.sub(r'[()"\']', '', query.lower())
 
         # N-gram query is used to match the pre-generated n-grams, while
@@ -516,7 +564,41 @@ class MongoDocumentDatabase(DocumentDatabase):
         pipeline.append(final_projection)
         collection = self.db[str(prefix.value)]
 
-        cursor = await collection.aggregate(pipeline)
+        try:
+            cursor = await collection.aggregate(pipeline)
 
-        async for doc in cursor:
-            yield model_class.model_validate(doc)
+            async for doc in cursor:
+                if first_item_at is None:
+                    first_item_at = time.perf_counter()
+                items += 1
+                yield model_class.model_validate(doc)
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            DOCDB_OP_ERRORS.labels(
+                backend='mongo',
+                op='auto_complete',
+                prefix=prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            DOCDB_OP_DURATION.labels(
+                backend='mongo',
+                op='auto_complete',
+                prefix=prefix.value,
+                result=result_label,
+            ).observe(end - start)
+
+            if first_item_at is not None:
+                DOCDB_OP_TTFI.labels(
+                    backend='mongo',
+                    op='auto_complete',
+                    prefix=prefix.value,
+                    result=result_label,
+                ).observe(first_item_at - start)
+
+            AUTOCOMPLETE_ITEMS.labels(prefix=str(prefix.value)).observe(items)

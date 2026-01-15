@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.metrics import EXPAND_ROOTS, EXPAND_DEPTH, EXPAND_LIMIT, EXPAND_REQS
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.related_term import RelatedTerm
@@ -87,6 +88,16 @@ async def expand_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of expanded terms.
     """
+    mode = 'unbounded' if depth is None else 'bounded'
+    EXPAND_REQS.labels(prefix=prefix.value, mode=mode).inc()
+    EXPAND_ROOTS.labels(prefix=prefix.value).observe(len(requested_terms.term_ids))
+    if depth is not None:
+        EXPAND_DEPTH.labels(prefix=prefix.value).observe(depth)
+    EXPAND_LIMIT.labels(
+        prefix=prefix.value,
+        has_limit=('no' if not result_threshold else 'yes')
+    ).observe(result_threshold)
+
     expand_iter = graph_db.expand_terms_iter(
         prefix=prefix,
         concept_ids=requested_terms.term_ids,
@@ -132,6 +143,16 @@ async def expand_terms_v2(prefix: ConceptPrefix,
     :param limit: Maximum number of descendants to return for each term.
     :param graph_db: The graph database instance.
     """
+    mode = 'unbounded' if depth is None else 'bounded'
+    EXPAND_REQS.labels(prefix=prefix.value, mode=mode).inc()
+    EXPAND_ROOTS.labels(prefix=prefix.value).observe(len(concept_ids))
+    if depth is not None:
+        EXPAND_DEPTH.labels(prefix=prefix.value).observe(depth)
+    EXPAND_LIMIT.labels(
+        prefix=prefix.value,
+        has_limit=('no' if limit is None else 'yes')
+    ).observe(limit or 0)
+
     expand_iter = graph_db.expand_terms_iter(
         prefix=prefix,
         concept_ids=concept_ids,

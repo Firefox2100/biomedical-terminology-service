@@ -10,14 +10,13 @@ import secrets
 import hmac
 import hashlib
 import base64
-import importlib.resources
 from uuid import UUID
 from urllib.parse import urlencode, urlparse, quote
 from markdown import markdown
 from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db
@@ -612,7 +611,7 @@ async def get_term_browser():
     Serve the term browser page.
     :return:
     """
-    html_path = importlib.resources.files('bioterms.data.static') / 'term-browser' / 'index.html'
+    html_path = STATIC_FILE_PATH / 'term-browser' / 'index.html'
     return FileResponse(html_path)
 
 

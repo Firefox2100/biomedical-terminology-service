@@ -1,11 +1,14 @@
 import asyncio
-from typing import LiteralString, AsyncIterator, TypeVar
+import time
+from typing import LiteralString, AsyncIterator
 import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
 from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress
+from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
+    GRAPHDB_OP_RETRYS, EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.related_term import RelatedTerm
@@ -13,8 +16,6 @@ from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPref
     SimilarTermAggregate
 from bioterms.model.translated_term import TranslatedTerm
 from .graph_db import ReactomeRepository, GraphDatabase
-
-T = TypeVar('T')
 
 
 async def _execute_query_with_retry(query: LiteralString,
@@ -34,6 +35,7 @@ async def _execute_query_with_retry(query: LiteralString,
     """
     attempt = 0
     backoff_time = 1
+    reason = 'success'
 
     while attempt < backoff_retries:
         try:
@@ -43,12 +45,23 @@ async def _execute_query_with_retry(query: LiteralString,
             )
             return result
         except TransientError as e:
+            reason = 'transient_error_retry'
             if attempt < backoff_retries - 1:
                 attempt += 1
                 await asyncio.sleep(backoff_time)
                 backoff_time *= 2
             else:
+                reason = 'transient_error_exceeded_retries'
                 raise e
+        except Exception:
+            reason = 'error_no_retry'
+            raise
+        finally:
+            GRAPHDB_OP_RETRYS.labels(
+                backend='neo4j',
+                op='query_execution',
+                reason=reason,
+            )
 
     raise RuntimeError('Exceeded maximum retry attempts for query execution.')
 
@@ -1010,66 +1023,112 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param limit: The maximum number of descendants to return for each term. If None, return all.
         :return: An asynchronous iterator yielding ExpandedTerm instances.
         """
-        async with self._client.session() as session:
-            if max_depth is None:
-                result = await _execute_query_with_retry(
-                    query="""
-                    MATCH (n:Concept {prefix: $prefix})
-                    WHERE n.id IN $concept_ids
-                    OPTIONAL MATCH (n)<-[:is_a|part_of*]-(descendant:Concept)
-                    WITH n, [d IN collect(DISTINCT descendant.id) WHERE d IS NOT NULL] AS all_desc
-                    WITH n,
-                        CASE
-                            WHEN $limit IS NULL THEN all_desc
-                            ELSE all_desc[0..$limit]
-                        END AS descendants
-                    RETURN n.id AS concept_id, descendants
-                    """,
-                    session=session,
-                    parameters={
-                        'prefix': prefix.value,
-                        'concept_ids': concept_ids,
-                        'limit': limit,
-                    },
-                )
-            else:
-                result = await _execute_query_with_retry(
-                    query="""
-                    MATCH (n:Concept {prefix: $prefix})
-                    WHERE n.id IN $concept_ids
-                    CALL apoc.path.expandConfig(
-                        n,
-                        {
-                            relationshipFilter: 'is_a<|part_of<',
-                            labelFilter: '+Concept',
-                            minLevel: 1,
-                            maxLevel: $depth,
-                            bfs: true,
-                            uniqueness: 'NODE_GLOBAL'
-                        }
-                    ) YIELD path
-                    WITH n, [d IN collect(DISTINCT last(nodes(path)).id) WHERE d IS NOT NULL] AS all_desc
-                    WITH n,
-                        CASE
-                            WHEN $limit IS NULL THEN all_desc
-                            ELSE all_desc[0..$limit]
-                        END AS descendants
-                    RETURN n.id AS concept_id, descendants
-                    """,
-                    session=session,
-                    parameters={
-                        'prefix': prefix.value,
-                        'concept_ids': concept_ids,
-                        'limit': limit,
-                        'depth': max_depth,
-                    },
-                )
+        mode = 'unbounded' if max_depth is None else 'bounded'
+        start = time.perf_counter()
+        first = None
+        result_label = 'ok'
 
-            async for record in result:
-                yield RelatedTerm(
-                    conceptId=record['concept_id'],
-                    relatedConcepts=list(set(record['descendants'])),
-                )
+        try:
+            async with self._client.session() as session:
+                if max_depth is None:
+                    result = await _execute_query_with_retry(
+                        query="""
+                        MATCH (n:Concept {prefix: $prefix})
+                        WHERE n.id IN $concept_ids
+                        OPTIONAL MATCH (n)<-[:is_a|part_of*]-(descendant:Concept)
+                        WITH n, [d IN collect(DISTINCT descendant.id) WHERE d IS NOT NULL] AS all_desc
+                        WITH n,
+                            CASE
+                                WHEN $limit IS NULL THEN all_desc
+                                ELSE all_desc[0..$limit]
+                            END AS descendants
+                        RETURN n.id AS concept_id, descendants
+                        """,
+                        session=session,
+                        parameters={
+                            'prefix': prefix.value,
+                            'concept_ids': concept_ids,
+                            'limit': limit,
+                        },
+                    )
+                else:
+                    result = await _execute_query_with_retry(
+                        query="""
+                        MATCH (n:Concept {prefix: $prefix})
+                        WHERE n.id IN $concept_ids
+                        CALL apoc.path.expandConfig(
+                            n,
+                            {
+                                relationshipFilter: 'is_a<|part_of<',
+                                labelFilter: '+Concept',
+                                minLevel: 1,
+                                maxLevel: $depth,
+                                bfs: true,
+                                uniqueness: 'NODE_GLOBAL'
+                            }
+                        ) YIELD path
+                        WITH n, [d IN collect(DISTINCT last(nodes(path)).id) WHERE d IS NOT NULL] AS all_desc
+                        WITH n,
+                            CASE
+                                WHEN $limit IS NULL THEN all_desc
+                                ELSE all_desc[0..$limit]
+                            END AS descendants
+                        RETURN n.id AS concept_id, descendants
+                        """,
+                        session=session,
+                        parameters={
+                            'prefix': prefix.value,
+                            'concept_ids': concept_ids,
+                            'limit': limit,
+                            'depth': max_depth,
+                        },
+                    )
+
+                async for record in result:
+                    if first is None:
+                        first = time.perf_counter()
+
+                    descendants = record['descendants'] or []
+                    unique_desc = list(set(descendants))
+
+                    EXPAND_DESC_COUNT.labels(
+                        prefix=prefix.value,
+                        mode=mode,
+                    ).observe(len(unique_desc))
+
+                    yield RelatedTerm(
+                        conceptId=record['concept_id'],
+                        relatedConcepts=unique_desc,
+                    )
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            GRAPHDB_OP_ERRORS.labels(
+                backend='neo4j',
+                op='expand',
+                prefix=prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            GRAPHDB_OP_DURATION.labels(
+                backend='neo4j',
+                op='expand',
+                prefix=prefix.value,
+                mode=mode,
+                result=result_label,
+            ).observe(end - start)
+            if first is not None:
+                GRAPHDB_OP_TTFR.labels(
+                    backend='neo4j',
+                    op='expand',
+                    prefix=prefix.value,
+                    mode=mode,
+                    result=result_label,
+                ).observe(first - start)
 
     async def get_replaced_terms_iter(self,
                                       prefix: ConceptPrefix,
@@ -1151,52 +1210,99 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param limit: The maximum number of mapped terms to return for each concept ID.
         :return: An asynchronous iterator yielding RelatedTerm instances.
         """
-        async with self._client.session() as session:
-            result = await _execute_query_with_retry(
-                query="""
-                MATCH (src:Concept {prefix: $prefix})
-                WHERE src.id IN $concept_ids
-                CALL {
-                    WITH src
-                    CALL apoc.path.expandConfig(
-                        src,
-                        {
-                            relationshipFilter: 'annotated_with|has_symbol|exact|broad|narrow|related',
-                            labelFilter: '+Concept',
-                            minLevel: 1,
-                            maxLevel: $max_hops,
-                            bfs: true,
-                            uniqueness: 'NODE_GLOBAL'
-                        }
-                    ) YIELD path
-                    WITH src, path, last(nodes(path)) AS tgt, nodes(path) AS ns
-                    WHERE tgt.prefix = $target_prefix
-                        AND ALL(rel IN relationships(path) WHERE startNode(rel).prefix <> endNode(rel).prefix)
-                    WITH src, tgt, [n IN ns | n.prefix] AS prefixes, path
-                    WHERE size(prefixes) = size(apoc.coll.toSet(prefixes))
-                        AND ALL(n IN nodes(path)[1..-2] WHERE n.prefix <> src.prefix AND n.prefix <> $target_prefix)
-                    WITH src, tgt, path
-                    ORDER BY length(path) ASC
-                    LIMIT COALESCE($limit, 1000000)
-                    RETURN src.id AS source_id, collect(DISTINCT tgt.id) AS mapped_terms
-                }
-                RETURN source_id AS concept_id, mapped_terms
-                """,
-                session=session,
-                parameters={
-                    'prefix': prefix.value,
-                    'target_prefix': target_prefix.value,
-                    'concept_ids': concept_ids,
-                    'max_hops': max_hops,
-                    'limit': limit,
-                },
-            )
+        start = time.perf_counter()
+        first = None
+        result_label = 'ok'
 
-            async for record in result:
-                yield RelatedTerm(
-                    conceptId=record['concept_id'],
-                    relatedConcepts=list(set(record['mapped_terms'])),
+        try:
+            async with self._client.session() as session:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (src:Concept {prefix: $prefix})
+                    WHERE src.id IN $concept_ids
+                    CALL {
+                        WITH src
+                        CALL apoc.path.expandConfig(
+                            src,
+                            {
+                                relationshipFilter: 'annotated_with|has_symbol|exact|broad|narrow|related',
+                                labelFilter: '+Concept',
+                                minLevel: 1,
+                                maxLevel: $max_hops,
+                                bfs: true,
+                                uniqueness: 'NODE_GLOBAL'
+                            }
+                        ) YIELD path
+                        WITH src, path, last(nodes(path)) AS tgt, nodes(path) AS ns
+                        WHERE tgt.prefix = $target_prefix
+                            AND ALL(rel IN relationships(path) WHERE startNode(rel).prefix <> endNode(rel).prefix)
+                        WITH src, tgt, [n IN ns | n.prefix] AS prefixes, path
+                        WHERE size(prefixes) = size(apoc.coll.toSet(prefixes))
+                            AND ALL(n IN nodes(path)[1..-2] WHERE n.prefix <> src.prefix AND n.prefix <> $target_prefix)
+                        WITH src, tgt, path
+                        ORDER BY length(path) ASC
+                        LIMIT COALESCE($limit, 1000000)
+                        RETURN src.id AS source_id, collect(DISTINCT tgt.id) AS mapped_terms
+                    }
+                    RETURN source_id AS concept_id, mapped_terms
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'target_prefix': target_prefix.value,
+                        'concept_ids': concept_ids,
+                        'max_hops': max_hops,
+                        'limit': limit,
+                    },
                 )
+
+                async for record in result:
+                    if first is None:
+                        first = time.perf_counter()
+
+                    mapped = list(set(record['mapped_terms']))
+
+                    MAP_COUNT.labels(
+                        prefix=prefix.value,
+                        target_prefix=target_prefix.value,
+                    ).observe(len(mapped))
+
+                    yield RelatedTerm(
+                        conceptId=record['concept_id'],
+                        relatedConcepts=mapped,
+                    )
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            GRAPHDB_OP_ERRORS.labels(
+                backend='neo4j',
+                op='map',
+                prefix=prefix.value,
+                target_prefix=target_prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            GRAPHDB_OP_DURATION.labels(
+                backend='neo4j',
+                op='map',
+                prefix=prefix.value,
+                target_prefix=target_prefix.value,
+                mode=('bounded' if limit is not None else 'unbounded'),
+                result=result_label,
+            ).observe(end - start)
+            if first is not None:
+                GRAPHDB_OP_TTFR.labels(
+                    backend='neo4j',
+                    op='map',
+                    prefix=prefix.value,
+                    target_prefix=target_prefix.value,
+                    mode=('bounded' if limit is not None else 'unbounded'),
+                    result=result_label,
+                ).observe(first - start)
 
     async def get_similar_terms_aggregate_iter(self,
                                                prefix: ConceptPrefix,
@@ -1289,122 +1395,187 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param limit: The maximum number of similar terms to return for each concept ID.
         :return: An asynchronous iterator yielding SimilarTerm instances.
         """
-        async with self._client.session() as session:
-            if same_prefix:
-                target_prefixes = [prefix.value]
-            else:
-                target_prefixes = [p.value for p in ConceptPrefix]
+        variant = 'same_prefix' if same_prefix else 'cross_prefix'
+        start = time.perf_counter()
+        first = None
+        result_label = 'ok'
 
-            result = await _execute_query_with_retry(
-                query="""
-                MATCH (n:Concept {prefix: $prefix})
-                WHERE n.id IN $concept_ids
-                MATCH (n)-[r:similar_to]-(m:Concept)
-                WHERE m.prefix IN $target_prefixes
-                WITH n, m, apoc.convert.toMap(r) AS props
-                WITH
-                    n,
-                    m,
-                    props,
-                    [
-                        k IN keys(props)
-                        WHERE props[k] >= $threshold AND
-                        (
-                            ($corpus_prefix IS NULL AND $method IS NULL)
-                            OR ($corpus_prefix IS NULL AND $method IS NOT NULL
-                                AND (k = $method OR k STARTS WITH $method + ':'))
-                            OR ($corpus_prefix IS NOT NULL AND k ENDS WITH ':' + $corpus_prefix)
-                        )
-                    ] AS valid_keys
-                WHERE size(valid_keys) > 0
-                WITH
-                    n,
-                    m,
-                    apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
-                    apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
-                ORDER BY n.id, max_score DESC
-                WITH
-                    n,
-                    collect({
-                        id: m.id,
-                        prefix: m.prefix,
-                        similarity_scores: similarity_scores
-                    }) AS sims
-                WITH
-                    n,
-                    CASE
-                        WHEN $limit IS NULL THEN sims
-                        ELSE sims[0..$limit]
-                    END AS limited_sims
-                UNWIND limited_sims AS sim
-                WITH
-                    n,
-                    sim.prefix AS similar_prefix,
-                    sim
-                WITH
-                    n,
-                    similar_prefix,
-                    collect({
-                        id: sim.id,
-                        similarity_scores: sim.similarity_scores
-                    }) AS similar_concepts
-                RETURN
-                    n.id AS concept_id,
-                    similar_prefix AS similar_prefix,
-                    similar_concepts AS similar_concepts
-                ORDER BY concept_id, similar_prefix
-                """,
-                session=session,
-                parameters={
-                    'prefix': prefix.value,
-                    'concept_ids': concept_ids,
-                    'target_prefixes': target_prefixes,
-                    'threshold': threshold,
-                    'method': method.value if method else None,
-                    'corpus_prefix': corpus_prefix.value if corpus_prefix else None,
-                    'limit': limit,
-                }
-            )
+        try:
+            async with self._client.session() as session:
+                if same_prefix:
+                    target_prefixes = [prefix.value]
+                else:
+                    target_prefixes = [p.value for p in ConceptPrefix]
 
-            current_concept_id: str | None = None
-            current_groups: list[SimilarTermByPrefix] = []
-
-            async for record in result:
-                concept_id: str = record['concept_id']
-                similar_prefix = ConceptPrefix(record['similar_prefix'])
-                similar_concepts_data: list[dict] = record['similar_concepts']
-
-                similar_concepts: list[SimilarTermWithScores] = [
-                    SimilarTermWithScores(
-                        conceptId=sim['id'],
-                        similarity_scores=sim['similarity_scores'],
-                    )
-                    for sim in similar_concepts_data
-                ]
-
-                group = SimilarTermByPrefix(
-                    prefix=similar_prefix,
-                    similarConcepts=similar_concepts,
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.id IN $concept_ids
+                    MATCH (n)-[r:similar_to]-(m:Concept)
+                    WHERE m.prefix IN $target_prefixes
+                    WITH n, m, apoc.convert.toMap(r) AS props
+                    WITH
+                        n,
+                        m,
+                        props,
+                        [
+                            k IN keys(props)
+                            WHERE props[k] >= $threshold AND
+                            (
+                                ($corpus_prefix IS NULL AND $method IS NULL)
+                                OR ($corpus_prefix IS NULL AND $method IS NOT NULL
+                                    AND (k = $method OR k STARTS WITH $method + ':'))
+                                OR ($corpus_prefix IS NOT NULL AND k ENDS WITH ':' + $corpus_prefix)
+                            )
+                        ] AS valid_keys
+                    WHERE size(valid_keys) > 0
+                    WITH
+                        n,
+                        m,
+                        apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
+                        apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
+                    ORDER BY n.id, max_score DESC
+                    WITH
+                        n,
+                        collect({
+                            id: m.id,
+                            prefix: m.prefix,
+                            similarity_scores: similarity_scores
+                        }) AS sims
+                    WITH
+                        n,
+                        CASE
+                            WHEN $limit IS NULL THEN sims
+                            ELSE sims[0..$limit]
+                        END AS limited_sims
+                    UNWIND limited_sims AS sim
+                    WITH
+                        n,
+                        sim.prefix AS similar_prefix,
+                        sim
+                    WITH
+                        n,
+                        similar_prefix,
+                        collect({
+                            id: sim.id,
+                            similarity_scores: sim.similarity_scores
+                        }) AS similar_concepts
+                    RETURN
+                        n.id AS concept_id,
+                        similar_prefix AS similar_prefix,
+                        similar_concepts AS similar_concepts
+                    ORDER BY concept_id, similar_prefix
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'concept_ids': concept_ids,
+                        'target_prefixes': target_prefixes,
+                        'threshold': threshold,
+                        'method': method.value if method else None,
+                        'corpus_prefix': corpus_prefix.value if corpus_prefix else None,
+                        'limit': limit,
+                    }
                 )
 
-                if current_concept_id is None:
-                    current_concept_id = concept_id
-                    current_groups = [group]
-                elif current_concept_id == concept_id:
-                    current_groups.append(group)
-                else:
+                current_concept_id: str | None = None
+                current_groups: list[SimilarTermByPrefix] = []
+                current_total = 0
+
+                async for record in result:
+                    if first is None:
+                        first = time.perf_counter()
+
+                    concept_id: str = record['concept_id']
+                    similar_prefix = ConceptPrefix(record['similar_prefix'])
+                    similar_concepts_data: list[dict] = record['similar_concepts'] or []
+
+                    SIM_PER_GROUP.labels(
+                        prefix=prefix.value,
+                        variant=variant,
+                    ).observe(len(similar_concepts_data))
+
+                    similar_concepts: list[SimilarTermWithScores] = [
+                        SimilarTermWithScores(
+                            conceptId=sim['id'],
+                            similarity_scores=sim['similarity_scores'],
+                        )
+                        for sim in similar_concepts_data
+                    ]
+
+                    group = SimilarTermByPrefix(
+                        prefix=similar_prefix,
+                        similarConcepts=similar_concepts,
+                    )
+
+                    current_total += len(similar_concepts)
+
+                    if current_concept_id is None:
+                        current_concept_id = concept_id
+                        current_groups = [group]
+                    elif current_concept_id == concept_id:
+                        current_groups.append(group)
+                    else:
+                        SIM_GROUPS.labels(
+                            prefix=prefix.value,
+                            variant=variant,
+                        ).observe(len(current_groups))
+                        SIM_TOTAL.labels(
+                            prefix=prefix.value,
+                            variant=variant,
+                        ).observe(current_total)
+
+                        yield SimilarTerm(
+                            conceptId=current_concept_id,
+                            similarGroups=current_groups,
+                        )
+                        current_concept_id = concept_id
+                        current_groups = [group]
+                        current_total = len(similar_concepts_data)
+
+                if current_concept_id is not None:
+                    SIM_GROUPS.labels(
+                        prefix=prefix.value,
+                        variant=variant,
+                    ).observe(len(current_groups))
+                    SIM_TOTAL.labels(
+                        prefix=prefix.value,
+                        variant=variant,
+                    ).observe(current_total)
+
                     yield SimilarTerm(
                         conceptId=current_concept_id,
                         similarGroups=current_groups,
                     )
-                    current_concept_id = concept_id
-                    current_groups = [group]
-
-            if current_concept_id is not None:
-                yield SimilarTerm(
-                    conceptId=current_concept_id,
-                    similarGroups=current_groups,
-                )
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            GRAPHDB_OP_ERRORS.labels(
+                backend='neo4j',
+                op='get_similar_terms',
+                prefix=prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            GRAPHDB_OP_DURATION.labels(
+                backend='neo4j',
+                op='get_similar_terms',
+                prefix=prefix.value,
+                mode=variant,
+                result=result_label,
+            ).observe(end - start)
+            if first is not None:
+                GRAPHDB_OP_TTFR.labels(
+                    backend='neo4j',
+                    op='get_similar_terms',
+                    prefix=prefix.value,
+                    mode=variant,
+                    result=result_label,
+                ).observe(first - start)
 
     async def translate_terms_iter(self,
                                    original_ids: list[str],

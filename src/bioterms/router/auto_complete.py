@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.metrics import AUTOCOMPLETE_LIMIT, AUTOCOMPLETE_QUERY_LEN
 from bioterms.database import DocumentDatabase, get_active_doc_db
 from bioterms.model.base import JsonModel
 from bioterms.model.concept import ConceptUnion
@@ -68,6 +69,13 @@ async def auto_complete_v1(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of matching concepts.
     """
+    AUTOCOMPLETE_QUERY_LEN.labels(
+        prefix=prefix.value,
+    ).observe(len(query_str))
+    AUTOCOMPLETE_LIMIT.labels(
+        prefix=prefix.value,
+    ).observe(250 if long else 25)
+
     if len(query_str) < CONFIG.auto_complete_min_length:
         # Does not actually return 400 because it is a legacy API
         return ['Search term needs at least 3 characters.']
@@ -128,6 +136,13 @@ async def auto_complete_v2(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of matching concepts, in V2 API format.
     """
+    AUTOCOMPLETE_QUERY_LEN.labels(
+        prefix=prefix.value,
+    ).observe(len(query))
+    AUTOCOMPLETE_LIMIT.labels(
+        prefix=prefix.value,
+    ).observe(result_threshold)
+
     config = get_vocabulary_config(prefix)
     concepts_iter = doc_db.auto_complete_iter(
         prefix=prefix,
@@ -171,6 +186,13 @@ async def auto_complete_v3(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of matching concepts.
     """
+    AUTOCOMPLETE_QUERY_LEN.labels(
+        prefix=prefix.value,
+    ).observe(len(query))
+    AUTOCOMPLETE_LIMIT.labels(
+        prefix=prefix.value,
+    ).observe(limit)
+
     config = get_vocabulary_config(prefix)
     concepts_iter = doc_db.auto_complete_iter(
         prefix=prefix,

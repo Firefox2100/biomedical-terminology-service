@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.metrics import MAP_REQS, MAP_ROOTS, MAP_HOPS, MAP_LIMIT
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.related_term import RelatedTerm
@@ -85,6 +86,26 @@ async def map_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The active graph database.
     :return: A list of mapped terms.
     """
+    mode = 'bounded' if limit is not None else 'unbounded'
+    MAP_REQS.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value,
+        mode=mode
+    ).inc()
+    MAP_ROOTS.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value
+    ).observe(len(requested_terms.term_ids))
+    MAP_HOPS.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value
+    ).observe(1)
+    MAP_LIMIT.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value,
+        has_limit=('yes' if result_threshold else 'no')
+    ).observe(result_threshold)
+
     map_iter = graph_db.map_terms_iter(
         prefix=prefix,
         target_prefix=target_prefix,
@@ -137,6 +158,26 @@ async def map_terms_v2(prefix: ConceptPrefix,
     :param graph_db: The active graph database.
     :return: A list of mapped terms.
     """
+    mode = 'bounded' if limit is not None else 'unbounded'
+    MAP_REQS.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value,
+        mode=mode
+    ).inc()
+    MAP_ROOTS.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value
+    ).observe(len(concept_ids))
+    MAP_HOPS.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value
+    ).observe(max_hops)
+    MAP_LIMIT.labels(
+        prefix=prefix.value,
+        target_prefix=target_prefix.value,
+        has_limit=('yes' if limit is not None else 'no')
+    ).observe(limit or 0)
+
     map_iter = graph_db.map_terms_iter(
         prefix=prefix,
         target_prefix=target_prefix,

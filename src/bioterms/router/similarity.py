@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
+from bioterms.etc.metrics import SIM_REQS, SIM_ROOTS, SIM_THRESHOLD, SIM_LIMIT
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.similar_term import SimilarTerm
@@ -132,7 +133,8 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
                                result_threshold: int = Query(
                                    0,
                                    description='The maximum number of terms to return in the '
-                                               'response. 0 for no limit.'
+                                               'response. 0 for no limit.',
+                                   ge=0,
                                ),
                                graph_db: GraphDatabase = Depends(get_active_graph_db),
                                ):
@@ -146,6 +148,22 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of similar terms with their similarity scores.
     """
+    variant = 'same_prefix'
+    SIM_REQS.labels(
+        prefix=prefix.value,
+        variant=variant,
+        filter='none',
+        method='none',
+        corpus='none',
+        has_limit='yes' if result_threshold > 0 else 'no',
+    ).inc()
+    SIM_ROOTS.labels(prefix=prefix.value).observe(len(requested_terms.term_ids))
+    SIM_THRESHOLD.labels(prefix=prefix.value).observe(requested_terms.threshold)
+    SIM_LIMIT.labels(
+        prefix=prefix.value,
+        has_limit='yes' if result_threshold > 0 else 'no',
+    ).observe(result_threshold)
+
     similarity_iter = graph_db.get_similar_terms_iter(
         prefix=prefix,
         concept_ids=requested_terms.term_ids,
@@ -228,6 +246,35 @@ async def get_similar_terms_v2(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of similar terms with their similarity scores.
     """
+    variant = 'same_prefix' if same_prefix else 'cross_prefix'
+    has_limit = 'yes' if limit is not None else 'no'
+    has_method = method is not None
+    has_corpus = corpus is not None
+
+    if has_method and has_corpus:
+        filt = 'both'
+    elif has_method:
+        filt = 'method'
+    elif has_corpus:
+        filt = 'corpus'
+    else:
+        filt = 'none'
+
+    SIM_REQS.labels(
+        prefix=prefix.value,
+        variant=variant,
+        filter=filt,
+        method=method.value if has_method else 'none',
+        corpus=corpus.value if has_corpus else 'none',
+        has_limit=has_limit,
+    ).inc()
+    SIM_ROOTS.labels(prefix=prefix.value).observe(len(concept_ids))
+    SIM_THRESHOLD.labels(prefix=prefix.value).observe(threshold)
+    SIM_LIMIT.labels(
+        prefix=prefix.value,
+        has_limit=has_limit,
+    ).observe(limit or 0)
+
     similarity_iter = graph_db.get_similar_terms_iter(
         prefix=prefix,
         concept_ids=concept_ids,
@@ -324,7 +371,7 @@ async def translate_terms_v2(prefix: ConceptPrefix,
     :param threshold: The minimum similarity score to consider a term as similar.
     :param limit: Maximum number of descendants to return for each term.
     :param graph_db: The graph database instance.
-    :return:
+    :return: A list of translated terms with their similarity scores.
     """
     constraint_dict = {}
     for concept in constraint_concepts:
