@@ -226,6 +226,18 @@ class DocumentDatabase(ABC):
 
         return results
 
+    @abstractmethod
+    async def get_random_term_ids(self,
+                                  prefix: ConceptPrefix,
+                                  count: int,
+                                  ) -> list[str]:
+        """
+        Get a list of random term IDs for a given prefix from the document database.
+        :param prefix: The vocabulary prefix to get random term IDs for.
+        :param count: The number of random term IDs to retrieve.
+        :return: A list of random term IDs.
+        """
+
 
 _active_doc_db: DocumentDatabase | None = None
 

@@ -6,7 +6,7 @@ vocabulary status information.
 
 import zlib
 from pydantic import Field, ConfigDict
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Query, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
 
 from bioterms.etc.enums import ConceptPrefix
@@ -195,6 +195,32 @@ async def delete_vocabulary_data(prefix: ConceptPrefix,
         graph_db=graph_db,
         vector_db=vector_db,
     )
+
+
+@data_router.get('/{prefix}/random', response_model=list[str])
+async def get_random_concept_ids(prefix: ConceptPrefix,
+                                 count: int = Query(
+                                     10,
+                                     description='Number of random concepts to return.',
+                                     ge=1,
+                                     le=100,
+                                 ),
+                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                 ):
+    """
+    Get a list of random concept IDs from the specified vocabulary.
+    \f
+    :param prefix: The vocabulary prefix.
+    :param count: The number of random concept IDs to return.
+    :param doc_db: The document database instance.
+    :return: A list of random concept IDs.
+    """
+    random_ids = await doc_db.get_random_term_ids(
+        prefix=prefix,
+        count=count,
+    )
+
+    return random_ids
 
 
 @data_router.get('/{prefix}/documents')

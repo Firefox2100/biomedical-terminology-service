@@ -837,3 +837,34 @@ class SqlDocumentDatabase(DocumentDatabase):
             async for row in stream:
                 payload = dict(row[0])
                 yield model_class.model_validate(payload)
+
+    async def get_random_term_ids(self,
+                                  prefix: ConceptPrefix,
+                                  count: int,
+                                  ) -> list[str]:
+        """
+        Get a list of random term IDs for a given prefix from the document database.
+        :param prefix: The vocabulary prefix to get random term IDs for.
+        :param count: The number of random term IDs to retrieve.
+        :return: A list of random term IDs.
+        """
+        async with self._engine.connect() as conn:
+            tables = await self._ensure_tables_exist(conn, prefix)
+            concept_t = tables.concept
+
+            if self._is_postgres:
+                order_func = func.random()
+            elif self._is_mysql:
+                order_func = func.rand()
+            else:
+                order_func = func.random()
+
+            stmt = (
+                select(concept_t.c.concept_id)
+                .order_by(order_func)
+                .limit(count)
+            )
+
+            res = await conn.execute(stmt)
+            rows = res.fetchall()
+            return [r.concept_id for r in rows]

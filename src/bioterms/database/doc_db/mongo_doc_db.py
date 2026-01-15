@@ -602,3 +602,26 @@ class MongoDocumentDatabase(DocumentDatabase):
                 ).observe(first_item_at - start)
 
             AUTOCOMPLETE_ITEMS.labels(prefix=str(prefix.value)).observe(items)
+
+    async def get_random_term_ids(self,
+                                  prefix: ConceptPrefix,
+                                  count: int,
+                                  ) -> list[str]:
+        """
+        Get a list of random term IDs for a given prefix from the document database.
+        :param prefix: The vocabulary prefix to get random term IDs for.
+        :param count: The number of random term IDs to retrieve.
+        :return: A list of random term IDs.
+        """
+        collection = self.db[str(prefix.value)]
+        pipeline = [
+            {'$sample': {'size': count}},
+            {'$project': {'conceptId': 1}},
+        ]
+
+        term_ids = []
+        cursor = await collection.aggregate(pipeline)
+        async for doc in cursor:
+            term_ids.append(doc['conceptId'])
+
+        return term_ids
