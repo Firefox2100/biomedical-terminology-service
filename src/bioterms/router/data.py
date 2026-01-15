@@ -92,84 +92,6 @@ async def get_vocabulary_status_info(prefix: ConceptPrefix,
     return vocab_status
 
 
-@data_router.get('/{prefix}/license', response_class=Response)
-async def get_license(prefix: ConceptPrefix):
-    """
-    Get the licence information for the specified vocabulary.
-    \f
-    :param prefix: The vocabulary prefix.
-    :return: The licence information as a Markdown response.
-    """
-    license_str = get_vocabulary_license(prefix)
-    if license_str is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f'No license information found for vocabulary {prefix.value}'
-        )
-
-    return Response(
-        content=license_str,
-        media_type='text/markdown',
-    )
-
-
-@data_router.get('/{prefix}/{concept_id}', response_model=ConceptInfoResponse)
-async def get_concept(prefix: ConceptPrefix,
-                      concept_id: str,
-                      doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                      graph_db: GraphDatabase = Depends(get_active_graph_db),
-                      ):
-    """
-    Get a specific concept by its ID from the specified vocabulary.
-    \f
-    :param prefix: The vocabulary prefix.
-    :param concept_id: The ID of the concept to retrieve.
-    :param doc_db: The document database instance.
-    :param graph_db: The graph database instance.
-    :return: The Concept instance.
-    """
-    config = get_vocabulary_config(prefix)
-    concept = await doc_db.get_terms_by_ids(
-        prefix=prefix,
-        concept_ids=[concept_id],
-        model_class=config['conceptClass'],
-    )
-
-    if not concept:
-        raise HTTPException(
-            status_code=404,
-            detail=f'Concept {concept_id} not found in vocabulary {prefix.value}'
-        )
-
-    children = await graph_db.expand_terms(
-        prefix=prefix,
-        concept_ids=[concept_id],
-        max_depth=1,
-    )
-    parents = await graph_db.trace_ancestors(
-        prefix=prefix,
-        concept_ids=[concept_id],
-        max_depth=1,
-    )
-
-    children_concepts = await doc_db.get_terms_by_ids(
-        prefix=prefix,
-        concept_ids=children[0].related_concepts if children else [],
-        model_class=config['conceptClass'],
-    )
-    parents_concepts = await doc_db.get_terms_by_ids(
-        prefix=prefix,
-        concept_ids=parents[0].related_concepts if parents else [],
-        model_class=config['conceptClass'],
-    )
-
-    return ConceptInfoResponse(
-        concept=concept[0],
-        children=children_concepts,
-        parents=parents_concepts,
-    )
-
-
 @data_router.delete('/{prefix}')
 async def delete_vocabulary_data(prefix: ConceptPrefix,
                                  cache: Cache = Depends(get_active_cache),
@@ -194,6 +116,27 @@ async def delete_vocabulary_data(prefix: ConceptPrefix,
         doc_db=doc_db,
         graph_db=graph_db,
         vector_db=vector_db,
+    )
+
+
+@data_router.get('/{prefix}/license', response_class=Response)
+async def get_license(prefix: ConceptPrefix):
+    """
+    Get the licence information for the specified vocabulary.
+    \f
+    :param prefix: The vocabulary prefix.
+    :return: The licence information as a Markdown response.
+    """
+    license_str = get_vocabulary_license(prefix)
+    if license_str is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f'No license information found for vocabulary {prefix.value}'
+        )
+
+    return Response(
+        content=license_str,
+        media_type='text/markdown',
     )
 
 
@@ -333,4 +276,61 @@ async def ingest_documents(prefix: ConceptPrefix,
 
     return IngestResponse(
         conceptCount=concept_count,
+    )
+
+
+@data_router.get('/{prefix}/{concept_id}', response_model=ConceptInfoResponse)
+async def get_concept(prefix: ConceptPrefix,
+                      concept_id: str,
+                      doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                      graph_db: GraphDatabase = Depends(get_active_graph_db),
+                      ):
+    """
+    Get a specific concept by its ID from the specified vocabulary.
+    \f
+    :param prefix: The vocabulary prefix.
+    :param concept_id: The ID of the concept to retrieve.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
+    :return: The Concept instance.
+    """
+    config = get_vocabulary_config(prefix)
+    concept = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=[concept_id],
+        model_class=config['conceptClass'],
+    )
+
+    if not concept:
+        raise HTTPException(
+            status_code=404,
+            detail=f'Concept {concept_id} not found in vocabulary {prefix.value}'
+        )
+
+    children = await graph_db.expand_terms(
+        prefix=prefix,
+        concept_ids=[concept_id],
+        max_depth=1,
+    )
+    parents = await graph_db.trace_ancestors(
+        prefix=prefix,
+        concept_ids=[concept_id],
+        max_depth=1,
+    )
+
+    children_concepts = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=children[0].related_concepts if children else [],
+        model_class=config['conceptClass'],
+    )
+    parents_concepts = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=parents[0].related_concepts if parents else [],
+        model_class=config['conceptClass'],
+    )
+
+    return ConceptInfoResponse(
+        concept=concept[0],
+        children=children_concepts,
+        parents=parents_concepts,
     )
