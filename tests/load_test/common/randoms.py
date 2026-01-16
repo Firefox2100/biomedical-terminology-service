@@ -20,6 +20,7 @@ def get_random_concept_ids(client: FastHttpSession,
         params={
             'count': str(count),
         },
+        name=f'/api/vocabularies/{prefix.value}/random',
         catch_response=True,
     ) as response:
         if response.status_code != 200:

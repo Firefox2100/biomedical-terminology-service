@@ -3,12 +3,12 @@ A module including the users to mimic management users calling data related APIs
 """
 
 import random
-import string
 from locust import FastHttpUser, task, between, constant
 
 from bioterms.etc.enums import ConceptPrefix
 
 from load_test.common.randoms import get_random_concept_ids
+from load_test.common.user import ConceptIdConsumer
 
 
 class ApiScraper(FastHttpUser):
@@ -50,19 +50,11 @@ class ApiScraper(FastHttpUser):
                 response.success()
 
 
-class IntegratedDisplay(FastHttpUser):
+class IntegratedDisplay(ConceptIdConsumer):
     """
     A user class that simulates another service that uses this one to fetch data for displaying.
     """
     wait_time = between(1, 30)
-
-    def __init__(self,
-                 *args,
-                 **kwargs,
-                 ):
-        super().__init__(*args, **kwargs)
-
-        self._concept_ids = {}
 
     @task
     def get_random_concept_ids(self):
@@ -84,20 +76,14 @@ class IntegratedDisplay(FastHttpUser):
         Retrieve the details of a random concept ID.
         """
         prefix = random.choice(list(ConceptPrefix))
-        concept_ids = self._concept_ids.get(prefix, None)
-
-        if not concept_ids:
-            concept_ids = get_random_concept_ids(
-                client=self.client,
-                prefix=prefix,
-                count=100,
-            )
-            self._concept_ids[prefix] = concept_ids
-
-        concept_id = random.choice(concept_ids)
+        concept_id = self._get_concept_ids(
+            prefix=prefix,
+            count=1,
+        )[0]
 
         with self.client.get(
-            f'/api/vocabularies/{prefix}/{concept_id}',
+            f'/api/vocabularies/{prefix.value}/{concept_id}',
+            name=f'/api/vocabularies/{prefix.value}/<concept_id>',
             catch_response=True,
         ) as response:
             if response.status_code != 200:

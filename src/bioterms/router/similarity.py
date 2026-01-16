@@ -210,7 +210,6 @@ async def get_similar_terms_v2(prefix: ConceptPrefix,
                                    True,
                                    description='Whether to only return similar terms with the '
                                                'same prefix as the original term.',
-                                   alias='same-prefix',
                                ),
                                corpus: Optional[ConceptPrefix] = Query(
                                    None,
