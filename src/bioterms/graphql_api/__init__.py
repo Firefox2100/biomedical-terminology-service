@@ -186,6 +186,41 @@ async def create_graphql_app() -> GraphQL:
         import bioterms.graphql_api.resolver.hpo_ordo
 
         graphql_schemas.append(HPO_ORDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.CTV3, ConceptPrefix.SNOMED)].loaded:
+        from .schemas import CTV3_SNOMED_SCHEMA
+        import bioterms.graphql_api.resolver.ctv3_snomed
+
+        graphql_schemas.append(CTV3_SNOMED_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO)].loaded:
+        from .schemas import GENE_HPO_SCHEMA
+        import bioterms.graphql_api.resolver.gene_hpo
+
+        graphql_schemas.append(GENE_HPO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT)].loaded:
+        from .schemas import GENE_NCIT_SCHEMA
+        import bioterms.graphql_api.resolver.gene_ncit
+
+        graphql_schemas.append(GENE_NCIT_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM)].loaded:
+        from .schemas import GENE_OMIM_SCHEMA
+        import bioterms.graphql_api.resolver.gene_omim
+
+        graphql_schemas.append(GENE_OMIM_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO)].loaded:
+        from .schemas import GENE_ORDO_SCHEMA
+        import bioterms.graphql_api.resolver.gene_ordo
+
+        graphql_schemas.append(GENE_ORDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.OMIM, ConceptPrefix.ORDO)].loaded:
+        from .schemas import OMIM_ORDO_SCHEMA
+        import bioterms.graphql_api.resolver.omim_ordo
+
+        graphql_schemas.append(OMIM_ORDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.ORDO, ConceptPrefix.SNOMED)].loaded:
+        from .schemas import ORDO_SNOMED_SCHEMA
+        import bioterms.graphql_api.resolver.ordo_snomed
+
+        graphql_schemas.append(ORDO_SNOMED_SCHEMA)
 
     if graphql_schemas:
         from .schemas import CONCEPT_SCHEMA

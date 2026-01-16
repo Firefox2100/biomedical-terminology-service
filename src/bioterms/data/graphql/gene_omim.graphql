@@ -1,0 +1,7 @@
+extend type HgncSymbolConcept {
+    annotatedOmim: [OmimConcept!]!
+}
+
+extend type OmimConcept {
+    annotatedGene: [HgncSymbolConcept!]!
+}

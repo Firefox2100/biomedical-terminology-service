@@ -1,0 +1,7 @@
+extend type OrdoConcept {
+    annotatedSnomed: [SnomedConcept!]!
+}
+
+extend type SnomedConcept {
+    annotatedOrdo: [OrdoConcept!]!
+}

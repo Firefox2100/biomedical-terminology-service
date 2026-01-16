@@ -1,0 +1,7 @@
+extend type HgncSymbolConcept {
+    annotatedHpo: [HpoConcept!]!
+}
+
+extend type HpoConcept {
+    annotatedGene: [HgncSymbolConcept!]!
+}

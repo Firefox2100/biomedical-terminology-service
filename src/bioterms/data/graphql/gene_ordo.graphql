@@ -1,0 +1,7 @@
+extend type HgncSymbolConcept {
+    annotatedOrdo: [OrdoConcept!]!
+}
+
+extend type OrdoConcept {
+    annotatedGene: [HgncSymbolConcept!]!
+}

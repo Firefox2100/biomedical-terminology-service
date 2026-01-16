@@ -1,0 +1,7 @@
+extend type HgncSymbolConcept {
+    annotatedNcit: [NcitConcept!]!
+}
+
+extend type NcitConcept {
+    annotatedGene: [HgncSymbolConcept!]!
+}

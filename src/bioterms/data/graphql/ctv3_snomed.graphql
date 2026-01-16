@@ -1,0 +1,7 @@
+extend type Ctv3Concept {
+    annotatedSnomed: [SnomedConcept!]!
+}
+
+extend type SnomedConcept {
+    annotatedCtv3: [Ctv3Concept!]!
+}

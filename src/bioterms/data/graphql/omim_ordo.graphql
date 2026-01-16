@@ -1,0 +1,7 @@
+extend type OmimConcept {
+    annotatedOrdo: [OrdoConcept!]!
+}
+
+extend type OrdoConcept {
+    annotatedOmim: [OmimConcept!]!
+}
