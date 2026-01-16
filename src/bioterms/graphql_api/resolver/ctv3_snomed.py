@@ -14,7 +14,7 @@ async def resolve_ctv3_concept_annotated_snomed(obj, info):
     )
 
 
-@CTV3_CONCEPT.field('annotatedCtv3')
+@SNOMED_CONCEPT.field('annotatedCtv3')
 async def resolve_snomed_concept_annotated_ctv3(obj, info):
     return await resolve_concept_annotated_concepts(
         obj=obj,
