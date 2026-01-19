@@ -62,6 +62,18 @@ class Settings(BaseSettings):
         True,
         description='Enable Prometheus metrics collection and export',
     )
+    enable_error_reporting: bool = Field(
+        False,
+        description='Enable error reporting to Sentry or other compatible tracking services',
+    )
+    enable_profiling: bool = Field(
+        False,
+        description='Enable performance profiling using Sentry SDK'
+    )
+    sentry_dsn: Optional[str] = Field(
+        None,
+        description='DSN for Sentry error reporting service',
+    )
     google_site_verification_id: Optional[str] = Field(
         None,
         description='Google site verification ID for webmaster tools. Set this to inject '

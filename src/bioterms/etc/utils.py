@@ -455,3 +455,19 @@ async def schedule_tasks(executor: Executor,
 
     if progress is not None:
         progress.stop()
+
+
+def report_exception(exc: Exception = None):
+    """
+    Report an exception using the sentry SDK. If the SDK is not configured, this function does nothing.
+    :param exc: The exception to report. If None, it will use the sys.exc_info().
+    """
+    if not CONFIG.enable_error_reporting:
+        return
+
+    try:
+        import sentry_sdk
+
+        sentry_sdk.capture_exception(exc)
+    except ImportError:
+        pass

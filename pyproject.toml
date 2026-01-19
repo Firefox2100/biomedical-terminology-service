@@ -55,7 +55,6 @@ dynamic = [
 
 [project.optional-dependencies]
 test = [
-    "aiosqlite~=0.21.0",
     "deepdiff~=8.6.1",
     "locust~=2.43.1",
     "neo4j~=6.0.3",
@@ -66,10 +65,8 @@ test = [
     "pymongo~=4.15.5",
     "qdrant-client~=1.16.1",
     "redis~=7.1.0",
+    "sentry-sdk[fastapi]~=2.49.0",
     "sqlalchemy~=2.0.45",
-]
-aiosqlite = [
-    "aiosqlite~=0.21.0",
 ]
 pymongo = [
     "pymongo~=4.15.5",
@@ -83,6 +80,9 @@ qdrant = [
 redis = [
     "redis~=7.1.0",
 ]
+sentry = [
+    "sentry-sdk[fastapi]~=2.49.0",
+]
 sql = [
     "sqlalchemy~=2.0.45",
 ]
@@ -91,6 +91,8 @@ all = [
     "neo4j~=6.0.3",
     "qdrant-client~=1.16.1",
     "redis~=7.1.0",
+    "sentry-sdk[fastapi]~=2.49.0",
+    "sqlalchemy~=2.0.45",
 ]
 
 [project.urls]

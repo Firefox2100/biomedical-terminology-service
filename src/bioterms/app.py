@@ -26,6 +26,7 @@ from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import BtsError
+from bioterms.etc.utils import report_exception
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
@@ -108,6 +109,27 @@ def create_app() -> FastAPI:
     FastAPI application factory function.
     :return: An instance of FastAPI application.
     """
+    if CONFIG.enable_error_reporting:
+        import sentry_sdk
+
+        if not CONFIG.sentry_dsn:
+            LOGGER.warning('Sentry DSN is not provided; error reporting will not be enabled.')
+        else:
+            if CONFIG.enable_profiling:
+                sentry_sdk.init(
+                    dsn=CONFIG.sentry_dsn,
+                    release=__version__,
+                    send_default_pii=True,
+                    traces_sample_rate=1.0,
+                    profile_session_sample_rate=1.0,
+                    profile_lifecycle="trace",
+                )
+            else:
+                sentry_sdk.init(
+                    dsn=CONFIG.sentry_dsn,
+                    release=__version__,
+                )
+
     app = FastAPI(
         title='BioMedical Terminology Service',
         version=__version__,
@@ -262,6 +284,8 @@ def create_app() -> FastAPI:
         LOGGER.exception('BTS Service Exception occurred: %s', exc.message)
         LOGGER.debug('Request body: %s', (await request.body()).decode(errors='ignore'))
 
+        report_exception(exc, request)
+
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -274,6 +298,8 @@ def create_app() -> FastAPI:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc):
         LOGGER.error('HTTP Exception: %s', exc)
+
+        report_exception(exc, request)
 
         if request.url.path.startswith('/api/'):
             return await fastapi_http_exception_handler(request, exc)
