@@ -419,7 +419,7 @@ class Neo4jGraphDatabase(GraphDatabase):
 
     async def save_vocabulary_graph(self,
                                     concepts: list[Concept],
-                                    graph: nx.DiGraph,
+                                    graph: nx.DiGraph | nx.MultiDiGraph,
                                     ):
         """
         Save the vocabulary graph to the graph database.
@@ -427,10 +427,18 @@ class Neo4jGraphDatabase(GraphDatabase):
             allow for any necessary term metadata to be accessed during graph saving.
         :param graph: The vocabulary graph to save.
         """
-        edges = [
-            (str(source), str(target), data['label'].value if data.get('label') else None)
-            for source, target, data in graph.edges(data=True)
-        ]
+        if isinstance(graph, nx.DiGraph):
+            edges = [
+                (str(source), str(target), data['label'].value if data.get('label') else None, None)
+                for source, target, data in graph.edges(data=True)
+            ]
+        elif isinstance(graph, nx.MultiDiGraph):
+            edges = [
+                (str(source), str(target), data['label'].value if data.get('label') else None, key)
+                for source, target, key, data in graph.edges(keys=True, data=True)
+            ]
+        else:
+            raise TypeError('Graph must be a DiGraph or MultiDiGraph instance.')
 
         concept_prefix = concepts[0].prefix if concepts else ''
 
@@ -462,8 +470,17 @@ class Neo4jGraphDatabase(GraphDatabase):
                     UNWIND $edges AS edge
                     MERGE (source:Concept {id: edge[0], prefix: $concept_prefix})
                     MERGE (target:Concept {id: edge[1], prefix: $concept_prefix})
-                    WITH source, target, edge, coalesce(edge[2], 'related_to') as rel_label
+                    WITH source, target, edge,
+                        coalesce(edge[2], 'related_to') as rel_label,
+                        edge[3] AS rel_key
                     CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
+                    WITH rel, rel_key
+                    FOREACH (_ IN CASE WHEN rel_key IS NULL THEN [] ELSE [1] END |
+                        SET rel.label =
+                            apoc.coll.toSet(
+                                apoc.convert.toList(coalesce(rel.label, [])) + [rel_key]
+                            )
+                    )
                     RETURN count(rel) AS created
                     """,
                     session=session,

@@ -19,6 +19,7 @@ ALL_VOCABULARIES = {
     ConceptPrefix.HGNC_SYMBOL: 'hgnc_symbol',
     ConceptPrefix.HPO: 'hpo',
     ConceptPrefix.NCIT: 'ncit',
+    ConceptPrefix.OHDSI: 'ohdsi',
     ConceptPrefix.OMIM: 'omim',
     ConceptPrefix.ORDO: 'ordo',
     ConceptPrefix.REACTOME: 'reactome',

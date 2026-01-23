@@ -141,7 +141,7 @@ class GraphDatabase(ABC):
     @abstractmethod
     async def save_vocabulary_graph(self,
                                     concepts: list[Concept],
-                                    graph: nx.DiGraph,
+                                    graph: nx.DiGraph | nx.MultiDiGraph,
                                     ):
         """
         Save the vocabulary graph to the graph database.

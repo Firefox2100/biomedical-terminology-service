@@ -34,6 +34,7 @@ class ConceptPrefix(Enum):
     HGNC_SYMBOL = 'gene'
     HPO = 'hpo'
     NCIT = 'ncit'
+    OHDSI = 'ohdsi'
     OMIM = 'omim'
     ORDO = 'ordo'
     REACTOME = 'reactome'
@@ -70,6 +71,7 @@ class ConceptRelationshipType(Enum):
     PRECEDED_BY = 'preceded_by'
     HAS_INPUT = 'has_input'
     HAS_OUTPUT = 'has_output'
+    OHDSI_RELATIONSHIP = 'ohdsi_relationship'
 
 
 class DocDatabaseDriverType(Enum):
