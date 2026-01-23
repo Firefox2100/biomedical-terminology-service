@@ -10,7 +10,7 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, get_trud_release_url, \
     download_rf2, rf2_dataframe_deduplicate, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
-from bioterms.model.concept import Concept
+from bioterms.model.concept import OhdsiDrugStrength, OhdsiConcept
 
 
 VOCABULARY_NAME = 'OHDSI Standardized Vocabularies'
@@ -31,7 +31,7 @@ FILE_PATHS: list[str] = [
     'ohdsi/DRUG_STRENGTH.csv',
 ]
 TIMESTAMP_FILE = 'ohdsi/.timestamp'
-CONCEPT_CLASS = Concept
+CONCEPT_CLASS = OhdsiConcept
 
 
 _CANONICAL_RELATIONSHIP_CACHE: dict[str, str] = {}
@@ -278,7 +278,7 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
             concept = CONCEPT_CLASS(
                 prefix=VOCABULARY_PREFIX,
                 conceptId=str(row['concept_id']),
-                label=row['concept_name'],
+                label=str(row['concept_name']),
                 status=ConceptStatus.DEPRECATED
                        if row['valid_end_date'] < date_int
                        else ConceptStatus.ACTIVE,
@@ -288,12 +288,10 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
     return concepts
 
 
-def _process_synonyms(concepts: dict[int, CONCEPT_CLASS],
-                      ) -> dict[int, CONCEPT_CLASS]:
+def _process_synonyms(concepts: dict[int, CONCEPT_CLASS]):
     """
     Process the OHDSI CONCEPT_SYNONYM.csv file and add synonyms to the given concepts.
     :param concepts: A dictionary mapping concept IDs to Concept instances.
-    :return: The updated dictionary of concepts with synonyms added.
     """
     synonym_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[1])
     chunks = pd.read_csv(
@@ -323,7 +321,70 @@ def _process_synonyms(concepts: dict[int, CONCEPT_CLASS],
                     concept.synonyms = []
                 concept.synonyms.append(synonym)
 
-    return concepts
+
+def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
+    """
+    Process the OHDSI DRUG_STRENGTH.csv file to extract drug strength information.
+    Currently a placeholder function.
+    """
+    drug_strength_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[8])
+
+    if not os.path.exists(drug_strength_file_path):
+        return
+
+    chunks = pd.read_csv(
+        str(drug_strength_file_path),
+        dtype={
+            'drug_concept_id': int,
+            'ingredient_concept_id': int,
+            'amount_value': float,
+            'amount_unit_concept_id': int,
+            'numerator_value': float,
+            'numerator_unit_concept_id': int,
+            'denominator_value': float,
+            'denominator_unit_concept_id': int,
+        },
+        usecols=[
+            'drug_concept_id',
+            'ingredient_concept_id',
+            'amount_value',
+            'amount_unit_concept_id',
+            'numerator_value',
+            'numerator_unit_concept_id',
+            'denominator_value',
+            'denominator_unit_concept_id',
+        ],
+        sep='\t',
+        chunksize=100000,
+    )
+
+    for chunk in iter_progress(chunks, desc='Processing OHDSI drug strengths'):
+        for _, row in iter_progress(chunk.iterrows(),
+                                    description='Processing OHDSI drug strength rows',
+                                    total=len(chunk),
+                                    ):
+            drug_strength = OhdsiDrugStrength(
+                ingredientId=str(row['ingredient_concept_id']),
+                amountValue=row['amount_value'] if not pd.isna(row['amount_value']) else None,
+                numeratorValue=row['numerator_value'] if not pd.isna(row['numerator_value']) else None,
+                denominatorValue=row['denominator_value'] if not pd.isna(row['denominator_value']) else None,
+            )
+
+            if not pd.isna(row['amount_unit_concept_id']):
+                amount_unit = concepts[row['amount_unit_concept_id']].label
+                drug_strength.amountUnit = amount_unit
+            if not pd.isna(row['numerator_unit_concept_id']):
+                numerator_unit = concepts[row['numerator_unit_concept_id']].label
+                drug_strength.numeratorUnit = numerator_unit
+            if not pd.isna(row['denominator_unit_concept_id']):
+                denominator_unit = concepts[row['denominator_unit_concept_id']].label
+                drug_strength.denominatorUnit = denominator_unit
+
+            drug_concept = concepts.get(row['drug_concept_id'])
+            if drug_concept:
+                if drug_concept.drug_strengths is None:
+                    drug_concept.drug_strengths = []
+                drug_concept.drug_strengths.append(drug_strength)
 
 
 def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
@@ -409,11 +470,11 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
     """
-    if not check_files_exist(FILE_PATHS):
+    if not check_files_exist(FILE_PATHS[:7]):
         raise FilesNotFound('OHDSI release files not found')
 
     concepts_dict = _process_concepts()
-    concepts_dict = _process_synonyms(concepts_dict)
+    _process_synonyms(concepts_dict)
 
     ohdsi_graph = nx.MultiDiGraph()
     concepts = list(concepts_dict.values())
@@ -430,8 +491,10 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     for concept in concepts:
         ohdsi_graph.add_node(concept.concept_id)
-    del concepts
 
     _process_relationships(ohdsi_graph)
 
-
+    await graph_db.save_vocabulary_graph(
+        concepts=concepts,
+        graph=ohdsi_graph,
+    )
