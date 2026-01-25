@@ -70,6 +70,15 @@ async def load_command(vocabulary: Annotated[
                               '--overwrite',
                               '-o',
                               help='Overwrite existing data in the database.')
+                       ] = False,
+                       offline: Annotated[
+                           bool,
+                           typer.Option(
+                               '--offline',
+                               '-f',
+                               help='Load vocabulary in offline mode without writing to database. '
+                                    'This mode allows compiling the database structure on a separate '
+                                    'machine.')
                        ] = False
                        ):
     try:
@@ -81,10 +90,10 @@ async def load_command(vocabulary: Annotated[
             CONSOLE.print('[red]Either specify a vocabulary to load or use the --all flag.[/red]')
             return
         for vocabulary in target_vocabularies:
-            await load_vocabulary(vocabulary, drop_existing=overwrite)
-            CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value} into the database.[/green]')
+            await load_vocabulary(vocabulary, drop_existing=overwrite, offline=offline)
+            CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
-        CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value} into the database: {e}[/red]')
+        CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value}: {e}[/red]')
         traceback.print_exc()
 
 

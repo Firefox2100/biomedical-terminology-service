@@ -11,14 +11,16 @@ import tempfile
 import fnmatch
 import zlib
 import tarfile
+from collections.abc import MutableSequence, Iterable
 from pathlib import Path
 from itertools import islice
 from concurrent.futures import Executor
-from typing import Iterable, Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar
+from typing import Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar
 import aiofiles
 import aiofiles.os
 import httpx
 import pandas as pd
+import networkx as nx
 from sentence_transformers import SentenceTransformer
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, \
     TimeRemainingColumn
@@ -53,33 +55,89 @@ def ensure_data_directory():
         os.makedirs(CONFIG.data_dir, exist_ok=True)
 
 
-def batch_iterable(seq: list[T],
+def batch_iterable(seq: Iterable[T] | list[T],
                    batch_size: int = 10000,
+                   consume: bool = False,
                    ) -> Iterator[list[T]]:
     """
     Batch the input parameters in case of large insertions.
-    :param seq: The iterable, must be a list-like object and not a generator
+    :param seq: The iterable, can be either a list-like object or an iterator
     :param batch_size: Size of the batch, default to 1000
     """
-    batch_count = (len(seq) + batch_size - 1) // batch_size
+    if batch_size <= 0:
+        raise ValueError('batch_size must be positive')
 
-    if batch_count <= 1:
-        yield seq
+    if isinstance(seq, MutableSequence):
+        if not seq:
+            return
+
+        batch_count = (len(seq) + batch_size - 1) // batch_size
+        if batch_count <= 1:
+            yield seq
+            return
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task(description="Batching...", total=batch_count)
+
+            if not consume:
+                n = len(seq)
+                for i in range(0, n, batch_size):
+                    yield seq[i: i + batch_size]
+                    progress.advance(task)
+            else:
+                while seq:
+                    k = min(len(seq), batch_size)
+                    yield [seq.pop() for _ in range(k)]
+                    progress.advance(task)
+        return
+
+    if not isinstance(list, Iterable):
+        raise TypeError('list must be an iterable')
+
+    it = iter(seq)
+
+    first = next(it, None)
+    if first is None:
         return
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
+        TextColumn("{task.completed} batches"),
         TimeElapsedColumn(),
-        TimeRemainingColumn(),
+        transient=False,
     ) as progress:
-        task = progress.add_task(description='Batching...', total=batch_count)
+        task = progress.add_task(description="Batching...", total=None)
 
-        for i in range(0, len(seq), batch_size):
-            yield seq[i:i + batch_size]
+        batch = [first]
+        while True:
+            batch.extend(islice(it, batch_size - len(batch)))
+            yield batch
             progress.advance(task)
+
+            first = next(it, None)
+            if first is None:
+                break
+            batch = [first]
+
+
+def edge_iter(graph: nx.DiGraph | nx.MultiDiGraph) -> Iterator[tuple[str, str, Optional[str], Optional[int]]]:
+    if isinstance(graph, nx.DiGraph):
+        for source, target, data in graph.edges(data=True):
+            yield str(source), str(target), data['label'].value if data.get('label') else None, None
+    elif isinstance(graph, nx.MultiDiGraph):
+        for source, target, key, data in graph.edges(data=True):
+            yield str(source), str(target), data['label'].value if data.get('label') else None, key
+    else:
+        raise TypeError('Graph must be a DiGraph or MultiDiGraph instance.')
 
 
 async def download_file(url: str,

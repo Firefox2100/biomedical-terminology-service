@@ -5,12 +5,13 @@ import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, AnnotationType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, get_trud_release_url, \
-    download_rf2, rf2_dataframe_deduplicate, iter_progress, verbose_print
+from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import OhdsiDrugStrength, OhdsiConcept
+from bioterms.model.annotation import Annotation
+from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
 
 
 VOCABULARY_NAME = 'OHDSI Standardized Vocabularies'
@@ -46,21 +47,12 @@ def map_vocabulary_prefix(vocabulary_id: str,
     :param vocabulary_id: The vocabulary ID.
     :return: The mapped ConceptPrefix or string.
     """
-    mapping = {}
+    mapping = {
+        'NCIt': ConceptPrefix.NCIT,
+        'SNOMED': ConceptPrefix.SNOMED,
+    }
 
     return mapping.get(vocabulary_id, vocabulary_id.lower())
-
-
-def map_vocabulary_concept_id(vocabulary_id: str,
-                              concept_id: str,
-                              ) -> str:
-    """
-    Given a vocabulary ID in OHDSI and a concept ID, map to the format of concept ID
-    used in this system.
-    :param vocabulary_id: The vocabulary ID.
-    :param concept_id: The concept ID.
-    :return: The mapped concept ID.
-    """
 
 
 def _canonicalize_relationship_id(relationship_id: str,
@@ -253,15 +245,11 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
         dtype={
             'concept_id': int,
             'concept_name': str,
-            'vocabulary_id': str,
-            'concept_code': str,
             'valid_end_date': int,
         },
         usecols=[
             'concept_id',
             'concept_name',
-            'vocabulary_id',
-            'concept_code',
             'valid_end_date',
         ],
         sep='\t',
@@ -274,6 +262,7 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
         for _, row in iter_progress(chunk.iterrows(),
                                     description='Processing OHDSI concept rows',
                                     total=len(chunk),
+                                    transient=True,
                                     ):
             concept = CONCEPT_CLASS(
                 prefix=VOCABULARY_PREFIX,
@@ -312,6 +301,7 @@ def _process_synonyms(concepts: dict[int, CONCEPT_CLASS]):
         for _, row in iter_progress(chunk.iterrows(),
                                     description='Processing OHDSI concept synonym rows',
                                     total=len(chunk),
+                                    transient=True,
                                     ):
             concept_id = row['concept_id']
             synonym = row['concept_synonym_name']
@@ -319,7 +309,7 @@ def _process_synonyms(concepts: dict[int, CONCEPT_CLASS]):
                 concept = concepts[concept_id]
                 if concept.synonyms is None:
                     concept.synonyms = []
-                concept.synonyms.append(synonym)
+                concept.synonyms.append(str(synonym))
 
 
 def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
@@ -337,12 +327,12 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
         dtype={
             'drug_concept_id': int,
             'ingredient_concept_id': int,
-            'amount_value': float,
-            'amount_unit_concept_id': int,
-            'numerator_value': float,
-            'numerator_unit_concept_id': int,
-            'denominator_value': float,
-            'denominator_unit_concept_id': int,
+            'amount_value': 'Float64',
+            'amount_unit_concept_id': 'Int64',
+            'numerator_value': 'Float64',
+            'numerator_unit_concept_id': 'Int64',
+            'denominator_value': 'Float64',
+            'denominator_unit_concept_id': 'Int64',
         },
         usecols=[
             'drug_concept_id',
@@ -362,6 +352,7 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
         for _, row in iter_progress(chunk.iterrows(),
                                     description='Processing OHDSI drug strength rows',
                                     total=len(chunk),
+                                    transient=True,
                                     ):
             drug_strength = OhdsiDrugStrength(
                 ingredientId=str(row['ingredient_concept_id']),
@@ -372,13 +363,13 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
 
             if not pd.isna(row['amount_unit_concept_id']):
                 amount_unit = concepts[row['amount_unit_concept_id']].label
-                drug_strength.amountUnit = amount_unit
+                drug_strength.amount_unit = amount_unit
             if not pd.isna(row['numerator_unit_concept_id']):
                 numerator_unit = concepts[row['numerator_unit_concept_id']].label
-                drug_strength.numeratorUnit = numerator_unit
+                drug_strength.numerator_unit = numerator_unit
             if not pd.isna(row['denominator_unit_concept_id']):
                 denominator_unit = concepts[row['denominator_unit_concept_id']].label
-                drug_strength.denominatorUnit = denominator_unit
+                drug_strength.denominator_unit = denominator_unit
 
             drug_concept = concepts.get(row['drug_concept_id'])
             if drug_concept:
@@ -420,6 +411,7 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
         for _, row in iter_progress(chunk.iterrows(),
                                     description='Processing OHDSI concept relationship rows',
                                     total=len(chunk),
+                                    transient=True,
                                     ):
             if row['valid_end_date'] < date_int:
                 continue
@@ -450,6 +442,7 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
         for _, row in iter_progress(chunk.iterrows(),
                                     description='Processing OHDSI concept ancestor rows',
                                     total=len(chunk),
+                                    transient=True,
                                     ):
             if row['min_levels_of_separation'] != 0:
                 continue
@@ -462,39 +455,120 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
             )
 
 
+def _process_annotations() -> list[Annotation]:
+    """
+    Extract mapping to underlying vocabularies in OHDSI.
+    :return: A list of Annotation instances.
+    """
+    concept_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
+
+    chunks = pd.read_csv(
+        str(concept_file_path),
+        dtype={
+            'concept_id': int,
+            'concept_name': str,
+            'vocabulary_id': str,
+            'concept_code': str,
+        },
+        usecols=[
+            'concept_id',
+            'concept_name',
+            'vocabulary_id',
+            'concept_code',
+        ],
+        sep='\t',
+        chunksize=100000,
+    )
+
+    annotations = []
+
+    for chunk in iter_progress(chunks, desc='Processing OHDSI annotations'):
+        for _, row in iter_progress(chunk.iterrows(),
+                                    description='Processing OHDSI annotation rows',
+                                    total=len(chunk),
+                                    transient=True,
+                                    ):
+            vocabulary_prefix = map_vocabulary_prefix(row['vocabulary_id'])
+            if vocabulary_prefix == 'Vocabulary':
+                # Special case: these codes are representing vocabularies themselves, and does
+                # not even have a unique concept code.
+                continue
+
+            annotation = Annotation(
+                prefixFrom=VOCABULARY_PREFIX,
+                prefixTo=vocabulary_prefix,
+                conceptIdFrom=row['concept_id'],
+                conceptIdTo=row['concept_code'],
+                annotationType=AnnotationType.EXACT,
+            )
+            annotations.append(annotation)
+
+    return annotations
+
+
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
+                                    offline: bool = False,
                                     ):
     """
     Load the OHDSI vocabulary from files into the primary databases.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
+    :param offline: Whether to operate in offline mode and write to data files only.
     """
     if not check_files_exist(FILE_PATHS[:7]):
         raise FilesNotFound('OHDSI release files not found')
 
     concepts_dict = _process_concepts()
+    verbose_print(f'Concept file processing completed, loaded {len(concepts_dict)} OHDSI concepts.')
     _process_synonyms(concepts_dict)
+    verbose_print('Synonym file processing completed.')
+    _process_drug_strength(concepts_dict)
+    verbose_print('Drug strength file processing completed.')
 
     ohdsi_graph = nx.MultiDiGraph()
     concepts = list(concepts_dict.values())
     del concepts_dict
-
-    if doc_db is None:
-        doc_db = await get_active_doc_db()
-    if graph_db is None:
-        graph_db = get_active_graph_db()
-
-    await doc_db.save_terms(
-        terms=concepts
-    )
-
     for concept in concepts:
         ohdsi_graph.add_node(concept.concept_id)
-
     _process_relationships(ohdsi_graph)
 
-    await graph_db.save_vocabulary_graph(
-        concepts=concepts,
-        graph=ohdsi_graph,
-    )
+    verbose_print('Relationship file processing completed.')
+
+    if not offline:
+        if doc_db is None:
+            doc_db = await get_active_doc_db()
+        if graph_db is None:
+            graph_db = get_active_graph_db()
+
+        await doc_db.save_terms(
+            terms=concepts,
+        )
+        await graph_db.save_vocabulary_graph(
+            concepts=concepts,
+            graph=ohdsi_graph,
+            consume_concepts=True,
+        )
+
+        del ohdsi_graph
+
+        annotations = _process_annotations()
+        verbose_print(f'Saving {len(annotations)} OHDSI annotations to the database...')
+        await graph_db.save_annotations(annotations)
+    else:
+        await write_concepts_to_file(
+            prefix=VOCABULARY_PREFIX,
+            concepts=concepts,
+        )
+        del concepts
+        await write_graph_to_file(
+            prefix=VOCABULARY_PREFIX,
+            vocabulary_graph=ohdsi_graph,
+        )
+        del ohdsi_graph
+
+        annotations = _process_annotations()
+        await write_annotations_to_file(
+            prefix_from=VOCABULARY_PREFIX,
+            annotations=annotations,
+        )

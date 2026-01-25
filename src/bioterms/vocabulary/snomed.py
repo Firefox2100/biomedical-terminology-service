@@ -10,6 +10,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, get_tru
     download_rf2, rf2_dataframe_deduplicate, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import SnomedConcept
+from .utils import write_concepts_to_file, write_graph_to_file
 
 
 VOCABULARY_NAME = 'SNOMED Clinical Terms'
@@ -240,6 +241,8 @@ async def _load_snomed_release(concept_file: str,
                                relationship_file: str,
                                doc_db: DocumentDatabase = None,
                                graph_db: GraphDatabase = None,
+                               offline: bool = False,
+                               overwrite: bool = False,
                                ) -> None:
     """
     Load a SNOMED release from RF2 files.
@@ -249,6 +252,8 @@ async def _load_snomed_release(concept_file: str,
     :param relationship_file: The path to the relationship file.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
+    :param offline: Whether to operate in offline mode and write to data files only.
+    :param overwrite: Whether to overwrite existing data files in offline mode.
     """
     concept_full_path = os.path.join(CONFIG.data_dir, concept_file)
     description_full_path = os.path.join(CONFIG.data_dir, description_file)
@@ -272,28 +277,43 @@ async def _load_snomed_release(concept_file: str,
 
     verbose_print('Concept processing complete, saving to databases...')
 
-    if doc_db is None:
-        doc_db = await get_active_doc_db()
-    if graph_db is None:
-        graph_db = get_active_graph_db()
+    if not offline:
+        if doc_db is None:
+            doc_db = await get_active_doc_db()
+        if graph_db is None:
+            graph_db = get_active_graph_db()
 
-    await doc_db.save_terms(
-        terms=concepts
-    )
+        await doc_db.save_terms(
+            terms=concepts
+        )
 
-    await graph_db.save_vocabulary_graph(
-        concepts=concepts,
-        graph=snomed_graph,
-    )
+        await graph_db.save_vocabulary_graph(
+            concepts=concepts,
+            graph=snomed_graph,
+        )
+    else:
+        await write_concepts_to_file(
+            prefix=VOCABULARY_PREFIX,
+            concepts=concepts,
+            overwrite=overwrite,
+        )
+        del concepts
+        await write_graph_to_file(
+            prefix=VOCABULARY_PREFIX,
+            vocabulary_graph=snomed_graph,
+            overwrite=overwrite,
+        )
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
+                                    offline: bool = False,
                                     ):
     """
     Load the SNOMED vocabulary from files into the primary databases.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
+    :param offline: Whether to operate in offline mode and write to data files only.
     """
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('SNOMED release files not found')
@@ -306,6 +326,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         relationship_file=FILE_PATHS[3],
         doc_db=doc_db,
         graph_db=graph_db,
+        offline=offline,
+        overwrite=True,
     )
 
     # Load UK Clinical release
@@ -316,6 +338,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         relationship_file=FILE_PATHS[7],
         doc_db=doc_db,
         graph_db=graph_db,
+        offline=offline,
     )
 
     # Load UK Drug release
@@ -326,4 +349,5 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         relationship_file=FILE_PATHS[11],
         doc_db=doc_db,
         graph_db=graph_db,
+        offline=offline,
     )

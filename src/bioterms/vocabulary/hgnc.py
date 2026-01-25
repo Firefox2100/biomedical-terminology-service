@@ -11,7 +11,8 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept import HgncConcept
-from .utils import ensure_gene_symbol_loaded
+from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_graph_to_file, \
+    write_annotations_to_file
 
 
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee'
@@ -53,21 +54,24 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
+                                    offline: bool = False,
                                     ):
     """
     Load the HGNC vocabulary from a file into the primary databases.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
+    :param offline: Whether to operate in offline mode and write to data files only.
     """
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HGNC release files not found')
 
     verbose_print('Ensuring gene symbol vocabulary is loaded...')
 
-    await ensure_gene_symbol_loaded(
-        doc_db=doc_db,
-        graph_db=graph_db,
-    )
+    if not offline:
+        await ensure_gene_symbol_loaded(
+            doc_db=doc_db,
+            graph_db=graph_db,
+        )
 
     symbol_df = pd.read_csv(
         str(os.path.join(CONFIG.data_dir, FILE_PATHS[0])),
@@ -172,17 +176,33 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     verbose_print('Saving HGNC concepts to databases...')
 
-    if doc_db is None:
-        doc_db = await get_active_doc_db()
-    if graph_db is None:
-        graph_db = get_active_graph_db()
+    if not offline:
+        if doc_db is None:
+            doc_db = await get_active_doc_db()
+        if graph_db is None:
+            graph_db = get_active_graph_db()
 
-    await doc_db.save_terms(
-        terms=concepts
-    )
+        await doc_db.save_terms(
+            terms=concepts
+        )
 
-    await graph_db.save_vocabulary_graph(
-        concepts=concepts,
-        graph=hgnc_graph,
-    )
-    await graph_db.save_annotations(annotations)
+        await graph_db.save_vocabulary_graph(
+            concepts=concepts,
+            graph=hgnc_graph,
+        )
+        await graph_db.save_annotations(annotations)
+    else:
+        await write_concepts_to_file(
+            prefix=VOCABULARY_PREFIX,
+            concepts=concepts,
+        )
+        del concepts
+        await write_graph_to_file(
+            prefix=VOCABULARY_PREFIX,
+            vocabulary_graph=hgnc_graph,
+        )
+        await write_annotations_to_file(
+            prefix_from=VOCABULARY_PREFIX,
+            prefix_to=ConceptPrefix.HGNC_SYMBOL,
+            annotations=annotations,
+        )

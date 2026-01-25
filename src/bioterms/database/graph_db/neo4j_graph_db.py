@@ -6,7 +6,7 @@ from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
-from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress
+from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress, edge_iter
 from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
     GRAPHDB_OP_RETRYS, EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
 from bioterms.model.concept import Concept
@@ -420,32 +420,22 @@ class Neo4jGraphDatabase(GraphDatabase):
     async def save_vocabulary_graph(self,
                                     concepts: list[Concept],
                                     graph: nx.DiGraph | nx.MultiDiGraph,
+                                    consume_concepts: bool = False,
                                     ):
         """
         Save the vocabulary graph to the graph database.
         :param concepts: The list of concepts to save. This list is passed in to
             allow for any necessary term metadata to be accessed during graph saving.
         :param graph: The vocabulary graph to save.
+        :param consume_concepts: Whether to consume the list of concepts while processing
+            for memory efficiency.
         """
-        if isinstance(graph, nx.DiGraph):
-            edges = [
-                (str(source), str(target), data['label'].value if data.get('label') else None, None)
-                for source, target, data in graph.edges(data=True)
-            ]
-        elif isinstance(graph, nx.MultiDiGraph):
-            edges = [
-                (str(source), str(target), data['label'].value if data.get('label') else None, key)
-                for source, target, key, data in graph.edges(keys=True, data=True)
-            ]
-        else:
-            raise TypeError('Graph must be a DiGraph or MultiDiGraph instance.')
-
         concept_prefix = concepts[0].prefix if concepts else ''
 
         async with self._client.session() as session:
             # Insert the concepts first before adding edges
             verbose_print(f'Inserting {len(concepts)} concepts into Neo4j...')
-            for concept_batch in batch_iterable(concepts):
+            for concept_batch in batch_iterable(concepts, consume=consume_concepts):
                 await _execute_query_with_retry(
                     query="""
                     UNWIND $concepts AS concept
@@ -463,8 +453,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 )
 
             # Insert the edges
-            verbose_print(f'Inserting {len(edges)} edges into Neo4j...')
-            for edge_batch in batch_iterable(edges):
+            verbose_print(f'Inserting edges into Neo4j...')
+            for edge_batch in batch_iterable(edge_iter()):
                 await _execute_query_with_retry(
                     query="""
                     UNWIND $edges AS edge

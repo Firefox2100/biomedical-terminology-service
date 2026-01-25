@@ -1,15 +1,23 @@
 import os
 import importlib
+import json
+import io
+import csv
+import asyncio
 from datetime import datetime
+from typing import Optional
 import aiofiles
+import networkx as nx
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import VocabularyNotLoaded
-from bioterms.etc.utils import check_files_exist
+from bioterms.etc.utils import check_files_exist, edge_iter
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.vocabulary_status import VocabularyStatus
+from bioterms.model.concept import Concept
+from bioterms.model.annotation import Annotation
 
 
 ALL_VOCABULARIES = {
@@ -128,3 +136,150 @@ async def ensure_gene_symbol_loaded(doc_db: DocumentDatabase = None,
 
     if not status.loaded:
         raise VocabularyNotLoaded('HGNC gene symbol vocabulary is not loaded.')
+
+
+async def write_concepts_to_file(prefix: ConceptPrefix,
+                                 concepts: list[Concept],
+                                 overwrite: bool = True,
+                                 ):
+    """
+    Write the given concepts to an offline file for the specified vocabulary prefix.
+    :param prefix: The vocabulary prefix.
+    :param concepts: The list of concepts to write.
+    :param overwrite: Whether to overwrite the existing file.
+    """
+    offline_dir = os.path.join(CONFIG.data_dir, 'offline')
+    if not os.path.exists(offline_dir):
+        os.makedirs(offline_dir, exist_ok=True)
+
+    offline_file_path = os.path.join(offline_dir, f'{prefix.value}.doc.dump')
+    async with aiofiles.open(offline_file_path, 'w' if overwrite else 'a') as f:
+        for concept in concepts:
+            await f.write(json.dumps(concept.model_dump()) + '\n')
+
+
+def _encode_csv_batch(rows: list[tuple],
+                      csv_kwargs: dict,
+                      ) -> str:
+    """
+    Encode a batch of edge rows to CSV format using the given CSV writer arguments.
+    :param rows: The list of edge rows to encode.
+    :param csv_kwargs: The CSV writer arguments.
+    :return: The CSV-encoded string.
+    """
+    buf = io.StringIO()
+    w = csv.writer(buf, **csv_kwargs)
+    w.writerows(rows)
+    return buf.getvalue()
+
+
+async def _edge_writer_task(path: str,
+                            q: asyncio.Queue[Optional[str]],
+                            *,
+                            encoding: str = 'utf-8',
+                            newline: str = '',
+                            ) -> None:
+    async with aiofiles.open(path, 'a', encoding=encoding, newline=newline) as f:
+        while True:
+            chunk = await q.get()
+            try:
+                if chunk is None:
+                    return
+                await f.write(chunk)
+            finally:
+                q.task_done()
+
+
+async def write_graph_to_file(prefix: ConceptPrefix,
+                              vocabulary_graph: nx.DiGraph | nx.MultiDiGraph,
+                              overwrite: bool = True,
+                              ):
+    """
+    Write the given vocabulary graph to an offline file for the specified vocabulary prefix.
+    :param prefix: The vocabulary prefix.
+    :param vocabulary_graph: The vocabulary graph to write.
+    :param overwrite: Whether to overwrite the existing file.
+    """
+    offline_dir = os.path.join(CONFIG.data_dir, 'offline')
+    if not os.path.exists(offline_dir):
+        os.makedirs(offline_dir, exist_ok=True)
+
+    offline_file_path = os.path.join(offline_dir, f'{prefix.value}.graph.dump')
+    if overwrite:
+        async with aiofiles.open(offline_file_path, 'w') as f:
+            await f.write('')
+
+    q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=8)
+    wt = asyncio.create_task(_edge_writer_task(offline_file_path, q))
+    csv_kwargs = {
+        'quoting': csv.QUOTE_MINIMAL,
+        'lineterminator': '\n',
+    }
+
+    batch = []
+    for r in edge_iter(vocabulary_graph):
+        batch.append(r)
+        if len(batch) >= 50000:
+            chunk = _encode_csv_batch(batch, csv_kwargs)
+            batch.clear()
+            await q.put(chunk)
+
+    if batch:
+        chunk = _encode_csv_batch(batch, csv_kwargs)
+        await q.put(chunk)
+
+    await q.join()
+    await q.put(None)
+    await wt
+
+
+async def write_annotations_to_file(prefix_from: ConceptPrefix,
+                                    annotations: list[Annotation],
+                                    prefix_to: ConceptPrefix | None = None,
+                                    overwrite: bool = True,
+                                    ):
+    """
+    Write the given annotations to an offline file for the specified vocabulary prefix.
+    :param prefix_from: The vocabulary prefix of the source concepts.
+    :param prefix_to: The vocabulary prefix of the target concepts.
+    :param annotations: The list of annotations to write.
+    :param overwrite: Whether to overwrite the existing file.
+    """
+    offline_dir = os.path.join(CONFIG.data_dir, 'offline')
+    if not os.path.exists(offline_dir):
+        os.makedirs(offline_dir, exist_ok=True)
+
+    offline_file_path = os.path.join(
+        offline_dir,
+        f'{prefix_from.value}{("-" + prefix_to.value if prefix_to is not None else "")}.annotation.dump'
+    )
+    if overwrite:
+        async with aiofiles.open(offline_file_path, 'w') as f:
+            await f.write('')
+
+    q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=8)
+    wt = asyncio.create_task(_edge_writer_task(offline_file_path, q))
+    csv_kwargs = {
+        'quoting': csv.QUOTE_MINIMAL,
+        'lineterminator': '\n',
+    }
+
+    for i in range(0, len(annotations), 10000):
+        batch = annotations[i:i + 10000]
+        rows = [
+            (
+                ann.prefix_from.value if isinstance(ann.prefix_from, ConceptPrefix) else ann.prefix_from,
+                ann.concept_id_from,
+                ann.prefix_to.value if isinstance(ann.prefix_to, ConceptPrefix) else ann.prefix_to,
+                ann.concept_id_to,
+                ann.annotation_type.value,
+                json.dumps(ann.properties) if ann.properties else '{}',
+            )
+            for ann in batch
+        ]
+        chunk = _encode_csv_batch(rows, csv_kwargs)
+        await q.put(chunk)
+
+    await q.join()
+    await q.put(None)
+    await wt

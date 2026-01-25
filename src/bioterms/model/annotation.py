@@ -15,7 +15,7 @@ class Annotation(JsonModel):
         serialize_by_alias=True,
     )
 
-    prefix_from: ConceptPrefix = Field(
+    prefix_from: ConceptPrefix | str = Field(
         ...,
         description='The prefix of the source concept in the annotation.',
         alias='prefixFrom',
@@ -25,7 +25,7 @@ class Annotation(JsonModel):
         description='The identifier of the source concept in the annotation.',
         alias='conceptIdFrom',
     )
-    prefix_to: ConceptPrefix = Field(
+    prefix_to: ConceptPrefix | str = Field(
         ...,
         description='The prefix of the target concept in the annotation.',
         alias='prefixTo',

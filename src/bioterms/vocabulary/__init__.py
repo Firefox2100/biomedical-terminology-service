@@ -175,6 +175,7 @@ async def delete_vocabulary(prefix: ConceptPrefix,
 
 async def load_vocabulary(prefix: ConceptPrefix,
                           drop_existing: bool = True,
+                          offline: bool = False,
                           cache: Cache = None,
                           doc_db: DocumentDatabase = None,
                           graph_db: GraphDatabase = None,
@@ -183,6 +184,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
     Load the vocabulary specified by the prefix.
     :param prefix: The prefix of the vocabulary to load.
     :param drop_existing: Whether to drop existing data before loading.
+    :param offline: Whether to operate in offline mode (write to data files instead of database).
     :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
@@ -192,20 +194,21 @@ async def load_vocabulary(prefix: ConceptPrefix,
     if not check_files_exist(vocabulary_module.FILE_PATHS):
         raise ValueError(f'Vocabulary files for {prefix} not found. Are they downloaded?')
 
-    if drop_existing:
-        # Drop existing data before loading
-        await delete_vocabulary(
+    if not offline:
+        if drop_existing:
+            # Drop existing data before loading
+            await delete_vocabulary(
+                prefix=prefix,
+                doc_db=doc_db,
+                graph_db=graph_db,
+            )
+
+        # Create indexes before loading data
+        await create_indexes(
             prefix=prefix,
             doc_db=doc_db,
             graph_db=graph_db,
         )
-
-    # Create indexes before loading data
-    await create_indexes(
-        prefix=prefix,
-        doc_db=doc_db,
-        graph_db=graph_db,
-    )
 
     load_func = getattr(vocabulary_module, 'load_vocabulary_from_file', None)
     if load_func is None or not callable(load_func):
@@ -214,13 +217,16 @@ async def load_vocabulary(prefix: ConceptPrefix,
     result = load_func(
         doc_db=doc_db,
         graph_db=graph_db,
+        offline=offline,
     )
     if inspect.iscoroutine(result):
         await result
 
-    if cache is None:
-        cache = get_active_cache()
-    await cache.purge()
+    if not offline:
+        # Purge cache after loading
+        if cache is None:
+            cache = get_active_cache()
+        await cache.purge()
 
 
 async def embed_vocabulary(prefix: ConceptPrefix,

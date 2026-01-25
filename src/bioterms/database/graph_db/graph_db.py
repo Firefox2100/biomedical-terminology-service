@@ -142,12 +142,15 @@ class GraphDatabase(ABC):
     async def save_vocabulary_graph(self,
                                     concepts: list[Concept],
                                     graph: nx.DiGraph | nx.MultiDiGraph,
+                                    consume_concepts: bool = False,
                                     ):
         """
         Save the vocabulary graph to the graph database.
         :param concepts: The list of concepts to save. This list is passed in to
             allow for any necessary term metadata to be accessed during graph saving.
         :param graph: The vocabulary graph to save.
+        :param consume_concepts: Whether to consume the list of concepts while processing
+            for memory efficiency.
         """
 
     @abstractmethod

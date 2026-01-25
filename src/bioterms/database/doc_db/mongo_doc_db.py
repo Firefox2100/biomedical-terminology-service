@@ -4,6 +4,8 @@ MongoDB implementation of the DocumentDatabase interface.
 import asyncio
 import re
 import time
+import os
+import json
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
 from typing import AsyncIterator
@@ -264,6 +266,11 @@ class MongoDocumentDatabase(DocumentDatabase):
     async def save_terms(self,
                          terms: list[Concept],
                          ):
+        """
+        Save a list of terms into the document database.
+        :param terms: A list of Concept instances to save.
+            slow, or you are building on a system to port the data somewhere else later.
+        """
         existing_concept_ids: set[str] = set()
         collection = self.db[f'{terms[0].prefix.value}']
 
