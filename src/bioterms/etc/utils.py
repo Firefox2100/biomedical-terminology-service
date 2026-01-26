@@ -134,7 +134,7 @@ def edge_iter(graph: nx.DiGraph | nx.MultiDiGraph) -> Iterator[tuple[str, str, O
         for source, target, data in graph.edges(data=True):
             yield str(source), str(target), data['label'].value if data.get('label') else None, None
     elif isinstance(graph, nx.MultiDiGraph):
-        for source, target, key, data in graph.edges(data=True):
+        for source, target, key, data in graph.edges(data=True, keys=True):
             yield str(source), str(target), data['label'].value if data.get('label') else None, key
     else:
         raise TypeError('Graph must be a DiGraph or MultiDiGraph instance.')
