@@ -497,8 +497,8 @@ def _process_annotations() -> list[Annotation]:
             annotation = Annotation(
                 prefixFrom=VOCABULARY_PREFIX,
                 prefixTo=vocabulary_prefix,
-                conceptIdFrom=row['concept_id'],
-                conceptIdTo=row['concept_code'],
+                conceptIdFrom=str(row['concept_id']),
+                conceptIdTo=str(row['concept_code']),
                 annotationType=AnnotationType.EXACT,
             )
             annotations.append(annotation)

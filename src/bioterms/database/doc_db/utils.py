@@ -1,4 +1,3 @@
-import asyncio
 from concurrent.futures import ProcessPoolExecutor
 
 from bioterms.etc.consts import CONFIG

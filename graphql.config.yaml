@@ -1,0 +1,5 @@
+schema: ./src/bioterms/data/graphql/*.graphql
+extensions:
+  endpoints:
+    development:
+      url: http://localhost:5000/api/graphql

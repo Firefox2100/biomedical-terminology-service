@@ -4,8 +4,6 @@ MongoDB implementation of the DocumentDatabase interface.
 import asyncio
 import re
 import time
-import os
-import json
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
 from typing import AsyncIterator
@@ -19,7 +17,8 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.etc.utils import batch_iterable, iter_progress
-from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, AUTOCOMPLETE_ITEMS
+from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, \
+    AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
@@ -183,9 +182,9 @@ class MongoDocumentDatabase(DocumentDatabase):
     async def initialize(self):
         """
         Initialise the database driver/connection.
+
+        MongoDB does not need explicit initialisation on the schemas
         """
-        # MongoDB does not need explicit initialisation on the schemas
-        pass
 
     async def close(self) -> None:
         """
