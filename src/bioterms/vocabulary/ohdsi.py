@@ -488,6 +488,10 @@ def _process_annotations() -> list[Annotation]:
                                     total=len(chunk),
                                     transient=True,
                                     ):
+            # Ignore the NaN vocabulary IDs and concept codes
+            if pd.isna(row['vocabulary_id']) or pd.isna(row['concept_code']):
+                continue
+
             vocabulary_prefix = map_vocabulary_prefix(row['vocabulary_id'])
             if vocabulary_prefix == 'Vocabulary':
                 # Special case: these codes are representing vocabularies themselves, and does
