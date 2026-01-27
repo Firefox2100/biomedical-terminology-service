@@ -296,11 +296,12 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             prefix=VOCABULARY_PREFIX,
             concepts=concepts,
         )
-        del concepts
         await write_graph_to_file(
             prefix=VOCABULARY_PREFIX,
+            concepts=concepts,
             vocabulary_graph=reactome_graph,
         )
+        del concepts
         await write_annotations_to_file(
             prefix_from=VOCABULARY_PREFIX,
             prefix_to=ConceptPrefix.HGNC_SYMBOL,

@@ -173,12 +173,12 @@ def _encode_csv_batch(rows: list[tuple],
     return buf.getvalue()
 
 
-async def _edge_writer_task(path: str,
-                            q: asyncio.Queue[Optional[str]],
-                            *,
-                            encoding: str = 'utf-8',
-                            newline: str = '',
-                            ) -> None:
+async def _aiofile_writer_task(path: str,
+                               q: asyncio.Queue[Optional[str]],
+                               *,
+                               encoding: str = 'utf-8',
+                               newline: str = '',
+                               ) -> None:
     async with aiofiles.open(path, 'a', encoding=encoding, newline=newline) as f:
         while True:
             chunk = await q.get()
@@ -191,12 +191,14 @@ async def _edge_writer_task(path: str,
 
 
 async def write_graph_to_file(prefix: ConceptPrefix,
+                              concepts: list[Concept],
                               vocabulary_graph: nx.DiGraph | nx.MultiDiGraph,
                               overwrite: bool = True,
                               ):
     """
     Write the given vocabulary graph to an offline file for the specified vocabulary prefix.
     :param prefix: The vocabulary prefix.
+    :param concepts: The list of concepts in the vocabulary.
     :param vocabulary_graph: The vocabulary graph to write.
     :param overwrite: Whether to overwrite the existing file.
     """
@@ -205,12 +207,15 @@ async def write_graph_to_file(prefix: ConceptPrefix,
         os.makedirs(offline_dir, exist_ok=True)
 
     offline_file_path = os.path.join(offline_dir, f'{prefix.value}.graph.dump')
+    offline_node_id_path = os.path.join(offline_dir, f'{prefix.value}.node_ids.dump')
     if overwrite:
         async with aiofiles.open(offline_file_path, 'w') as f:
             await f.write('')
+        async with aiofiles.open(offline_node_id_path, 'w') as f:
+            await f.write('')
 
     q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=8)
-    wt = asyncio.create_task(_edge_writer_task(offline_file_path, q))
+    wt = asyncio.create_task(_aiofile_writer_task(offline_file_path, q))
     csv_kwargs = {
         'quoting': csv.QUOTE_MINIMAL,
         'lineterminator': '\n',
@@ -226,6 +231,22 @@ async def write_graph_to_file(prefix: ConceptPrefix,
 
     if batch:
         chunk = _encode_csv_batch(batch, csv_kwargs)
+        await q.put(chunk)
+
+    await q.join()
+    await q.put(None)
+    await wt
+
+    q = asyncio.Queue(maxsize=8)
+    wt = asyncio.create_task(_aiofile_writer_task(offline_node_id_path, q))
+
+    for i in range(0, len(concepts), 10000):
+        batch = [c.model_dump() for c in concepts[i:i + 10000]]
+        rows = [
+            (concept['conceptId'], concept['conceptTypes'])
+            for concept in batch
+        ]
+        chunk = _encode_csv_batch(rows, csv_kwargs)
         await q.put(chunk)
 
     await q.join()
@@ -258,7 +279,7 @@ async def write_annotations_to_file(prefix_from: ConceptPrefix,
             await f.write('')
 
     q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=8)
-    wt = asyncio.create_task(_edge_writer_task(offline_file_path, q))
+    wt = asyncio.create_task(_aiofile_writer_task(offline_file_path, q))
     csv_kwargs = {
         'quoting': csv.QUOTE_MINIMAL,
         'lineterminator': '\n',

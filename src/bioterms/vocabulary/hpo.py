@@ -172,8 +172,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             prefix=VOCABULARY_PREFIX,
             concepts=concepts,
         )
-        del concepts
         await write_graph_to_file(
             prefix=VOCABULARY_PREFIX,
+            concepts=concepts,
             vocabulary_graph=hpo_graph,
         )

@@ -454,7 +454,7 @@ class Neo4jGraphDatabase(GraphDatabase):
 
             # Insert the edges
             verbose_print(f'Inserting edges into Neo4j...')
-            for edge_batch in batch_iterable(edge_iter()):
+            for edge_batch in batch_iterable(edge_iter(graph)):
                 await _execute_query_with_retry(
                     query="""
                     UNWIND $edges AS edge

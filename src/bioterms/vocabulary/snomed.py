@@ -297,9 +297,9 @@ async def _load_snomed_release(concept_file: str,
             concepts=concepts,
             overwrite=overwrite,
         )
-        del concepts
         await write_graph_to_file(
             prefix=VOCABULARY_PREFIX,
+            concepts=concepts,
             vocabulary_graph=snomed_graph,
             overwrite=overwrite,
         )
