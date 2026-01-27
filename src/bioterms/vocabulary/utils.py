@@ -5,6 +5,7 @@ import io
 import csv
 import asyncio
 from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 import aiofiles
 import networkx as nx
@@ -12,9 +13,10 @@ import networkx as nx
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.errors import VocabularyNotLoaded
-from bioterms.etc.utils import check_files_exist, edge_iter
+from bioterms.etc.utils import check_files_exist, edge_iter, batch_iterable
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
+from bioterms.database.doc_db.utils import generate_extra_data
 from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
@@ -153,9 +155,26 @@ async def write_concepts_to_file(prefix: ConceptPrefix,
         os.makedirs(offline_dir, exist_ok=True)
 
     offline_file_path = os.path.join(offline_dir, f'{prefix.value}.doc.dump')
-    async with aiofiles.open(offline_file_path, 'w' if overwrite else 'a') as f:
-        for concept in concepts:
-            await f.write(json.dumps(concept.model_dump()) + '\n')
+    with ProcessPoolExecutor(
+        max_workers=CONFIG.process_limit,
+    ) as executor:
+        async with aiofiles.open(offline_file_path, 'w' if overwrite else 'a') as f:
+            for batch in batch_iterable(concepts):
+                extra_data = await generate_extra_data(
+                    concepts=batch,
+                    executor=executor,
+                )
+                extra_data = {
+                    concept_id: (ngrams, search_text)
+                    for concept_id, ngrams, search_text in extra_data
+                }
+                for concept in batch:
+                    payload = concept.model_dump(exclude_none=True)
+                    if concept.concept_id in extra_data:
+                        ngrams, search_text = extra_data[concept.concept_id]
+                        payload['nGrams'] = ngrams
+                        payload['searchText'] = search_text
+                    await f.write(json.dumps(payload) + '\n')
 
 
 def _encode_csv_batch(rows: list[tuple],
