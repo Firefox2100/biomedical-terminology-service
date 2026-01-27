@@ -2,17 +2,11 @@
 Abstract base class for vector databases.
 """
 
-import time
-import threading
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from sentence_transformers import SentenceTransformer
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix
-from bioterms.etc.utils import get_transformer, aiter_progress
-from bioterms.etc.metrics import EMBED_LOCK_WAIT, EMBED_DURATION, EMBED_TEXTS, EMBED_CHARS, \
-    EMBED_ERRORS
 from bioterms.model.concept import Concept
 
 
@@ -20,106 +14,6 @@ class VectorDatabase(ABC):
     """
     Abstract base class for vector databases.
     """
-    _embed_lock = threading.Lock()
-
-    @classmethod
-    def _embed_strings(cls,
-                       texts: list[str],
-                       transformer: SentenceTransformer = None,
-                       ) -> list[list[float]]:
-        """
-        Embed a list of strings using the provided SentenceTransformer.
-        :param texts: The list of strings to embed
-        :param transformer: The SentenceTransformer instance to use for embedding; if None,
-            the default transformer will be used
-        :return:
-        """
-        if transformer is None:
-            managed = False
-            transformer = get_transformer()
-        else:
-            managed = True
-
-        model = transformer.model_card_data.base_model if transformer.model_card_data else 'custom'
-        EMBED_TEXTS.labels(model=model).observe(len(texts))
-        EMBED_CHARS.labels(model=model).observe(sum(len(t) for t in texts))
-
-        def encode_with_metrics():
-            enc_start = time.perf_counter()
-            vs = transformer.encode(
-                sentences=texts,
-                normalize_embeddings=True,
-            )
-            enc_end = time.perf_counter()
-            EMBED_DURATION.labels(model=model, result='ok').observe(enc_end - enc_start)
-            return vs
-
-        wait_start = time.perf_counter()
-        try:
-            if not managed:
-                with cls._embed_lock:
-                    wait_end = time.perf_counter()
-                    EMBED_LOCK_WAIT.labels(model=model).observe(wait_end - wait_start)
-
-                    vectors = encode_with_metrics()
-            else:
-                # Assume the provided transformer is thread-safe or already managed
-                vectors = encode_with_metrics()
-        except Exception as e:
-            EMBED_DURATION.labels(model=model, result='error').observe(0.0)
-            EMBED_ERRORS.labels(model=model, error_type=type(e).__name__).inc()
-            raise
-
-        return [vector.tolist() for vector in vectors]
-
-    @classmethod
-    async def embed_concepts(cls,
-                             concepts: list[Concept] | AsyncIterator[Concept],
-                             batch_size: int = 32,
-                             transformer: SentenceTransformer = None,
-                             total_concepts: int = None,
-                             ) -> AsyncIterator[list[tuple[str, list[float]]]]:
-        """
-        Embed concept texts using the configured SentenceTransformer model.
-        :param concepts: A list or async iterator of Concept instances to embed
-        :param batch_size: Number of concepts to process in each batch
-        :param transformer: Optional SentenceTransformer instance to use for embedding
-        :param total_concepts: Optional total number of concepts, used for progress tracking
-        :return: An iterator of chunks of tuples containing concept IDs and their embedding vectors
-        """
-        def process_batch(b: list[Concept]) -> list[tuple[str, list[float]]]:
-            vectors = cls._embed_strings(
-                texts=[c.canonical_text() for c in b],
-                transformer=transformer,
-            )
-
-            return [(c.concept_id, vectors[idx]) for idx, c in enumerate(b)]
-
-        if isinstance(concepts, AsyncIterator):
-            batch = []
-
-            async for concept in aiter_progress(
-                concepts,
-                description='Embedding concepts',
-                total=total_concepts,
-            ):
-                batch.append(concept)
-
-                if len(batch) >= batch_size:
-                    yield process_batch(batch)
-                    batch = []
-
-            if batch:
-                yield process_batch(batch)
-        elif isinstance(concepts, list):
-            while concepts:
-                batch = concepts[:batch_size]
-                del concepts[:batch_size]
-
-                yield process_batch(batch)
-        else:
-            raise TypeError('concepts must be a list or an AsyncIterator of Concept instances')
-
     @abstractmethod
     async def close(self) -> None:
         """

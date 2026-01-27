@@ -7,6 +7,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
+from bioterms.embedding import ConceptTransformer
 from .vector_db import VectorDatabase
 
 
@@ -121,8 +122,10 @@ class QdrantVectorDatabase(VectorDatabase):
             )
         )
 
+        transformer = ConceptTransformer()
+
         points = []
-        async for embedded_batch in self.embed_concepts(concepts, total_concepts=total_concepts):
+        async for embedded_batch in transformer.embed_concepts(concepts, total_concepts=total_concepts):
             for concept_id, vector in embedded_batch:
                 point_id = str(uuid4())
                 points.append(PointStruct(

@@ -99,7 +99,7 @@ async def load_command(vocabulary: Annotated[
 
 @app.command(name='embed', help='Embed a vocabulary into vector database.')
 @run_async
-async def embed_command(vocabulary: Annotated[
+async def embed_command(v: Annotated[
                             Optional[ConceptPrefix],
                             typer.Argument(help='The vocabulary to embed.')
                         ] = None,
@@ -117,21 +117,31 @@ async def embed_command(vocabulary: Annotated[
                                 '--overwrite',
                                 '-o',
                                 help='Overwrite existing embeddings in the vector database.')
-                        ] = False
+                        ] = False,
+                        offline: Annotated[
+                            bool,
+                            typer.Option(
+                                '--offline',
+                                '-f',
+                                help='Embed vocabulary in offline mode without writing to vector database. '
+                                     'Requires offline file from the loading process first.')
+                        ] = False,
                         ):
     try:
         if embed_all:
             target_vocabularies = list(ConceptPrefix)
-        elif vocabulary:
-            target_vocabularies = [vocabulary]
+        elif v:
+            target_vocabularies = [v]
         else:
             CONSOLE.print('[red]Either specify a vocabulary to embed or use the --all flag.[/red]')
             return
-        for vocabulary in target_vocabularies:
-            await embed_vocabulary(vocabulary, drop_existing=overwrite)
-            CONSOLE.print(f'[green]Successfully embedded vocabulary {vocabulary.value} into the vector database.[/green]')
+        for v in target_vocabularies:
+            await embed_vocabulary(v, drop_existing=overwrite, offline=offline)
+            CONSOLE.print(
+                f'[green]Successfully embedded vocabulary {v.value} into the vector database.[/green]'
+            )
     except Exception as e:
-        CONSOLE.print(f'[red]Failed to embed vocabulary {vocabulary.value} into the vector database: {e}[/red]')
+        CONSOLE.print(f'[red]Failed to embed vocabulary {v.value} into the vector database: {e}[/red]')
         traceback.print_exc()
 
 
