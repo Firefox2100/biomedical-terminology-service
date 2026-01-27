@@ -10,7 +10,7 @@ import aiofiles
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.errors import VocabularyNotLoaded
 from bioterms.etc.utils import check_files_exist, edge_iter
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
@@ -304,3 +304,107 @@ async def write_annotations_to_file(prefix_from: ConceptPrefix,
     await q.join()
     await q.put(None)
     await wt
+
+
+async def load_graph_from_file(prefix: ConceptPrefix,
+                               ) -> nx.DiGraph | nx.MultiDiGraph:
+    """
+    Load the vocabulary graph from an offline file for the specified vocabulary prefix.
+    :param prefix: The vocabulary prefix.
+    :return: The vocabulary graph.
+    """
+    offline_file_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.graph.dump')
+    offline_node_id_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.node_ids.dump')
+    if not os.path.exists(offline_file_path):
+        raise FileNotFoundError(f'Offline graph file for {prefix.value} not found.')
+
+    # Peak into the file to see if the first row, column 4 has key
+    has_edge_properties = False
+    async with aiofiles.open(offline_file_path) as f:
+        first_line = await f.readline()
+        first_row = next(csv.reader([first_line]))
+        if len(first_row) >= 4:
+            try:
+                json.loads(first_row[3])
+                has_edge_properties = True
+            except json.JSONDecodeError:
+                has_edge_properties = False
+
+    if has_edge_properties:
+        graph = nx.MultiDiGraph()
+    else:
+        graph = nx.DiGraph()
+
+    async with aiofiles.open(offline_node_id_path) as f:
+        async for line in f:
+            row = next(csv.reader([line]))
+            concept_id = row[0]
+            graph.add_node(concept_id)
+
+    async with aiofiles.open(offline_file_path) as f:
+        async for line in f:
+            row = next(csv.reader([line]))
+            source_id, target_id, relationship_type, edge_key = row
+
+            if has_edge_properties:
+                graph.add_edge(
+                    source_id,
+                    target_id,
+                    key=edge_key,
+                    label=ConceptRelationshipType(relationship_type),
+                )
+            else:
+                graph.add_edge(
+                    source_id,
+                    target_id,
+                    label=ConceptRelationshipType(relationship_type),
+                )
+
+    return graph
+
+
+async def load_annotation_from_file(prefix_from: ConceptPrefix,
+                                    prefix_to: ConceptPrefix | None = None,
+                                    ) -> nx.DiGraph:
+    """
+    Load the annotation graph from an offline file for the specified vocabulary prefix.
+    :param prefix_from: The vocabulary prefix of the source concepts.
+    :param prefix_to: The vocabulary prefix of the target concepts.
+    :return: The annotation graph.
+    """
+    offline_file_path = os.path.join(
+        CONFIG.data_dir,
+        'offline',
+        f'{prefix_from.value}{("-" + prefix_to.value if prefix_to is not None else "")}.annotation.dump'
+    )
+    if not os.path.exists(offline_file_path):
+        if prefix_to is not None:
+            offline_file_path = os.path.join(
+                CONFIG.data_dir,
+                'offline',
+                f'{prefix_to.value}-{prefix_from.value}.annotation.dump'
+            )
+            if not os.path.exists(offline_file_path):
+                raise FileNotFoundError(
+                    f'Offline annotation file for {prefix_from.value}-{prefix_to.value} not found.'
+                )
+        else:
+            raise FileNotFoundError(
+                f'Offline annotation file for {prefix_from.value} '
+                f'{("-" + prefix_to.value if prefix_to is not None else "")} not found.'
+            )
+
+    graph = nx.DiGraph()
+
+    async with aiofiles.open(offline_file_path) as f:
+        async for line in f:
+            row = next(csv.reader([line]))
+            source_prefix, source_id, target_prefix, target_id, annotation_type, properties_str = row
+            graph.add_edge(
+                source_id,
+                target_id,
+                label=ConceptRelationshipType(annotation_type),
+                properties=json.loads(properties_str),
+            )
+
+    return graph

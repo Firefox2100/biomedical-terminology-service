@@ -47,6 +47,15 @@ async def calculate_command(target_prefix: Annotated[
                                          'If not provided, use the default threshold for the method.'
                                 )
                             ] = None,
+                            offline: Annotated[
+                                bool,
+                                typer.Option(
+                                    '--offline',
+                                    is_flag=True,
+                                    help='Run the calculation in offline mode. Requires the offline '
+                                         'files from loading functions.'
+                                )
+                            ] = False,
                             ):
     if target_prefix:
         targets = [target_prefix]
@@ -67,21 +76,22 @@ async def calculate_command(target_prefix: Annotated[
             else:
                 methods = target_config['similarityMethods']
 
-            for method in methods:
+            for m in methods:
                 try:
                     await calculate_similarity(
-                        method=method,
+                        method=m,
                         target_prefix=target,
                         corpus_prefix=corp,
                         similarity_threshold=threshold,
+                        offline=offline,
                     )
                     CONSOLE.print(
                         f'[green]Successfully calculated similarity between '
-                        f'{target.value} and {corp.value} using {method.value} method.[/green]'
+                        f'{target.value} and {corp.value} using {m.value} method.[/green]'
                     )
                 except Exception as e:
                     CONSOLE.print(
                         f'[red]Failed to calculate similarity between '
-                        f'{target.value} and {corp.value} using {method.value} method: {e}[/red]'
+                        f'{target.value} and {corp.value} using {m.value} method: {e}[/red]'
                     )
                     traceback.print_exc()

@@ -1,10 +1,17 @@
+import os
+import io
+import csv
 import importlib
+import aiofiles
+import networkx as nx
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.etc.utils import verbose_print
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
     get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
+from bioterms.vocabulary.utils import load_graph_from_file, load_annotation_from_file
 from bioterms.annotation import get_annotation_status
 from bioterms.model.similarity_status import SimilarityCount, SimilarityStatus
 
@@ -82,6 +89,7 @@ async def calculate_similarity(method: SimilarityMethod,
                                target_prefix: ConceptPrefix,
                                corpus_prefix: ConceptPrefix = None,
                                similarity_threshold: float | None = None,
+                               offline: bool = False,
                                doc_db: DocumentDatabase = None,
                                graph_db: GraphDatabase = None,
                                ):
@@ -92,6 +100,7 @@ async def calculate_similarity(method: SimilarityMethod,
     :param corpus_prefix: The corpus vocabulary prefix.
     :param similarity_threshold: The similarity threshold to apply.
         If None, use the default threshold for the method.
+    :param offline: Whether to run the calculation in offline mode.
     :param doc_db: The document database instance to use. If None, use the active document database.
     :param graph_db: The graph database instance to use. If None, use the active graph database.
     """
@@ -100,43 +109,70 @@ async def calculate_similarity(method: SimilarityMethod,
 
     if similarity_threshold is None:
         similarity_threshold = similarity_config['defaultThreshold']
-    if doc_db is None:
-        doc_db = await get_active_doc_db()
-    if graph_db is None:
-        graph_db = get_active_graph_db()
 
-    if not (await get_vocabulary_status(target_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
-        raise ValueError(f'Target vocabulary {target_prefix.value} is not loaded.')
+    if not offline:
+        if doc_db is None:
+            doc_db = await get_active_doc_db()
+        if graph_db is None:
+            graph_db = get_active_graph_db()
 
-    if similarity_config['corpusRequired'] and corpus_prefix is None:
-        raise ValueError(f'Similarity method {method} requires a corpus prefix.')
-
-    if corpus_prefix is not None and similarity_config['corpusRequired']:
-        if not (await get_vocabulary_status(corpus_prefix, doc_db=doc_db, graph_db=graph_db)).loaded:
-            raise ValueError(f'Corpus vocabulary {corpus_prefix.value} is not loaded.')
-
-        if not (await get_annotation_status(
-            prefix_1=target_prefix,
-            prefix_2=corpus_prefix,
-            graph_db=graph_db,
+        if not (await get_vocabulary_status(
+            target_prefix,
+            doc_db=doc_db,
+            graph_db=graph_db
         )).loaded:
-            raise ValueError(
-                f'Annotation between {target_prefix.value} and {corpus_prefix.value} is not loaded.'
-            )
+            raise ValueError(f'Target vocabulary {target_prefix.value} is not loaded.')
+
+        if similarity_config['corpusRequired'] and corpus_prefix is None:
+            raise ValueError(f'Similarity method {method} requires a corpus prefix.')
+
+        if corpus_prefix is not None and similarity_config['corpusRequired']:
+            if not (await get_vocabulary_status(
+                corpus_prefix,
+                doc_db=doc_db,
+                graph_db=graph_db
+            )).loaded:
+                raise ValueError(f'Corpus vocabulary {corpus_prefix.value} is not loaded.')
+
+            if not (await get_annotation_status(
+                prefix_1=target_prefix,
+                prefix_2=corpus_prefix,
+                graph_db=graph_db,
+            )).loaded:
+                raise ValueError(
+                    f'Annotation between {target_prefix.value} and {corpus_prefix.value} '
+                    f'is not loaded.'
+                )
 
     verbose_print(f'Loading vocabulary graph for {target_prefix.value}...')
 
-    target_graph = await graph_db.get_vocabulary_graph(target_prefix)
+    if offline:
+        target_graph = await load_graph_from_file(target_prefix)
+        if not isinstance(target_graph, nx.MultiDiGraph):
+            target_graph = nx.MultiDiGraph(target_graph)
+    else:
+        target_graph = await graph_db.get_vocabulary_graph(target_prefix)
     if corpus_prefix is not None and similarity_config['corpusRequired']:
         verbose_print(f'Loading annotation graph between {target_prefix.value} and {corpus_prefix.value}...')
-        annotation_graph = await graph_db.get_annotation_graph(
-            prefix_1=target_prefix,
-            prefix_2=corpus_prefix,
-        )
+        if offline:
+            annotation_graph = await load_annotation_from_file(
+                prefix_from=target_prefix,
+                prefix_to=corpus_prefix,
+            )
+        else:
+            annotation_graph = await graph_db.get_annotation_graph(
+                prefix_1=target_prefix,
+                prefix_2=corpus_prefix,
+            )
 
         if similarity_config['corpusGraphRequired']:
             verbose_print(f'Loading corpus vocabulary graph for {corpus_prefix.value}...')
-            corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
+            if offline:
+                corpus_graph = await load_graph_from_file(corpus_prefix)
+                if not isinstance(corpus_graph, nx.MultiDiGraph):
+                    corpus_graph = nx.MultiDiGraph(corpus_graph)
+            else:
+                corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
         else:
             corpus_graph = None
     else:
@@ -144,39 +180,68 @@ async def calculate_similarity(method: SimilarityMethod,
         annotation_graph = None
 
     results = []
-    result_count = 0
+    offline_file_path = os.path.join(
+        CONFIG.data_dir,
+        'offline',
+        f'{target_prefix.value}-{method}{("-" + corpus_prefix.value) if corpus_prefix else ""}.similarity.dump'
+    )
 
-    async for result in similarity_module.calculate_similarity(
-        target_graph=target_graph,
-        target_prefix=target_prefix,
-        corpus_graph=corpus_graph,
-        corpus_prefix=corpus_prefix,
-        annotation_graph=annotation_graph,
-    ):
-        if result[2] >= similarity_threshold:
-            results.append(result)
+    async def write_batch_to_file(f):
+        if not results:
+            return
 
-        result_count += 1
-
-        if result_count >= 10000:
-            await graph_db.save_similarity_scores(
-                prefix_from=target_prefix,
-                prefix_to=target_prefix,
-                similarity_scores=results,
-                similarity_method=method,
-                corpus_prefix=corpus_prefix,
-            )
-            results = []
-            result_count = 0
-
-    if results:
-        await graph_db.save_similarity_scores(
-            prefix_from=target_prefix,
-            prefix_to=target_prefix,
-            similarity_scores=results,
-            similarity_method=method,
-            corpus_prefix=corpus_prefix,
+        buf = io.StringIO()
+        w = csv.writer(
+            buf,
+            lineterminator='\n',
         )
+        w.writerows(results)
+        await f.write(buf.getvalue())
+        buf.close()
+
+    if offline:
+        offline_file = await aiofiles.open(offline_file_path, mode='w')
+    else:
+        offline_file = None
+
+    try:
+        async for result in similarity_module.calculate_similarity(
+            target_graph=target_graph,
+            target_prefix=target_prefix,
+            corpus_graph=corpus_graph,
+            corpus_prefix=corpus_prefix,
+            annotation_graph=annotation_graph,
+        ):
+            if result[2] >= similarity_threshold:
+                results.append(result)
+
+            if len(results) >= 10000:
+                if offline and offline_file is not None:
+                    await write_batch_to_file(offline_file)
+                else:
+                    await graph_db.save_similarity_scores(
+                        prefix_from=target_prefix,
+                        prefix_to=target_prefix,
+                        similarity_scores=results,
+                        similarity_method=method,
+                        corpus_prefix=corpus_prefix,
+                    )
+                results.clear()
+
+        if results:
+            if offline and offline_file is not None:
+                await write_batch_to_file(offline_file)
+            else:
+                await graph_db.save_similarity_scores(
+                    prefix_from=target_prefix,
+                    prefix_to=target_prefix,
+                    similarity_scores=results,
+                    similarity_method=method,
+                    corpus_prefix=corpus_prefix,
+                )
+    finally:
+        if offline and offline_file is not None:
+            await offline_file.close()
 
 
 async def get_similarity_status(prefix: ConceptPrefix,
