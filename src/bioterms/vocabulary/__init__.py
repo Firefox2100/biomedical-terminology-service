@@ -306,6 +306,55 @@ async def embed_vocabulary(prefix: ConceptPrefix,
         embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
         await embedding_file.write(embed_iter())
 
+
+async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
+                                        drop_existing: bool = True,
+                                        doc_db: DocumentDatabase = None,
+                                        graph_db: GraphDatabase = None,
+                                        vector_db: VectorDatabase = None,
+                                        ):
+    """
+    Restore precomputed embeddings for the vocabulary specified by the prefix.
+    :param prefix: The prefix of the vocabulary to restore.
+    :param drop_existing: Whether to drop existing embeddings before restoring.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
+    :param vector_db: The vector database instance.
+    """
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+    if vector_db is None:
+        vector_db = get_active_vector_db()
+
+    status = await get_vocabulary_status(
+        prefix=prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+    if not status.loaded:
+        raise RuntimeError(f'Vocabulary {prefix} is not loaded. Cannot restore embeddings.')
+
+    if drop_existing:
+        await vector_db.delete_vectors_for_prefix(prefix=prefix)
+
+    offline_embedding_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.embed.dump')
+    embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
+
+    async def embed_iter():
+        async for container in embedding_file.read():
+            yield container.concept_id, str(container.vector_id), container.vector.tolist()
+
+    id_map = await vector_db.load_embeddings(
+        prefix=prefix,
+        embeddings=embed_iter(),
+    )
+
+    await doc_db.update_vector_mapping(
+        prefix=prefix,
+        mapping=id_map,
+    )
+
+
 def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:
     """
     Get the licence information for the vocabulary specified by the prefix.

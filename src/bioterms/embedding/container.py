@@ -172,7 +172,7 @@ class EmbeddingContainerFileV1(EmbeddingContainerFile):
         await f.write(self._BLK_HDR_STRUCT.pack(len(payload)))
         await f.write(payload)
 
-    async def read(self) -> AsyncIterator[EmbeddingContainer]:
+    async def read(self) -> AsyncIterator[EmbeddingContainerV1]:
         """
         Read embedding containers from the file.
         :return: An asynchronous iterator of EmbeddingContainer instances.

@@ -87,34 +87,20 @@ class QdrantVectorDatabase(VectorDatabase):
         """
         await self.client.delete_collection(collection_name=collection_name)
 
-    async def insert_concepts(self,
-                              concepts: list[Concept] | AsyncIterator[Concept],
+    async def load_embeddings(self,
                               prefix: ConceptPrefix,
-                              total_concepts: int | None = None,
+                              embeddings: AsyncIterator[tuple[str, str, list[float]]],
+                              total_embeddings: int | None = None,
                               ) -> dict[str, str]:
         """
-        Insert concepts into the Qdrant collection.
-        :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
-        :param prefix: The prefix of the concepts being inserted
-        :param total_concepts: Optional total number of concepts, used for progress tracking
+        Load precomputed embeddings into the Qdrant collection.
+        :param prefix: The vocabulary prefix of the embeddings
+        :param embeddings: An async iterator of tuples containing (concept_id, text, embedding_vector)
+        :param total_embeddings: Optional total number of embeddings, used for progress tracking
         :return: A mapping of concept IDs to their assigned point IDs in Qdrant
         """
-        if not concepts:
-            return {}
-
-        id_map = {}
-        collection_name = prefix.value
-
-        # Check if the collection exists
-        collection_list = await self.client.get_collections()
-        existing = [c.name for c in collection_list.collections]
-        if collection_name not in existing:
-            await self.create_collection(collection_name=collection_name)
-
-        if isinstance(concepts, list):
-            total_concepts: int = len(concepts)
-
         # Disable HNSW indexing for faster bulk inserts
+        collection_name = prefix.value
         await self.client.update_collection(
             collection_name=collection_name,
             hnsw_config=HnswConfigDiff(
@@ -122,14 +108,12 @@ class QdrantVectorDatabase(VectorDatabase):
             )
         )
 
-        transformer = ConceptTransformer()
-
         points = []
-        async for embedded_batch in transformer.embed_concepts(concepts, total_concepts=total_concepts):
+        id_map = {}
+        async for concept_id, vector_id, vector in embeddings:
             for concept_id, vector in embedded_batch:
-                point_id = str(uuid4())
                 points.append(PointStruct(
-                    id=point_id,
+                    id=vector_id,
                     vector=vector,
                     payload={'conceptId': concept_id}
                 ))
@@ -157,6 +141,47 @@ class QdrantVectorDatabase(VectorDatabase):
                 m=16,
                 ef_construct=100,
             )
+        )
+
+        return id_map
+
+    async def insert_concepts(self,
+                              concepts: list[Concept] | AsyncIterator[Concept],
+                              prefix: ConceptPrefix,
+                              total_concepts: int | None = None,
+                              ) -> dict[str, str]:
+        """
+        Insert concepts into the Qdrant collection.
+        :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
+        :param prefix: The prefix of the concepts being inserted
+        :param total_concepts: Optional total number of concepts, used for progress tracking
+        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
+        """
+        if not concepts:
+            return {}
+
+        collection_name = prefix.value
+
+        # Check if the collection exists
+        collection_list = await self.client.get_collections()
+        existing = [c.name for c in collection_list.collections]
+        if collection_name not in existing:
+            await self.create_collection(collection_name=collection_name)
+
+        if isinstance(concepts, list):
+            total_concepts: int = len(concepts)
+
+        transformer = ConceptTransformer()
+        async def embedding_iter():
+            async for embedded_batch in transformer.embed_concepts(concepts, total_concepts=total_concepts):
+                for concept_id, vector in embedded_batch:
+                    vector_id = str(uuid4())
+                    yield concept_id, vector_id, vector
+
+        id_map = await self.load_embeddings(
+            prefix=prefix,
+            embeddings=embedding_iter(),
+            total_embeddings=total_concepts,
         )
 
         return id_map

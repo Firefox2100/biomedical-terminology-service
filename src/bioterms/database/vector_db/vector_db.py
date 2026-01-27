@@ -21,6 +21,20 @@ class VectorDatabase(ABC):
         """
 
     @abstractmethod
+    async def load_embeddings(self,
+                              prefix: ConceptPrefix,
+                              embeddings: AsyncIterator[tuple[str, str, list[float]]],
+                              total_embeddings: int | None = None,
+                              ) -> dict[str, str]:
+        """
+        Load precomputed embeddings into the Qdrant collection.
+        :param prefix: The vocabulary prefix of the embeddings
+        :param embeddings: An async iterator of tuples containing (concept_id, text, embedding_vector)
+        :param total_embeddings: Optional total number of embeddings, used for progress tracking
+        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
+        """
+
+    @abstractmethod
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
                               prefix: ConceptPrefix,

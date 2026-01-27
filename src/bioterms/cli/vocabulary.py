@@ -126,7 +126,19 @@ async def embed_command(v: Annotated[
                                 help='Embed vocabulary in offline mode without writing to vector database. '
                                      'Requires offline file from the loading process first.')
                         ] = False,
+                        restore: Annotated[
+                            bool,
+                            typer.Option(
+                                '--restore',
+                                '-r',
+                                help='Restore embeddings from offline files created during embedding '
+                                     'process on another machine.')
+                        ] = False,
                         ):
+    if offline and restore:
+        CONSOLE.print('[red]Cannot use --offline and --restore flags together.[/red]')
+        return
+
     try:
         if embed_all:
             target_vocabularies = list(ConceptPrefix)
@@ -136,10 +148,17 @@ async def embed_command(v: Annotated[
             CONSOLE.print('[red]Either specify a vocabulary to embed or use the --all flag.[/red]')
             return
         for v in target_vocabularies:
-            await embed_vocabulary(v, drop_existing=overwrite, offline=offline)
-            CONSOLE.print(
-                f'[green]Successfully embedded vocabulary {v.value} into the vector database.[/green]'
-            )
+            if restore:
+                await restore_vocabulary_embeddings(v, drop_existing=overwrite)
+                CONSOLE.print(
+                    f'[green]Successfully restored embeddings for vocabulary {v.value} '
+                    f'into the vector database.[/green]'
+                )
+            else:
+                await embed_vocabulary(v, drop_existing=overwrite, offline=offline)
+                CONSOLE.print(
+                    f'[green]Successfully embedded vocabulary {v.value}.[/green]'
+                )
     except Exception as e:
         CONSOLE.print(f'[red]Failed to embed vocabulary {v.value} into the vector database: {e}[/red]')
         traceback.print_exc()
