@@ -492,6 +492,10 @@ def _process_annotations() -> list[Annotation]:
             if pd.isna(row['vocabulary_id']) or pd.isna(row['concept_code']):
                 continue
 
+            if str(row['concept_id']) == str(row['concept_code']):
+                # Skip self-mapping
+                continue
+
             vocabulary_prefix = map_vocabulary_prefix(row['vocabulary_id'])
             if vocabulary_prefix == 'Vocabulary':
                 # Special case: these codes are representing vocabularies themselves, and does
