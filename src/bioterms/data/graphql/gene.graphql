@@ -9,6 +9,13 @@ type HgncSymbolConcept implements Concept{
     status: ConceptStatus!
 
     similarConcepts(threshold: Float): [SimilarHgncSymbolConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 type SimilarHgncSymbolConcept implements SimilarConcept {

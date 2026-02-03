@@ -5,7 +5,7 @@ Data loaders for concept-related data fetching.
 from typing import Optional
 from aiodataloader import DataLoader
 
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix, AnnotationType, ConceptRelationshipType
 from bioterms.database import DocumentDatabase, GraphDatabase
 from bioterms.vocabulary import get_vocabulary_config
 
@@ -244,6 +244,78 @@ class ConceptLoaderBySimilarity(DataLoader[tuple[str, float], list[tuple[str, fl
         return sorted_similar
 
 
+class ConceptLoaderByPathsTo(DataLoader[
+                                 tuple[str, str, str, str, str, int],
+                                 list[tuple[int, list[tuple[str, str]]]]
+                             ]):
+    """
+    Data loader to fetch paths to target concepts given source concept IDs.
+    """
+
+    def __init__(self,
+                 prefix: ConceptPrefix,
+                 graph_db: GraphDatabase,
+                 ):
+        """
+        Initialize the ConceptLoaderByPathsTo.
+        :param prefix: The vocabulary prefix.
+        :param graph_db: The graph database instance.
+        """
+        super().__init__()
+
+        self._prefix = prefix
+        self._graph_db = graph_db
+
+    @staticmethod
+    def _str_to_relationship(rel) -> AnnotationType | ConceptRelationshipType:
+        try:
+            return ConceptRelationshipType(rel)
+        except ValueError:
+            return AnnotationType(rel)
+
+    async def batch_load_fn(self,
+                            queries: list[tuple[str, str, str, str, str, int]],
+                            ) -> list[list[tuple[int, list[tuple[str, str]]]]]:
+        """
+        Batch load function to fetch paths to target concepts for given queries.
+        :param queries: List of tuples containing source concept ID, target prefix, target concept ID,
+                relationship type, direction, and max depth.
+        :return: List of lists of tuples containing path length and list of (prefix, concept IDs) tuples
+            in the path.
+        """
+        converted_queries = []
+        for query in queries:
+            source_id, target_prefix, target_id, relationship, direction, max_depth = query
+
+            converted_queries.append((
+                self._prefix,
+                source_id,
+                ConceptPrefix(target_prefix),
+                target_id,
+                self._str_to_relationship(relationship),
+                None if direction == 'undirected' else (direction == 'forward'),
+                max_depth,
+            ))
+
+        paths = await self._graph_db.trace_term_aggregate(
+            trace_queries=converted_queries,
+        )
+
+        # Convert the paths to the expected output format
+        paths_map = {}
+        for p in paths:
+            if p.start_concept_id not in paths_map:
+                paths_map[p.start_concept_id] = []
+
+            paths_map[p.start_concept_id].append((
+                p.length,
+                [(n.prefix.value, n.concept_id) for n in p.nodes]
+            ))
+
+        sorted_paths = [paths_map.get(query[0], []) for query in queries]
+        return sorted_paths
+
+
 class ConceptLoaderByAnnotatedConcepts(DataLoader[str, list[str]]):
     """
     Data loader to fetch mapped concepts from source prefix to target prefix.
@@ -399,6 +471,17 @@ class ConceptLoader:
             )
 
         return self._similarity_loader
+
+    @property
+    def paths_to(self) -> ConceptLoaderByPathsTo:
+        """
+        Get the ConceptLoaderByPathsTo instance.
+        :return: The ConceptLoaderByPathsTo instance.
+        """
+        return ConceptLoaderByPathsTo(
+            prefix=self._prefix,
+            graph_db=self._graph_db,
+        )
 
     def get_mapping_loader(self,
                            target_prefix: ConceptPrefix,

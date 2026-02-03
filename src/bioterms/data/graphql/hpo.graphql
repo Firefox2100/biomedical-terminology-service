@@ -13,6 +13,13 @@ type HpoConcept implements Concept & OntologyConcept {
     parents: [HpoConcept!]!
 
     similarConcepts(threshold: Float): [SimilarHpoConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 type SimilarHpoConcept implements SimilarConcept {

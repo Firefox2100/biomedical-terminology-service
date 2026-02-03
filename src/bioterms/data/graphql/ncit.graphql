@@ -10,6 +10,13 @@ type NcitConcept implements Concept & OntologyConcept {
     parents: [NcitConcept!]!
 
     similarConcepts(threshold: Float): [SimilarNcitConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 type SimilarNcitConcept implements SimilarConcept {

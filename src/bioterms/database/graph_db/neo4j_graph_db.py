@@ -11,6 +11,7 @@ from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_O
     GRAPHDB_OP_RETRYS, EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
+from bioterms.model.concept_path import NodeInPath, ConceptPath
 from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTermWithScores, SimilarTermByPrefix, SimilarTerm, \
     SimilarTermAggregate
@@ -1310,6 +1311,276 @@ class Neo4jGraphDatabase(GraphDatabase):
                     mode=('bounded' if limit is not None else 'unbounded'),
                     result=result_label,
                 ).observe(first - start)
+
+    async def trace_term_iter(self,
+                              prefix_start: ConceptPrefix,
+                              prefix_end: ConceptPrefix,
+                              id_start: str,
+                              id_end: str,
+                              relationship_type: AnnotationType | ConceptRelationshipType,
+                              forward: bool | None = True,
+                              max_depth: int = 12,
+                              ) -> AsyncIterator[ConceptPath]:
+        """
+        Trace one or more paths between two terms.
+
+        It returns all available paths without repeating sequence. If a path is a subset of another
+        path with order preserved, only the shorter path is returned.
+        :param prefix_start: The prefix of the starting concept.
+        :param prefix_end: The prefix of the ending concept.
+        :param id_start: The ID of the starting concept.
+        :param id_end: The ID of the ending concept.
+        :param relationship_type: The type of relationship to trace through.
+        :param forward: If True, the direction of path must be from start to end; if False, it
+            shall be from end to start. If None, direction is ignored, but only the shortest path
+            is returned.
+        :param max_depth: The maximum depth to trace.
+        :return: An asynchronous iterator yielding ConceptPath instances.
+        """
+        rel_type = relationship_type.value
+        if forward is True:
+            rel_filter = f'{rel_type}>'
+        elif forward is False:
+            rel_filter = f'<{rel_type}'
+        else:
+            rel_filter = f'{rel_type}'
+
+        if forward is None:
+            # Special query, only return one shortest path
+            query = """
+            MATCH (start:Concept {prefix: $prefix_start, id: $id_start})
+            MATCH (end:Concept   {prefix: $prefix_end,   id: $id_end})
+            CALL apoc.path.expandConfig(start, {
+                relationshipFilter: $rel_filter,
+                endNodes: [end],
+                terminatorNodes: [end],
+                maxLevel: $max_depth,
+                uniqueness: "NODE_PATH",
+                bfs: true,
+                limit: 1
+            }) YIELD path
+            RETURN
+                $id_start AS startConceptId,
+                $id_end   AS endConceptId,
+                $prefix_start AS startPrefix,
+                $prefix_end   AS endPrefix,
+                size(nodes(path)) AS length,
+                [n IN nodes(path) | {conceptId: n.id, prefix: n.prefix}] AS nodes
+            """
+        else:
+            query = """
+            MATCH (start:Concept {prefix: $prefix_start, id: $id_start})
+            MATCH (end:Concept   {prefix: $prefix_end,   id: $id_end})
+
+            CALL {
+                WITH start, end
+                CALL apoc.path.expandConfig(start, {
+                    relationshipFilter: $rel_filter,
+                    endNodes: [end],
+                    terminatorNodes: [end],
+                    maxLevel: $max_depth,
+                    uniqueness: "NODE_PATH"
+                }) YIELD path
+                RETURN collect(path) AS paths
+            }
+
+            WITH [p IN paths WHERE
+                NOT any(q IN paths WHERE
+                    q <> p
+                    AND length(q) < length(p)
+                    AND reduce(st = {ok: true, idx: 0}, n IN nodes(q) |
+                        CASE
+                            WHEN st.ok = false
+                                THEN st
+                            ELSE
+                                CASE
+                                    WHEN apoc.coll.indexOf(nodes(p)[st.idx..], n) < 0
+                                        THEN {ok: false, idx: st.idx}
+                                    ELSE
+                                        {ok: true, idx: st.idx + apoc.coll.indexOf(nodes(p)[st.idx..], n) + 1}
+                                END
+                        END
+                    ).ok
+                )
+            ] AS filtered
+
+            UNWIND filtered AS p
+            RETURN
+                $id_start AS startConceptId,
+                $id_end   AS endConceptId,
+                $prefix_start AS startPrefix,
+                $prefix_end   AS endPrefix,
+                size(nodes(p)) AS length,
+                [n IN nodes(p) | {conceptId: n.id, prefix: n.prefix}] AS nodes
+            ORDER BY length ASC, size(nodes(p)) ASC
+            """
+
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query=query,
+                session=session,
+                parameters={
+                    'prefix_start': prefix_start.value,
+                    'prefix_end': prefix_end.value,
+                    'id_start': id_start,
+                    'id_end': id_end,
+                    'rel_filter': rel_filter,
+                    'max_depth': max_depth,
+                }
+            )
+
+            async for record in result:
+                yield ConceptPath(
+                    startConceptId=record["startConceptId"],
+                    endConceptId=record["endConceptId"],
+                    startPrefix=record["startPrefix"],
+                    endPrefix=record["endPrefix"],
+                    length=int(record["length"]),
+                    nodes=[
+                        NodeInPath(
+                            conceptId=n["conceptId"],
+                            prefix=n["prefix"],
+                        )
+                        for n in record["nodes"]
+                    ],
+                )
+
+    async def trace_term_aggregate_iter(self,
+                                        trace_queries: list[tuple[
+                                            ConceptPrefix,
+                                            str,
+                                            ConceptPrefix,
+                                            str,
+                                            ConceptRelationshipType | AnnotationType,
+                                            bool | None,
+                                            int
+                                        ]]
+                                        ) -> AsyncIterator[ConceptPath]:
+        """
+        Trace multiple paths between multiple pairs of terms.
+        :param trace_queries: A list of tuples containing:
+            (prefix_start, id_start, prefix_end, id_end, relationship_type, forward, max_depth)
+        :return: An asynchronous iterator yielding ConceptPath instances.
+        """
+        if not trace_queries:
+            return
+            yield
+
+        prepared = []
+        for (prefix_start, id_start, prefix_end, id_end, relationship_type, forward, max_depth) in trace_queries:
+            rel_type = relationship_type.value
+
+            if forward is True:
+                rel_filter = f'{rel_type}>'
+            elif forward is False:
+                rel_filter = f'<{rel_type}'
+            else:
+                rel_filter = f'{rel_type}'
+
+            prepared.append({
+                'prefix_start': prefix_start.value,
+                'id_start': id_start,
+                'prefix_end': prefix_end.value,
+                'id_end': id_end,
+                'rel_filter': rel_filter,
+                'forward': forward,
+                'max_depth': max_depth,
+            })
+
+        query = """
+            UNWIND $queries AS q
+            MATCH (start:Concept {prefix: q.prefix_start, id: q.id_start})
+            MATCH (end:Concept   {prefix: q.prefix_end,   id: q.id_end})
+            WITH q, start, end
+
+            CALL apoc.do.when(
+              q.forward IS NULL,
+
+              // --- directionless: BFS + LIMIT 1 (single shortest path) ---
+              '
+              CALL apoc.path.expandConfig($start, {
+                relationshipFilter: $rel_filter,
+                endNodes: [$end],
+                terminatorNodes: [$end],
+                maxLevel: $max_depth,
+                uniqueness: "NODE_PATH",
+                bfs: true,
+                limit: 1
+              }) YIELD path
+              RETURN collect(path) AS paths
+              ',
+
+              // --- directed/bidirectional: enumerate, then remove detours ---
+              '
+              CALL {
+                WITH $start AS start, $end AS end, $rel_filter AS rel_filter, $max_depth AS max_depth
+                CALL apoc.path.expandConfig(start, {
+                  relationshipFilter: rel_filter,
+                  endNodes: [end],
+                  terminatorNodes: [end],
+                  maxLevel: max_depth,
+                  uniqueness: "NODE_PATH"
+                }) YIELD path
+                RETURN collect(path) AS paths
+              }
+              WITH paths
+              WITH [p IN paths WHERE
+                NOT any(q2 IN paths WHERE
+                  q2 <> p
+                  AND length(q2) < length(p)
+                  AND reduce(st = {ok: true, idx: 0}, n IN nodes(q2) |
+                    CASE
+                      WHEN st.ok = false THEN st
+                      ELSE
+                        CASE
+                          WHEN apoc.coll.indexOf(nodes(p)[st.idx..], n) < 0
+                            THEN {ok: false, idx: st.idx}
+                          ELSE
+                            {ok: true, idx: st.idx + apoc.coll.indexOf(nodes(p)[st.idx..], n) + 1}
+                        END
+                    END
+                  ).ok
+                )
+              ] AS filtered
+              RETURN filtered AS paths
+              ',
+
+              {start: start, end: end, rel_filter: q.rel_filter, max_depth: q.max_depth}
+            ) YIELD value
+
+            UNWIND value.paths AS p
+            RETURN
+              q.id_start      AS startConceptId,
+              q.id_end        AS endConceptId,
+              q.prefix_start  AS startPrefix,
+              q.prefix_end    AS endPrefix,
+              size(nodes(p))  AS length,
+              [n IN nodes(p) | {conceptId: n.id, prefix: n.prefix}] AS nodes
+            ORDER BY startPrefix, startConceptId, endPrefix, endConceptId, length ASC
+            """
+
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query=query,
+                session=session,
+                parameters={"queries": prepared},
+            )
+
+            async for record in result:
+                yield ConceptPath(
+                    startConceptId=record["startConceptId"],
+                    endConceptId=record["endConceptId"],
+                    startPrefix=record["startPrefix"],
+                    endPrefix=record["endPrefix"],
+                    length=int(record["length"]),
+                    nodes=[
+                        NodeInPath(
+                            conceptId=n["conceptId"],
+                            prefix=n["prefix"],
+                        )
+                        for n in record["nodes"]
+                    ],
+                )
 
     async def get_similar_terms_aggregate_iter(self,
                                                prefix: ConceptPrefix,

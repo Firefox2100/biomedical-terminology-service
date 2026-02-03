@@ -43,6 +43,47 @@ def assemble_response(data: dict | list[dict] = None,
     }
 
 
+def prefix_to_concept_type(prefix: ConceptPrefix) -> str:
+    """
+    Map a ConceptPrefix to its corresponding GraphQL concept type name.
+    :param prefix: The ConceptPrefix enum value.
+    :return: The name of the corresponding GraphQL concept type.
+    """
+    mapping = {
+        ConceptPrefix.CTV3: 'Ctv3Concept',
+        ConceptPrefix.ENSEMBL: 'EnsemblConcept',
+        ConceptPrefix.HGNC: 'HgncConcept',
+        ConceptPrefix.HGNC_SYMBOL: 'HgncSymbolConcept',
+        ConceptPrefix.HPO: 'HpoConcept',
+        ConceptPrefix.NCIT: 'NcitConcept',
+        ConceptPrefix.OMIM: 'OmimConcept',
+        ConceptPrefix.ORDO: 'OrdoConcept',
+        ConceptPrefix.REACTOME: 'ReactomeConcept',
+        ConceptPrefix.SNOMED: 'SnomedConcept',
+    }
+    
+    if prefix in mapping:
+        return mapping[prefix]
+    
+    raise ValueError(f'Unknown concept prefix: {prefix}')
+
+
+def type_to_reactome_concept_type(type_name: str) -> str:
+    """
+    Map a concept type name to its corresponding GraphQL ReactomeConcept type name.
+    :param type_name: The concept type name.
+    :return: The name of the corresponding GraphQL ReactomeConcept type.
+    """
+    if type_name == 'pathway':
+        return 'ReactomePathway'
+    if type_name == 'reaction':
+        return 'ReactomeReaction'
+    if type_name == 'gene':
+        return 'ReactomeGene'
+
+    raise ValueError(f'Unknown Reactome concept type: {type_name}')
+
+
 @GRAPHQL_QUERY_TYPE.field('loadedPrefixes')
 async def resolve_loaded_prefixes(_, info) -> list[str]:
     """
@@ -215,6 +256,67 @@ async def resolve_concept_similar_concepts(obj,
             },
             'score': score,
         } for similar_id, score in similar_concepts
+    ]
+
+
+async def resolve_concept_paths_to(obj,
+                                   info,
+                                   prefix: ConceptPrefix,
+                                   target_prefix: str,
+                                   target_concept_id: str,
+                                   relationship: str,
+                                   direction: str,
+                                   max_depth: int,
+                                   ) -> list[dict]:
+    """
+    Resolve the 'pathsTo' field for a concept.
+    :param obj: The GraphQL passed-in object that represent the concept being resolved.
+    :param info: The GraphQL resolver info.
+    :param prefix: The source vocabulary prefix.
+    :param target_prefix: The target vocabulary prefix.
+    :param target_concept_id: The target concept ID.
+    :param relationship: The type of relationship to trace.
+    :param direction: The direction of the path ('forward', 'backward', or 'undirected').
+    :param max_depth: The maximum depth of the path.
+    :return: A list of concept paths.
+    """
+    concept_id = obj['conceptId']
+    data_loader: DataLoader = info.context['data_loader']
+
+    concept_loader = data_loader.get_concept_loader(prefix)
+    paths = await concept_loader.paths_to.load((
+        concept_id,
+        target_prefix,
+        target_concept_id,
+        relationship,
+        direction,
+        max_depth,
+    ))
+
+    reactome_loader = data_loader.get_concept_loader(ConceptPrefix.REACTOME)
+    reactome_concept_ids = set()
+    for path in paths:
+        for node in path[1]:
+            if node[0] == ConceptPrefix.REACTOME.value:
+                reactome_concept_ids.add(node[1])
+
+    reactome_concepts = await reactome_loader.id.load_many(list(reactome_concept_ids))
+    reactome_concept_map = {concept['conceptId']: concept for concept in reactome_concepts if concept}
+
+    return [
+        {
+            'length': length,
+            'nodes': [
+                {
+                    # Concept is an interface so need to set the type manually
+                    '__typename': prefix_to_concept_type(ConceptPrefix(node[0]))
+                        if ConceptPrefix(node[0]) != ConceptPrefix.REACTOME
+                        else type_to_reactome_concept_type(reactome_concept_map[node[1]]['conceptTypes'][0]),
+                    'conceptId': node[1],
+                    'prefix': node[0],
+                } for node in nodes
+            ]
+        } for length, nodes in paths
     ]
 
 

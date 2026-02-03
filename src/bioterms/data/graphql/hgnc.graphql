@@ -13,6 +13,13 @@ type HgncConcept implements Concept & GeneConcept {
     symbols: [HgncSymbolConcept!]!
 
     similarConcepts(threshold: Float): [SimilarHgncConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 extend type HgncSymbolConcept {

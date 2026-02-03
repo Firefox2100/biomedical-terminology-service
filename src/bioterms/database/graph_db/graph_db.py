@@ -3,9 +3,11 @@ from typing import AsyncIterator
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, SimilarityMethod
+from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, SimilarityMethod, AnnotationType, \
+    ConceptRelationshipType
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
+from bioterms.model.concept_path import ConceptPath
 from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTerm, SimilarTermAggregate
 from bioterms.model.translated_term import TranslatedTerm
@@ -495,6 +497,79 @@ class GraphDatabase(ABC):
         results: list[RelatedTerm] = []
         async for mapped_term in map_iter:
             results.append(mapped_term)
+
+        return results
+
+    @abstractmethod
+    def trace_term_iter(self,
+                        prefix_start: ConceptPrefix,
+                        prefix_end: ConceptPrefix,
+                        id_start: str,
+                        id_end: str,
+                        relationship_type: AnnotationType | ConceptRelationshipType,
+                        forward: bool | None = True,
+                        max_depth: int = 12,
+                        ) -> AsyncIterator[ConceptPath]:
+        """
+        Trace one or more paths between two terms.
+
+        It returns all available paths without repeating sequence. If a path is a subset of another
+        path with order preserved, only the shorter path is returned.
+        :param prefix_start: The prefix of the starting concept.
+        :param prefix_end: The prefix of the ending concept.
+        :param id_start: The ID of the starting concept.
+        :param id_end: The ID of the ending concept.
+        :param relationship_type: The type of relationship to trace through.
+        :param forward: If True, the direction of path must be from start to end; if False, it
+            shall be from end to start. If None, direction is ignored, but only the shortest path
+            is returned.
+        :param max_depth: The maximum depth to trace.
+        :return: An asynchronous iterator yielding ConceptPath instances.
+        """
+
+    @abstractmethod
+    def trace_term_aggregate_iter(self,
+                                  trace_queries: list[tuple[
+                                      ConceptPrefix,
+                                      str,
+                                      ConceptPrefix,
+                                      str,
+                                      ConceptRelationshipType | AnnotationType,
+                                      bool | None,
+                                      int
+                                  ]]
+                                  ) -> AsyncIterator[ConceptPath]:
+        """
+        Trace multiple paths between multiple pairs of terms.
+        :param trace_queries: A list of tuples containing:
+            (prefix_start, id_start, prefix_end, id_end, relationship_type, forward, max_depth)
+        :return: An asynchronous iterator yielding ConceptPath instances.
+        """
+
+    async def trace_term_aggregate(self,
+                                   trace_queries: list[tuple[
+                                       ConceptPrefix,
+                                       str,
+                                       ConceptPrefix,
+                                       str,
+                                       ConceptRelationshipType | AnnotationType,
+                                       bool | None,
+                                       int
+                                   ]]
+                                   ) -> list[ConceptPath]:
+        """
+        Trace multiple paths between multiple pairs of terms.
+        :param trace_queries: A list of tuples containing:
+            (prefix_start, id_start, prefix_end, id_end, relationship_type, forward, max_depth)
+        :return: A list of ConceptPath instances.
+        """
+        trace_iter = self.trace_term_aggregate_iter(
+            trace_queries=trace_queries,
+        )
+
+        results: list[ConceptPath] = []
+        async for concept_path in trace_iter:
+            results.append(concept_path)
 
         return results
 

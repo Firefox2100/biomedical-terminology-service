@@ -8,7 +8,7 @@ from bioterms.etc.enums import ConceptPrefix
 from ..data_loader import DataLoader
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, \
     resolve_concept_similar_concepts, resolve_get_concept, resolve_auto_complete, \
-    resolve_concept_annotated_concepts
+    resolve_concept_annotated_concepts, resolve_concept_paths_to
 
 
 REACTOME_CONCEPT = InterfaceType('ReactomeConcept')
@@ -223,6 +223,29 @@ async def resolve_reactome_similar_concepts(obj,
         info=info,
         prefix=ConceptPrefix.REACTOME,
         threshold=threshold,
+    )
+
+
+@REACTOME_PATHWAY.field('pathsTo')
+@REACTOME_REACTION.field('pathsTo')
+@REACTOME_GENE.field('pathsTo')
+async def resolve_reactome_concept_paths_to(obj,
+                                            info,
+                                            target_prefix: str,
+                                            target_concept_id: str,
+                                            relationship: str,
+                                            direction: str,
+                                            max_depth: int,
+                                            ):
+    return await resolve_concept_paths_to(
+        obj=obj,
+        info=info,
+        prefix=ConceptPrefix.REACTOME,
+        target_prefix=target_prefix,
+        target_concept_id=target_concept_id,
+        relationship=relationship,
+        direction=direction,
+        max_depth=max_depth,
     )
 
 

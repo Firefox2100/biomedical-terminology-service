@@ -13,6 +13,13 @@ type Ctv3Concept implements Concept & OntologyConcept {
     parents: [Ctv3Concept!]!
 
     similarConcepts(threshold: Float): [SimilarCtv3Concept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 type SimilarCtv3Concept implements SimilarConcept {

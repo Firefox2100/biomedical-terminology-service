@@ -14,6 +14,13 @@ type SnomedConcept implements Concept & OntologyConcept {
     parents: [SnomedConcept!]!
 
     similarConcepts(threshold: Float): [SimilarSnomedConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 type SimilarSnomedConcept implements SimilarConcept {

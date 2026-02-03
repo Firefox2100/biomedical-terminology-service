@@ -33,7 +33,7 @@ from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
 from bioterms.router import auto_complete_router, data_router, expand_router, map_router, \
-    misc_router, search_router, similarity_router, ui_router
+    misc_router, search_router, similarity_router, trace_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
@@ -173,6 +173,10 @@ def create_app() -> FastAPI:
                 'description': 'Endpoints for retrieving similar biomedical terms.',
             },
             {
+                'name': 'Trace',
+                'description': 'Endpoints for tracing paths between biomedical terms.',
+            },
+            {
                 'name': 'UI',
                 'description': 'Endpoints for serving the web user interface.',
             },
@@ -269,6 +273,7 @@ def create_app() -> FastAPI:
     app.include_router(misc_router)
     app.include_router(search_router)
     app.include_router(similarity_router)
+    app.include_router(trace_router)
     app.include_router(ui_router)
 
     app.mount('/static', StaticFiles(directory=str(STATIC_FILE_PATH)), name='static')

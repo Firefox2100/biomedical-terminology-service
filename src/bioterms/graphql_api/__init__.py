@@ -26,12 +26,13 @@ def _convert_schema_names(graphql_name: str,
                           ) -> str:
     """
     Convert GraphQL schema names from camelCase to snake_case for queries and
+    mutations only.
     :param graphql_name: The original GraphQL name
     :param _: The GraphQL schema, not used
     :param path: The path in the schema
     :return: The converted name
     """
-    if 'Query' not in path[0]:
+    if 'Query' not in path[0] and 'pathsTo' not in path:
         return graphql_name
 
     return convert_camel_case_to_snake(graphql_name)

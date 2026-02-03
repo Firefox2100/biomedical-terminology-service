@@ -6,7 +6,7 @@ from ariadne import ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_get_concept, \
-    resolve_concept_similar_concepts, resolve_auto_complete
+    resolve_concept_similar_concepts, resolve_concept_paths_to, resolve_auto_complete
 
 
 GENE_CONCEPT = ObjectType('HgncSymbolConcept')
@@ -47,6 +47,27 @@ async def resolve_gene_concept_similar_concepts(obj,
         info=info,
         prefix=ConceptPrefix.HGNC_SYMBOL,
         threshold=threshold,
+    )
+
+
+@GENE_CONCEPT.field('pathsTo')
+async def resolve_gene_concept_paths_to(obj,
+                                        info,
+                                        target_prefix: str,
+                                        target_concept_id: str,
+                                        relationship: str,
+                                        direction: str,
+                                        max_depth: int,
+                                        ):
+    return await resolve_concept_paths_to(
+        obj=obj,
+        info=info,
+        prefix=ConceptPrefix.HGNC_SYMBOL,
+        target_prefix=target_prefix,
+        target_concept_id=target_concept_id,
+        relationship=relationship,
+        direction=direction,
+        max_depth=max_depth,
     )
 
 

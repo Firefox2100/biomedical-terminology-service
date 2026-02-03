@@ -17,10 +17,37 @@ enum ConceptStatus {
     unknown
 }
 
+enum PathDirection {
+    forward
+    reverse
+    undirected
+}
+
+enum RelationshipType {
+    exact
+    broad
+    narrow
+    related
+    has_symbol
+    annotated_with
+    is_a
+    part_of
+    replaced_by
+    preceded_by
+    has_input
+    has_output
+    ohdsi_relationship
+}
+
 interface SimilarConcept {
     from: Concept!
     to: Concept!
     score: Float!
+}
+
+type ConceptPath {
+    length: Int!
+    nodes: [Concept!]!
 }
 
 interface Concept {
@@ -30,6 +57,13 @@ interface Concept {
     status: ConceptStatus!
 
     similarConcepts(threshold: Float): [SimilarConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
 }
 
 interface OntologyConcept {
