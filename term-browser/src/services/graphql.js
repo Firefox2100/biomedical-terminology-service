@@ -292,6 +292,149 @@ function buildAutoCompleteQuery({ schema, ontologyId, fieldOverrides }) {
   }
 }
 
+function buildParentsSelection(depth) {
+  if (depth <= 0) {
+    return 'conceptId\n        label'
+  }
+  return `conceptId\n        label\n        parents {\n        ${buildParentsSelection(depth - 1)}\n      }`
+}
+
+function buildParentsQuery({ schema, ontologyId, fieldOverrides, depth = 2 }) {
+  const rootField = getQueryField(schema, ontologyId, fieldOverrides)
+  const queryType = getQueryFieldType(schema, rootField)
+  const conceptField = getConceptField(queryType)
+  const conceptArg = getArgumentName(conceptField, 'conceptId')
+  const conceptArgType = getTypeSignature(getArgumentType(conceptField, conceptArg))
+  const responseType = getConceptResponseType(schema, conceptField)
+  const conceptType = getConceptDataType(schema, responseType)
+
+  if (!rootField || !conceptField) {
+    return null
+  }
+
+  const hasParents = conceptType?.fields?.some((field) => field.name === 'parents')
+  if (!hasParents) {
+    return null
+  }
+
+  const selection = buildParentsSelection(depth)
+
+  return {
+    query: `query TermParents($conceptId: ${conceptArgType}) {\n  ${rootField.name} {\n    ${conceptField.name}(${conceptArg}: $conceptId) {\n      data {\n        ${selection}\n      }\n      error {\n        message\n        code\n      }\n    }\n  }\n}`,
+    variables: { conceptId: null },
+    rootFieldName: rootField.name,
+    conceptFieldName: conceptField.name,
+  }
+}
+
+function buildChildrenSelection(depth) {
+  if (depth <= 0) {
+    return 'conceptId\n        label'
+  }
+  return `conceptId\n        label\n        children {\n        ${buildChildrenSelection(depth - 1)}\n      }`
+}
+
+function buildChildrenPathQuery({ schema, ontologyId, fieldOverrides, depth = 2 }) {
+  const rootField = getQueryField(schema, ontologyId, fieldOverrides)
+  const queryType = getQueryFieldType(schema, rootField)
+  const conceptField = getConceptField(queryType)
+  const conceptArg = getArgumentName(conceptField, 'conceptId')
+  const conceptArgType = getTypeSignature(getArgumentType(conceptField, conceptArg))
+  const responseType = getConceptResponseType(schema, conceptField)
+  const conceptType = getConceptDataType(schema, responseType)
+
+  if (!rootField || !conceptField) {
+    return null
+  }
+
+  const hasChildren = conceptType?.fields?.some((field) => field.name === 'children')
+  if (!hasChildren) {
+    return null
+  }
+
+  const selection = buildChildrenSelection(depth)
+
+  return {
+    query: `query TermChildrenPath($conceptId: ${conceptArgType}) {\n  ${rootField.name} {\n    ${conceptField.name}(${conceptArg}: $conceptId) {\n      data {\n        ${selection}\n      }\n      error {\n        message\n        code\n      }\n    }\n  }\n}`,
+    variables: { conceptId: null },
+    rootFieldName: rootField.name,
+    conceptFieldName: conceptField.name,
+  }
+}
+
+function getFieldByName(type, name) {
+  if (!type?.fields?.length) {
+    return null
+  }
+  return type.fields.find((field) => field.name.toLowerCase() === name.toLowerCase())
+}
+
+function getArgNameInsensitive(field, desiredName, fallbackName) {
+  if (!field?.args?.length) {
+    return fallbackName
+  }
+  const match = field.args.find(
+    (arg) => arg.name.toLowerCase() === desiredName.toLowerCase(),
+  )
+  return match?.name || fallbackName
+}
+
+function buildPathsToQuery({ schema, ontologyId, fieldOverrides, maxDepth = 10 }) {
+  const rootField = getQueryField(schema, ontologyId, fieldOverrides)
+  const queryType = getQueryFieldType(schema, rootField)
+  const conceptField = getConceptField(queryType)
+  const conceptArg = getArgumentName(conceptField, 'conceptId')
+  const conceptArgType = getTypeSignature(getArgumentType(conceptField, conceptArg))
+  const responseType = getConceptResponseType(schema, conceptField)
+  const conceptType = getConceptDataType(schema, responseType)
+
+  if (!rootField || !conceptField || !conceptType) {
+    return null
+  }
+
+  const pathsField = getFieldByName(conceptType, 'pathsTo')
+  if (!pathsField) {
+    return null
+  }
+
+  const targetPrefixArg = getArgNameInsensitive(pathsField, 'targetPrefix', null)
+  const relationshipArg = getArgNameInsensitive(pathsField, 'relationship', null)
+  const directionArg = getArgNameInsensitive(pathsField, 'direction', null)
+  const maxDepthArg = getArgNameInsensitive(pathsField, 'maxDepth', null)
+  const targetConceptIdArg = getArgNameInsensitive(
+    pathsField,
+    'targetConceptId',
+    null,
+  )
+
+  const args = []
+  if (targetPrefixArg) {
+    args.push(`${targetPrefixArg}: ${ontologyId.toLowerCase()}`)
+  }
+  if (relationshipArg) {
+    args.push(`${relationshipArg}: is_a`)
+  }
+  if (directionArg) {
+    args.push(`${directionArg}: reverse`)
+  }
+  if (maxDepthArg) {
+    args.push(`${maxDepthArg}: $maxDepth`)
+  }
+  if (targetConceptIdArg) {
+    args.push(`${targetConceptIdArg}: $targetConceptId`)
+  }
+
+  const argsClause = args.length ? `(${args.join(', ')})` : ''
+
+  return {
+    query: `query TermPaths($conceptId: ${conceptArgType}, $targetConceptId: ${conceptArgType}, $maxDepth: Int) {\n  ${rootField.name} {\n    ${conceptField.name}(${conceptArg}: $conceptId) {\n      data {\n        pathsTo${argsClause} {\n          length\n          nodes {\n            prefix\n            conceptId\n            label\n          }\n        }\n      }\n      error {\n        message\n        code\n      }\n    }\n  }\n}`,
+    variables: { conceptId: null, targetConceptId: null, maxDepth },
+    rootFieldName: rootField.name,
+    conceptFieldName: conceptField.name,
+    maxDepth,
+  }
+}
+
 export {
   GRAPHQL_ENDPOINT,
   fetchGraphQL,
@@ -299,5 +442,8 @@ export {
   buildChildrenQuery,
   buildAutoCompleteQuery,
   buildTermDetailQuery,
+  buildParentsQuery,
+  buildChildrenPathQuery,
+  buildPathsToQuery,
   getQueryField,
 }

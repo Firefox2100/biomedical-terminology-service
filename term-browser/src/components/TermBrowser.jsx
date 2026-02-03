@@ -6,6 +6,7 @@ import { ontologyConfig } from '../data/ontologyConfig.js'
 import {
   buildAutoCompleteQuery,
   buildChildrenQuery,
+  buildPathsToQuery,
   buildTermDetailQuery,
   fetchGraphQL,
   fetchIntrospectionSchema,
@@ -28,6 +29,25 @@ function updateNodeById(nodes, nodeId, updater) {
   })
 }
 
+function findNodeById(nodes, nodeId) {
+  for (const node of nodes) {
+    if (node.id === nodeId) {
+      return node
+    }
+    if (node.children?.length) {
+      const match = findNodeById(node.children, nodeId)
+      if (match) {
+        return match
+      }
+    }
+  }
+  return null
+}
+
+function getConceptId(node) {
+  return node?.conceptId || node?.id || null
+}
+
 function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   const [query, setQuery] = useState('')
   const [selectedTerm, setSelectedTerm] = useState(null)
@@ -46,6 +66,8 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const detailCache = useRef(new Map())
   const searchRequestId = useRef(0)
+  const searchSelectionRequestId = useRef(0)
+  const treeDataRef = useRef(treeData)
 
   const filteredData = useMemo(() => treeData, [treeData])
   const resolvedRootIds = useMemo(() => {
@@ -62,6 +84,10 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
     return baseIds.filter(Boolean)
   }, [ontologyId, rootConceptIds])
   const fieldOverrides = ontologyConfig.queryFieldByOntologyId
+
+  useEffect(() => {
+    treeDataRef.current = treeData
+  }, [treeData])
 
   useEffect(() => {
     let isMounted = true
@@ -325,6 +351,141 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
     }
   }
 
+  const loadChildrenForNode = async (nodeId, queryConfig) => {
+    const existing = findNodeById(treeDataRef.current, nodeId)
+    if (Array.isArray(existing?.children)) {
+      return existing.children
+    }
+
+    setLoadingIds((current) => new Set(current).add(nodeId))
+    setTreeError(null)
+    try {
+      const result = await fetchGraphQL({
+        query: queryConfig.query,
+        variables: { conceptId: nodeId },
+      })
+
+      const children =
+        result?.[queryConfig.rootFieldName]?.[queryConfig.conceptFieldName]?.data
+          ?.children || []
+
+      const mappedChildren = (children || []).map((child) => ({
+        id: child.conceptId || child.id,
+        label: child.label || child.conceptId,
+        hasChildren: true,
+      }))
+
+      setTreeData((current) => {
+        const next = updateNodeById(current, nodeId, (currentNode) => ({
+          ...currentNode,
+          children: mappedChildren,
+          hasChildren: mappedChildren.length > 0,
+        }))
+        treeDataRef.current = next
+        return next
+      })
+
+      return mappedChildren
+    } finally {
+      setLoadingIds((current) => {
+        const next = new Set(current)
+        next.delete(nodeId)
+        return next
+      })
+    }
+  }
+
+  const ensureChildrenLoaded = async (nodeId, queryConfig) => {
+    const node = findNodeById(treeDataRef.current, nodeId)
+    if (!node || !node.hasChildren) {
+      return []
+    }
+    if (Array.isArray(node.children)) {
+      return node.children
+    }
+    return loadChildrenForNode(nodeId, queryConfig)
+  }
+
+  const expandTreeToConcept = async (conceptId) => {
+    if (!schema || !ontologyId || !resolvedRootIds.length) {
+      return null
+    }
+
+    const pathsQueryConfig = buildPathsToQuery({
+      schema,
+      ontologyId,
+      fieldOverrides,
+      maxDepth: 10,
+    })
+    if (!pathsQueryConfig) {
+      return null
+    }
+
+    const childrenQueryConfig = buildChildrenQuery({
+      schema,
+      ontologyId,
+      fieldOverrides,
+    })
+    if (!childrenQueryConfig) {
+      throw new Error('Unable to resolve ontology query fields.')
+    }
+
+    const requestId = searchSelectionRequestId.current
+    const roots = resolvedRootIds.filter(Boolean)
+    const pathResponses = await Promise.all(
+      roots.map(async (rootId) => {
+        const result = await fetchGraphQL({
+          query: pathsQueryConfig.query,
+          variables: {
+            conceptId: rootId,
+            targetConceptId: conceptId,
+            maxDepth: pathsQueryConfig.maxDepth,
+          },
+        })
+        const data =
+          result?.[pathsQueryConfig.rootFieldName]?.[
+            pathsQueryConfig.conceptFieldName
+          ]?.data
+        return data?.pathsTo || []
+      }),
+    )
+
+    if (searchSelectionRequestId.current !== requestId) {
+      return null
+    }
+
+    const paths = pathResponses.flat().filter((path) => path?.nodes?.length)
+    if (!paths.length) {
+      return null
+    }
+
+    const bestPath = paths.reduce((best, current) =>
+      (current.length || current.nodes.length) < (best.length || best.nodes.length)
+        ? current
+        : best,
+    )
+
+    const pathIds = bestPath.nodes.map((node) => getConceptId(node)).filter(Boolean)
+    if (!pathIds.length) {
+      return null
+    }
+
+    setExpandedIds((current) => {
+      const next = new Set(current)
+      pathIds.slice(0, -1).forEach((id) => next.add(id))
+      return next
+    })
+
+    for (const id of pathIds.slice(0, -1)) {
+      if (searchSelectionRequestId.current !== requestId) {
+        return null
+      }
+      await loadChildrenForNode(id, childrenQueryConfig)
+    }
+
+    return findNodeById(treeDataRef.current, conceptId)
+  }
+
   const handleSelect = async (node) => {
     setSelectedTerm(node)
     setSelectedDetails(null)
@@ -371,6 +532,29 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
     }
   }
 
+  const handleSearchSelection = async (item) => {
+    const currentRequest = searchSelectionRequestId.current + 1
+    searchSelectionRequestId.current = currentRequest
+
+    setTreeError(null)
+    const fallbackNode = { id: item.id, label: item.label }
+    await handleSelect(fallbackNode)
+    try {
+      const match = await expandTreeToConcept(item.id)
+      if (searchSelectionRequestId.current !== currentRequest) {
+        return
+      }
+      if (match) {
+        setSelectedTerm(match)
+      }
+    } catch (error) {
+      if (searchSelectionRequestId.current !== currentRequest) {
+        return
+      }
+      setTreeError(error.message)
+    }
+  }
+
   const handleReturn = () => {
     if (returnPath) {
       window.location.assign(returnPath)
@@ -407,7 +591,7 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
                       onSelectSuggestion={(item) => {
                         setQuery(item.label)
                         setShowSuggestions(false)
-                        handleSelect({ id: item.id, label: item.label })
+                        handleSearchSelection(item)
                       }}
                       isLoading={searchLoading}
                       error={searchError}
