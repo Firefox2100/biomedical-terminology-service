@@ -67,6 +67,7 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   const detailCache = useRef(new Map())
   const searchRequestId = useRef(0)
   const searchSelectionRequestId = useRef(0)
+  const suppressSearchRef = useRef(false)
   const treeDataRef = useRef(treeData)
 
   const filteredData = useMemo(() => treeData, [treeData])
@@ -211,6 +212,12 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
 
   useEffect(() => {
     const trimmedQuery = query.trim()
+    if (suppressSearchRef.current) {
+      suppressSearchRef.current = false
+      setShowSuggestions(false)
+      setSearchLoading(false)
+      return
+    }
     if (!trimmedQuery) {
       setSearchResults([])
       setSearchError(null)
@@ -579,6 +586,7 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
                     <SearchBar
                       value={query}
                       onChange={(value) => {
+                        suppressSearchRef.current = false
                         setQuery(value)
                         setShowSuggestions(Boolean(value.trim()))
                       }}
@@ -589,6 +597,7 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
                       }}
                       suggestions={searchResults}
                       onSelectSuggestion={(item) => {
+                        suppressSearchRef.current = true
                         setQuery(item.label)
                         setShowSuggestions(false)
                         handleSearchSelection(item)
