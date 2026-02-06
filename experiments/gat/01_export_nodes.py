@@ -3,7 +3,6 @@ Export nodes from Neo4j to a Parquet file with a mapping from Concept IDs to int
 """
 
 import json
-from pathlib import Path
 import pandas as pd
 from neo4j import GraphDatabase
 from config import cfg

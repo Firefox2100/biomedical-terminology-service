@@ -15,6 +15,10 @@ class Cfg:
     # Qdrant
     qdrant_url: str = 'http://localhost:16333'
 
+    # MongoDB
+    mongo_uri: str = 'mongodb://localhost:37017'
+    mongo_db: str = 'bts'
+
     # Embeddings
     emb_dim: int = 768
     emb_dtype: str = 'float16'
