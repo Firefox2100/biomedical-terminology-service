@@ -1,1 +1,10 @@
+# Data
 /graph/
+/checkpoints/
+
+# HPC output
+*.err
+*.out
+
+# HPC job scripts
+*.slm
