@@ -16,6 +16,7 @@ from config import cfg
 
 CYPHER_QUERY = """
 MATCH (a:Concept)-[r]->(b:Concept)
+WHERE type(r) <> 'similar_to
 RETURN
     a.id as src,
     a.prefix as src_prefix,
