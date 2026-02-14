@@ -146,6 +146,13 @@ async def create_graphql_app() -> GraphQL:
         graphql_schemas.append(NCIT_SCHEMA)
         graphql_objects.append(NCIT_CONCEPT)
         graphql_queries.append(NCIT_QUERY)
+    if vocabulary_statuses[ConceptPrefix.OHDSI].loaded:
+        from .schemas import OHDSI_SCHEMA
+        from .resolver.ohdsi import OHDSI_CONCEPT, OHDSI_QUERY
+
+        graphql_schemas.append(OHDSI_SCHEMA)
+        graphql_objects.append(OHDSI_CONCEPT)
+        graphql_queries.append(OHDSI_QUERY)
     if vocabulary_statuses[ConceptPrefix.OMIM].loaded:
         from .schemas import OMIM_SCHEMA
         from .resolver.omim import OMIM_CONCEPT, OMIM_QUERY

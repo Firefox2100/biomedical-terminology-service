@@ -5,6 +5,7 @@ enum ConceptPrefix {
     hgnc
     hpo
     ncit
+    ohdsi
     omim
     ordo
     reactome
