@@ -1,0 +1,21 @@
+{
+  "neo4j": {
+    "uri": "bolt://localhost:7687",
+    "username": "neo4j",
+    "password": "password"
+  },
+  "conceptTypes": {
+    "disorder": 0,
+    "phenotype": 1,
+    "device": 2,
+    "organism": 3,
+    "anatomy": 4,
+    "administration": 5,
+    "procedure": 6,
+    "substance": 7,
+    "structural": 8
+  },
+  "prefixes": {
+    "ctv3": 0
+  }
+}
