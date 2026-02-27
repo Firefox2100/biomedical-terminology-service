@@ -3,7 +3,7 @@ from ariadne import ObjectType
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
     resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, resolve_get_concept, \
-    resolve_concept_similar_concepts, resolve_concept_paths_to, resolve_auto_complete
+    resolve_concept_similar_concepts, resolve_concept_paths_to, resolve_auto_complete, resolve_search
 
 
 CTV3_CONCEPT = ObjectType('Ctv3Concept')
@@ -105,6 +105,16 @@ async def resolve_get_ctv3_concept(_, info, concept_id: str) -> dict:
 @CTV3_QUERY.field('autoComplete')
 async def resolve_ctv3_autocomplete(_, info, query: str, limit: int = None) -> dict:
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.CTV3,
+        limit=limit,
+    )
+
+
+@CTV3_QUERY.field('search')
+async def resolve_ctv3_search(_, info, query: str, limit: int = None) -> dict:
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.CTV3,

@@ -51,6 +51,7 @@ type EnsemblConceptListResponse {
 type EnsemblQuery {
     ensemblConcept(conceptId: String!): EnsemblConceptResponse
     autoComplete(query: String!, limit: Int): EnsemblConceptListResponse
+    search(query: String!, limit: Int): EnsemblConceptListResponse
 }
 
 extend type Query {

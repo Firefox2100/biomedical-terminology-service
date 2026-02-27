@@ -400,3 +400,38 @@ async def resolve_auto_complete(info,
     ]
 
     return assemble_response(results)
+
+
+async def resolve_search(info,
+                         query: str,
+                         prefix: ConceptPrefix,
+                         limit: int = None,
+                         ) -> dict:
+    """
+    Resolve concept search based on vector similarity.
+    :param info: The GraphQL resolver info.
+    :param query: The search query string.
+    :param prefix: The vocabulary prefix.
+    :param limit: Maximum number of concepts to return.
+    :return: A dictionary containing the search results.
+    """
+    doc_db = info.context['doc_db']
+    vector_db = info.context['vector_db']
+
+    concept_ids = await vector_db.search_concepts(
+        query=query,
+        prefix=prefix,
+        limit=limit or 10,
+    )
+
+    concepts = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=concept_ids,
+        model_class=get_vocabulary_config(prefix)['conceptClass'],
+    )
+
+    results = [
+        concept.model_dump(exclude_none=True) for concept in concepts
+    ]
+
+    return assemble_response(results)

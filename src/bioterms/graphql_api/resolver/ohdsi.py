@@ -4,7 +4,7 @@ from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
     resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, \
     resolve_get_concept, resolve_concept_similar_concepts, resolve_concept_paths_to, \
-    resolve_auto_complete
+    resolve_auto_complete, resolve_search
 
 
 OHDSI_CONCEPT = ObjectType('OhdsiConcept')
@@ -156,6 +156,24 @@ async def resolve_ohdsi_autocomplete(_, info, query: str, limit: int = None) -> 
     :return: The auto-complete results as a dictionary.
     """
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.OHDSI,
+        limit=limit,
+    )
+
+
+@OHDSI_QUERY.field('search')
+async def resolve_ohdsi_search(_, info, query: str, limit: int = None) -> dict:
+    """
+    Resolve OHDSI search query.
+    :param _: The GraphQL parent object, not used.
+    :param info: The GraphQL resolve info.
+    :param query: The search query string.
+    :param limit: The maximum number of results to return.
+    :return: The search results as a dictionary.
+    """
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.OHDSI,

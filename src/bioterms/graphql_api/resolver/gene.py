@@ -6,7 +6,8 @@ from ariadne import ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_get_concept, \
-    resolve_concept_similar_concepts, resolve_concept_paths_to, resolve_auto_complete
+    resolve_concept_similar_concepts, resolve_concept_paths_to, resolve_auto_complete, \
+    resolve_search
 
 
 GENE_CONCEPT = ObjectType('HgncSymbolConcept')
@@ -98,6 +99,23 @@ async def resolve_gene_autocomplete(_, info, query: str, limit: int = None) -> d
     :return: The autocomplete results.
     """
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.HGNC_SYMBOL,
+        limit=limit,
+    )
+
+
+@GENE_QUERY.field('search')
+async def resolve_gene_search(_, info, query: str, limit: int = None) -> dict:
+    """Resolve Gene search query.
+    :param _: The parent object (not used).
+    :param info: The GraphQL resolve info.
+    :param query: The search query string.
+    :param limit: The maximum number of results to return.
+    :return: The search results.
+    """
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.HGNC_SYMBOL,

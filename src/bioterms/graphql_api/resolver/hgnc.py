@@ -7,7 +7,8 @@ from ariadne import ObjectType
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
     resolve_concept_replaced_by, resolve_get_concept, resolve_concept_similar_concepts, \
-    resolve_concept_paths_to, resolve_auto_complete, resolve_concept_annotated_concepts
+    resolve_concept_paths_to, resolve_auto_complete, resolve_concept_annotated_concepts, \
+    resolve_search
 from .gene import GENE_CONCEPT
 
 
@@ -149,6 +150,24 @@ async def resolve_hgnc_autocomplete(_, info, query: str, limit: int = None) -> d
     :return: The autocomplete results.
     """
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.HGNC,
+        limit=limit,
+    )
+
+
+@HGNC_QUERY.field('search')
+async def resolve_hgnc_search(_, info, query: str, limit: int = None) -> dict:
+    """
+    Resolve HGNC search query.
+    :param _: The parent object (not used).
+    :param info: The GraphQL resolve info.
+    :param query: The search query string.
+    :param limit: The maximum number of results to return.
+    :return: The search results.
+    """
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.HGNC,

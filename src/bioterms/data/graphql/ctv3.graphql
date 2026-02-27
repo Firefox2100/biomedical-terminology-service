@@ -41,6 +41,7 @@ type Ctv3ConceptListResponse {
 type Ctv3Query {
     ctv3Concept(conceptId: String!): Ctv3ConceptResponse
     autoComplete(query: String!, limit: Int): Ctv3ConceptListResponse
+    search(query: String!, limit: Int): Ctv3ConceptListResponse
 }
 
 extend type Query {

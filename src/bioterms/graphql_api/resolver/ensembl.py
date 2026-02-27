@@ -3,7 +3,7 @@ from ariadne import ObjectType
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_get_concept, \
     resolve_concept_similar_concepts, resolve_concept_paths_to, resolve_auto_complete, \
-    resolve_concept_annotated_concepts
+    resolve_concept_annotated_concepts, resolve_search
 from .gene import GENE_CONCEPT
 
 
@@ -96,6 +96,16 @@ async def resolve_get_ensembl_concept(_, info, concept_id: str) -> dict:
 @ENSEMBL_QUERY.field('autoComplete')
 async def resolve_ensembl_autocomplete(_, info, query: str, limit: int = None) -> dict:
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.ENSEMBL,
+        limit=limit,
+    )
+
+
+@ENSEMBL_QUERY.field('search')
+async def resolve_ensembl_search(_, info, query: str, limit: int = None) -> dict:
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.ENSEMBL,

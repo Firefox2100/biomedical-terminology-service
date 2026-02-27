@@ -8,7 +8,7 @@ from bioterms.etc.enums import ConceptPrefix
 from ..data_loader import DataLoader
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, \
     resolve_concept_similar_concepts, resolve_get_concept, resolve_auto_complete, \
-    resolve_concept_annotated_concepts, resolve_concept_paths_to
+    resolve_concept_annotated_concepts, resolve_concept_paths_to, resolve_search
 
 
 REACTOME_CONCEPT = InterfaceType('ReactomeConcept')
@@ -296,6 +296,24 @@ async def resolve_reactome_autocomplete(_, info, query: str, limit: int = None) 
     :return: The auto-complete results.
     """
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.REACTOME,
+        limit=limit,
+    )
+
+
+@REACTOME_QUERY.field('search')
+async def resolve_reactome_search(_, info, query: str, limit: int = None) -> dict:
+    """
+    Resolve Reactome search query.
+    :param _: The parent object, not used.
+    :param info: The GraphQL resolve info.
+    :param query: The search query string.
+    :param limit: The maximum number of results to return.
+    :return: The search results.
+    """
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.REACTOME,

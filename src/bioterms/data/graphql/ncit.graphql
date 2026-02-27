@@ -38,6 +38,7 @@ type NcitConceptListResponse {
 type NcitQuery {
     ncitConcept(conceptId: String!): NcitConceptResponse
     autoComplete(query: String!, limit: Int): NcitConceptListResponse
+    search(query: String!, limit: Int): NcitConceptListResponse
 }
 
 extend type Query {

@@ -8,7 +8,7 @@ from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_concept_info_fields, resolve_concept_replaces, \
     resolve_concept_replaced_by, resolve_concept_children, resolve_concept_parents, \
     resolve_get_concept, resolve_concept_similar_concepts, resolve_concept_paths_to, \
-    resolve_auto_complete
+    resolve_auto_complete, resolve_search
 
 
 HPO_CONCEPT = ObjectType('HpoConcept')
@@ -162,6 +162,24 @@ async def resolve_hpo_autocomplete(_, info, query: str, limit: int = None) -> di
     :return: The auto-complete results as a dictionary.
     """
     return await resolve_auto_complete(
+        info=info,
+        query=query,
+        prefix=ConceptPrefix.HPO,
+        limit=limit,
+    )
+
+
+@HPO_QUERY.field('search')
+async def resolve_hpo_search(_, info, query: str, limit: int = None) -> dict:
+    """
+    Resolve HPO search query.
+    :param _: The GraphQL parent object, not used.
+    :param info: The GraphQL resolve info.
+    :param query: The search query string.
+    :param limit: The maximum number of results to return.
+    :return: The search results as a dictionary.
+    """
+    return await resolve_search(
         info=info,
         query=query,
         prefix=ConceptPrefix.HPO,

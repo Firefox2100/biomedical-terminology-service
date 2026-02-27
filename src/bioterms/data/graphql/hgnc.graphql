@@ -45,6 +45,7 @@ type HgncConceptListResponse {
 type HgncQuery {
     hgncConcept(conceptId: String!): HgncConceptResponse
     autoComplete(query: String!, limit: Int): HgncConceptListResponse
+    search(query: String!, limit: Int): HgncConceptListResponse
 }
 
 extend type Query {

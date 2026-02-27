@@ -40,6 +40,7 @@ type OhdsiConceptListResponse {
 type OhdsiQuery {
     ohdsiConcept(conceptId: String!): OhdsiConceptResponse
     autoComplete(query: String!, limit: Int): OhdsiConceptListResponse
+    search(query: String!, limit: Int): OhdsiConceptListResponse
 }
 
 extend type Query {

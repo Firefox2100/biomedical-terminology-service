@@ -7,7 +7,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
-from bioterms.embedding import ConceptTransformer
+from bioterms.embedding import ConceptTransformer, TextTransformer
 from .vector_db import VectorDatabase
 
 
@@ -259,9 +259,9 @@ class QdrantVectorDatabase(VectorDatabase):
         :return: A list of matching Concept instances.
         """
         collection_name = prefix.value
-        query_vector = self._embed_strings(
-            texts=[query],
-        )[0]
+        text_transformer = TextTransformer()
+
+        query_vector = text_transformer.embed_strings([query])[0]
 
         response = await self.client.query_points(
             collection_name=collection_name,

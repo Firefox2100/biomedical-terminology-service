@@ -37,6 +37,7 @@ type HgncSymbolConceptListResponse {
 type HgncSymbolQuery {
     geneConcept(conceptId: String!): HgncSymbolConceptResponse
     autoComplete(query: String!, limit: Int): HgncSymbolConceptListResponse
+    search(query: String!, limit: Int): HgncSymbolConceptListResponse
 }
 
 extend type Query {

@@ -105,6 +105,7 @@ type ReactomeConceptListResponse {
 type ReactomeQuery {
     reactomeConcept(conceptId: String!): ReactomeConceptResponse
     autoComplete(query: String!, limit: Int): ReactomeConceptListResponse
+    search(query: String!, limit: Int): ReactomeConceptListResponse
 }
 
 extend type Query {

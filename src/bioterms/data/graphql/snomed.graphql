@@ -42,6 +42,7 @@ type SnomedConceptListResponse {
 type SnomedQuery {
     snomedConcept(conceptId: String!): SnomedConceptResponse
     autoComplete(query: String!, limit: Int): SnomedConceptListResponse
+    search(query: String!, limit: Int): SnomedConceptListResponse
 }
 
 extend type Query {
