@@ -306,7 +306,7 @@ def create_app() -> FastAPI:
     async def http_exception_handler(request, exc):
         LOGGER.error('HTTP Exception: %s', exc)
 
-        report_exception(exc, request)
+        report_exception(exc)
 
         if request.url.path.startswith('/api/'):
             return await fastapi_http_exception_handler(request, exc)

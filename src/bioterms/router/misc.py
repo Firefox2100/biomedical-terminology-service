@@ -43,7 +43,6 @@ async def sitemap(request: Request,
                 changefreq: str = None,
                 priority: float = None,
                 lastmod: date = None,
-
                 ):
         url_el = SubElement(urlset, 'url')
         loc_el = SubElement(url_el, 'loc')
