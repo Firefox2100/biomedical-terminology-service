@@ -32,8 +32,8 @@ from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
-from bioterms.router import auto_complete_router, data_router, expand_router, map_router, \
-    misc_router, search_router, similarity_router, trace_router, ui_router
+from bioterms.router import CacheControlMiddleware, auto_complete_router, data_router, \
+    expand_router, map_router, misc_router, search_router, similarity_router, trace_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
@@ -258,6 +258,8 @@ def create_app() -> FastAPI:
         same_site='lax',
         https_only=CONFIG.use_https,
     )
+
+    app.add_middleware(CacheControlMiddleware)
 
     if CONFIG.enable_metrics:
         app.add_middleware(PytheusMiddlewareASGI)

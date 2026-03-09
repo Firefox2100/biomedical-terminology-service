@@ -5,6 +5,7 @@ import inspect
 from datetime import datetime, timezone
 import aiofiles
 import aiofiles.os
+import numpy as np
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
@@ -101,6 +102,7 @@ async def create_indexes(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     """
     vocabulary_module = get_vocabulary_module(prefix)
+    cache = get_active_cache()
 
     create_index_func = getattr(vocabulary_module, 'create_indexes', None)
     if create_index_func is None or not callable(create_index_func):
@@ -132,6 +134,8 @@ async def create_indexes(prefix: ConceptPrefix,
         if inspect.iscoroutine(result):
             await result
 
+    await cache.rotate_dataset_version()
+
 
 async def delete_vocabulary(prefix: ConceptPrefix,
                             cache: Cache = None,
@@ -148,6 +152,7 @@ async def delete_vocabulary(prefix: ConceptPrefix,
     :param vector_db: The vector database instance.
     """
     vocabulary_module = get_vocabulary_module(prefix)
+    cache = cache or get_active_cache()
 
     delete_func = getattr(vocabulary_module, 'delete_vocabulary_data', None)
     if delete_func is None or not callable(delete_func):
@@ -173,6 +178,8 @@ async def delete_vocabulary(prefix: ConceptPrefix,
         if inspect.iscoroutine(result):
             await result
 
+    await cache.rotate_dataset_version()
+
 
 async def load_vocabulary(prefix: ConceptPrefix,
                           drop_existing: bool = True,
@@ -191,6 +198,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     """
     vocabulary_module = get_vocabulary_module(prefix)
+    cache = cache or get_active_cache()
 
     if not check_files_exist(vocabulary_module.FILE_PATHS):
         raise ValueError(f'Vocabulary files for {prefix} not found. Are they downloaded?')
@@ -229,6 +237,8 @@ async def load_vocabulary(prefix: ConceptPrefix,
             cache = get_active_cache()
         await cache.purge()
 
+    await cache.rotate_dataset_version()
+
 
 async def embed_vocabulary(prefix: ConceptPrefix,
                            drop_existing: bool = True,
@@ -247,6 +257,7 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     :param vector_db: The vector database instance.
     """
     config = get_vocabulary_config(prefix)
+    cache = get_active_cache()
 
     if not offline:
         if doc_db is None:
@@ -298,6 +309,9 @@ async def embed_vocabulary(prefix: ConceptPrefix,
                 concepts=concept_iter(),
             ):
                 for concept_id, vector in batch:
+                    # Convert the vector to np array
+                    vector = np.array(vector, dtype=np.float32)
+
                     yield EmbeddingContainerV1(
                         concept_id=concept_id,
                         vector=vector,
@@ -305,6 +319,8 @@ async def embed_vocabulary(prefix: ConceptPrefix,
 
         embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
         await embedding_file.write(embed_iter())
+
+    await cache.rotate_dataset_version()
 
 
 async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
@@ -325,6 +341,8 @@ async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
         doc_db = await get_active_doc_db()
     if vector_db is None:
         vector_db = get_active_vector_db()
+
+    cache = get_active_cache()
 
     status = await get_vocabulary_status(
         prefix=prefix,
@@ -353,6 +371,8 @@ async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
         prefix=prefix,
         mapping=id_map,
     )
+
+    await cache.rotate_dataset_version()
 
 
 def get_vocabulary_license(prefix: ConceptPrefix) -> str | None:

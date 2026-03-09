@@ -106,6 +106,7 @@ async def calculate_similarity(method: SimilarityMethod,
     """
     similarity_module = get_similarity_module(method)
     similarity_config = get_similarity_method_config(method)
+    cache = get_active_cache()
 
     if similarity_threshold is None:
         similarity_threshold = similarity_config['defaultThreshold']
@@ -242,6 +243,8 @@ async def calculate_similarity(method: SimilarityMethod,
     finally:
         if offline and offline_file is not None:
             await offline_file.close()
+
+        await cache.rotate_dataset_version()
 
 
 async def get_similarity_status(prefix: ConceptPrefix,

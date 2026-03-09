@@ -129,6 +129,7 @@ async def delete_annotation(prefix_1: ConceptPrefix,
     :param graph_db: Optional GraphDatabase instance to use.
     """
     annotation_module = get_annotation_module(prefix_1, prefix_2)
+    cache = get_active_cache()
 
     delete_func = getattr(annotation_module, 'delete_annotation_data', None)
 
@@ -148,6 +149,8 @@ async def delete_annotation(prefix_1: ConceptPrefix,
         if inspect.iscoroutine(result):
             await result
 
+    await cache.rotate_dataset_version()
+
 
 async def load_annotation(prefix_1: ConceptPrefix,
                           prefix_2: ConceptPrefix,
@@ -162,6 +165,7 @@ async def load_annotation(prefix_1: ConceptPrefix,
     :param graph_db: Optional GraphDatabase instance to use.
     """
     annotation_module = get_annotation_module(prefix_1, prefix_2)
+    cache = get_active_cache()
 
     if not check_files_exist(annotation_module.FILE_PATHS):
         raise ValueError(f'Annotation files for {prefix_1} and {prefix_2} not found. '
@@ -185,6 +189,8 @@ async def load_annotation(prefix_1: ConceptPrefix,
     )
     if inspect.iscoroutine(result):
         await result
+
+    await cache.rotate_dataset_version()
 
 
 async def get_annotation_status(prefix_1: ConceptPrefix,

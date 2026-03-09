@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import redis.asyncio as redis
 from pydantic import ValidationError
 
@@ -177,6 +178,28 @@ class RedisCache(Cache):
             return value
 
         return None
+
+    async def rotate_dataset_version(self):
+        """
+        Rotate the dataset version in the cache. This is called when database is updated, and controls
+        whether the cached results in proxy are still valid or not.
+        """
+        await self.db.set('version:dataset', datetime.now(timezone.utc).isoformat())
+
+    async def get_dataset_last_modified(self) -> datetime:
+        """
+        Get the last modified timestamp of the dataset from the cache.
+        :return: The last modified timestamp of the dataset.
+        """
+        key = 'version:dataset'
+        value = await self.db.get(key)
+
+        if value is None:
+            await self.rotate_dataset_version()
+
+        value = await self.db.get(key)
+
+        return datetime.fromisoformat(value)
 
     async def purge(self):
         """

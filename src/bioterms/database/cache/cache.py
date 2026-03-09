@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import CacheDriverType, ConceptPrefix
@@ -91,6 +92,20 @@ class Cache(ABC):
         """
         Retrieve the site map string from the cache.
         :return: The site map string if it exists and is not expired, otherwise None
+        """
+
+    @abstractmethod
+    async def rotate_dataset_version(self):
+        """
+        Rotate the dataset version in the cache. This is called when database is updated, and controls
+        whether the cached results in proxy are still valid or not.
+        """
+
+    @abstractmethod
+    async def get_dataset_last_modified(self) -> datetime:
+        """
+        Get the last modified timestamp of the dataset from the cache.
+        :return: The last modified timestamp of the dataset.
         """
 
     @abstractmethod

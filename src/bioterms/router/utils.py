@@ -8,15 +8,18 @@ import hashlib
 import hmac
 import base64
 import importlib.resources as pkg_resources
-from typing import AsyncIterator
+from datetime import datetime
+from typing import AsyncIterator, Optional
 from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
-from fastapi import Request, Depends, HTTPException, status
+from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 
 from bioterms.etc.consts import CONFIG
-from bioterms.database import DocumentDatabase, get_active_doc_db
+from bioterms.database import DocumentDatabase, get_active_doc_db, get_active_cache
 
 
 _allowed_redirect_destinations = [
@@ -32,6 +35,72 @@ _allowed_redirect_regex = [
     )
 ]
 BEARER_SECURITY = HTTPBearer()
+
+
+class CacheControlMiddleware(BaseHTTPMiddleware):
+    def __init__(self,
+                 app: FastAPI,
+                 ):
+        super().__init__(app)
+
+    async def dispatch(self,
+                       request: Request,
+                       call_next: RequestResponseEndpoint,
+                       ) -> Response:
+        if request.method not in ('GET', 'HEAD'):
+            response = await call_next(request)
+            return response
+
+        cache = get_active_cache()
+        last_modified = None
+        etag = None
+
+        if request.url.path.startswith('/api/vocabularies') and not request.url.path.endswith('/random'):
+            last_modified = await cache.get_dataset_last_modified()
+            etag = hashlib.sha1(last_modified.isoformat().encode()).hexdigest()
+
+            if_not_match = request.headers.get('If-None-Match')
+            if if_not_match is not None:
+                etag_values = [v.strip() for v in if_not_match.split(',')]
+                if etag in etag_values or '*' in etag_values:
+                    return Response(
+                        status_code=status.HTTP_304_NOT_MODIFIED,
+                        headers={
+                            'ETag': etag,
+                            'Last-Modified': last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT'),
+                            'Cache-Control': f'public, max-age=86400, stale-while-revalidate=172800',
+                        }
+                    )
+
+            if_modified_since = request.headers.get('If-Modified-Since')
+            if if_modified_since is not None:
+                try:
+                    ims_date = datetime.strptime(if_modified_since, '%a, %d %b %Y %H:%M:%S GMT')
+                    if last_modified <= ims_date:
+                        return Response(
+                            status_code=status.HTTP_304_NOT_MODIFIED,
+                            headers={
+                                'ETag': etag,
+                                'Last-Modified': last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT'),
+                                'Cache-Control': f'public, max-age={config.max_age}' +
+                                                 (f', stale-while-revalidate={config.stale_while_revalidate}'
+                                                  if config.stale_while_revalidate is not None else ''),
+                            }
+                        )
+                except Exception:
+                    pass
+
+        response = await call_next(request)
+
+        if response.status_code != 200:
+            return response
+
+        if request.url.path.startswith('/api/vocabularies') and not request.url.path.endswith('/random'):
+            response.headers['Cache-Control'] = f'public, max-age=86400, stale-while-revalidate=172800'
+            response.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
+            response.headers['ETag'] = etag
+
+        return response
 
 
 async def response_generator(data_iter: AsyncIterator[BaseModel],

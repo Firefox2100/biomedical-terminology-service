@@ -11,3 +11,4 @@ from .search import search_router
 from .similarity import similarity_router
 from .trace import trace_router
 from .ui import ui_router
+from .utils import CacheControlMiddleware
