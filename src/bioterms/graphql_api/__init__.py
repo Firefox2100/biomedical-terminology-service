@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
+from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
 from bioterms.model.vocabulary_status import VocabularyStatus
@@ -50,6 +50,7 @@ async def get_context_value(request: Request,
     cache = get_active_cache()
     doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
+    vector_db = get_active_vector_db()
 
     data_loader = DataLoader(
         doc_db=doc_db,
@@ -61,6 +62,7 @@ async def get_context_value(request: Request,
         'cache': cache,
         'doc_db': doc_db,
         'graph_db': graph_db,
+        'vector_db': graph_db,
         'data_loader': data_loader,
     }
 

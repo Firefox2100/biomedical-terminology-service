@@ -2,6 +2,7 @@ import json
 import numpy as np
 import pandas as pd
 from qdrant_client import QdrantClient
+
 from config import cfg
 
 
