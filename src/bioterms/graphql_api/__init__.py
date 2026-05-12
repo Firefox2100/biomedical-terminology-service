@@ -62,7 +62,7 @@ async def get_context_value(request: Request,
         'cache': cache,
         'doc_db': doc_db,
         'graph_db': graph_db,
-        'vector_db': graph_db,
+        'vector_db': vector_db,
         'data_loader': data_loader,
     }
 
