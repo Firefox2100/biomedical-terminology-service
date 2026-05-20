@@ -22,6 +22,7 @@ from asgi_csrf import asgi_csrf
 from pytheus.exposition import generate_metrics
 from pytheus.middleware import PytheusMiddlewareASGI
 from fastmcp.utilities.lifespan import combine_lifespans
+from fhir.resources.operationoutcome import OperationOutcome, OperationOutcomeIssue
 
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
@@ -262,12 +263,15 @@ def create_app() -> FastAPI:
 
     @app.middleware('http')
     async def disable_cors_for_api(request, call_next):
-        if request.url.path.startswith('/api') or request.url.path.startswith('/mcp'):
+        if request.url.path.startswith('/api') or \
+            request.url.path.startswith('/mcp') or \
+            request.url.path.startswith('/fhir'):
             request.scope['cors_exempt'] = True
 
         response = await call_next(request)
 
-        if request.url.path.startswith('/api'):
+        if request.url.path.startswith('/api') or \
+            request.url.path.startswith('/fhir'):
             response.headers['Access-Control-Allow-Origin'] = '*'
 
         return response
@@ -316,6 +320,21 @@ def create_app() -> FastAPI:
         if request.url.path.startswith('/api/'):
             return await fastapi_http_exception_handler(request, exc)
 
+        if request.url.path.startswith('/fhir/'):
+            # FHIR requires returning a specialised error format
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=OperationOutcome(
+                    issue=[
+                        OperationOutcomeIssue(
+                            severity='error',
+                            code='exception',
+                            diagnostics=str(exc),
+                        )
+                    ]
+                ).model_dump(),
+            )
+
         if exc.status_code == 401:
             return RedirectResponse(
                 url=f'{request.url_for("get_login_page")}?'
@@ -350,7 +369,9 @@ def create_app() -> FastAPI:
         )
 
     def skip_paths(scope):
-        return scope['path'].startswith('/api/')
+        return scope['path'].startswith('/api/') \
+            or scope['path'].startswith('/mcp/') \
+            or scope['path'].startswith('/fhir/')
 
     app = asgi_csrf(
         app,
