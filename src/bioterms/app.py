@@ -21,6 +21,7 @@ from fastapi.exception_handlers import http_exception_handler as fastapi_http_ex
 from asgi_csrf import asgi_csrf
 from pytheus.exposition import generate_metrics
 from pytheus.middleware import PytheusMiddlewareASGI
+from fastmcp.utilities.lifespan import combine_lifespans
 
 from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
@@ -32,6 +33,7 @@ from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
 from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
+from bioterms.mcp_api import mcp
 from bioterms.router import CacheControlMiddleware, auto_complete_router, data_router, \
     expand_router, map_router, misc_router, search_router, similarity_router, trace_router, ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
@@ -130,6 +132,8 @@ def create_app() -> FastAPI:
                     release=__version__,
                 )
 
+    mcp_app = mcp.http_app(path='/')
+
     app = FastAPI(
         title='BioMedical Terminology Service',
         version=__version__,
@@ -185,7 +189,7 @@ def create_app() -> FastAPI:
         openapi_url=CONFIG.openapi_url,
         docs_url=CONFIG.docs_url,
         redoc_url=CONFIG.redoc_url,
-        lifespan=lifespan,
+        lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
     )
 
     app.add_middleware(
@@ -204,7 +208,7 @@ def create_app() -> FastAPI:
 
     @app.middleware('http')
     async def disable_cors_for_api(request, call_next):
-        if request.url.path.startswith('/api'):
+        if request.url.path.startswith('/api') or request.url.path.startswith('/mcp'):
             request.scope['cors_exempt'] = True
 
         response = await call_next(request)
@@ -279,6 +283,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_router)
 
     app.mount('/static', StaticFiles(directory=str(STATIC_FILE_PATH)), name='static')
+    app.mount('/mcp', mcp_app)
 
     @app.exception_handler(BtsError)
     async def bioterms_exception_handler(request: Request, exc: BtsError):
