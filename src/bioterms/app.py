@@ -192,31 +192,12 @@ def create_app() -> FastAPI:
         lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=(),
-        allow_credentials=True,
-        allow_methods=('GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'),
-        allow_headers=(
-            'Authorization',
-            'Content-Type',
-            'Accept',
-            'X-Requested-With',
-            'X-CSRF-Token',
-        ),
-    )
+    if CONFIG.enable_metrics:
+        app.add_middleware(PytheusMiddlewareASGI)
 
-    @app.middleware('http')
-    async def disable_cors_for_api(request, call_next):
-        if request.url.path.startswith('/api') or request.url.path.startswith('/mcp'):
-            request.scope['cors_exempt'] = True
-
-        response = await call_next(request)
-
-        if request.url.path.startswith('/api'):
-            response.headers['Access-Control-Allow-Origin'] = '*'
-
-        return response
+        @app.get('/metrics', response_class=PlainTextResponse, include_in_schema=False)
+        async def metrics_endpoint():
+            return generate_metrics()
 
     @app.middleware('http')
     async def csp_headers(request, call_next):
@@ -265,12 +246,31 @@ def create_app() -> FastAPI:
 
     app.add_middleware(CacheControlMiddleware)
 
-    if CONFIG.enable_metrics:
-        app.add_middleware(PytheusMiddlewareASGI)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=(),
+        allow_credentials=True,
+        allow_methods=('GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'),
+        allow_headers=(
+            'Authorization',
+            'Content-Type',
+            'Accept',
+            'X-Requested-With',
+            'X-CSRF-Token',
+        ),
+    )
 
-        @app.get('/metrics', response_class=PlainTextResponse, include_in_schema=False)
-        async def metrics_endpoint():
-            return generate_metrics()
+    @app.middleware('http')
+    async def disable_cors_for_api(request, call_next):
+        if request.url.path.startswith('/api') or request.url.path.startswith('/mcp'):
+            request.scope['cors_exempt'] = True
+
+        response = await call_next(request)
+
+        if request.url.path.startswith('/api'):
+            response.headers['Access-Control-Allow-Origin'] = '*'
+
+        return response
 
     app.include_router(auto_complete_router)
     app.include_router(data_router)
