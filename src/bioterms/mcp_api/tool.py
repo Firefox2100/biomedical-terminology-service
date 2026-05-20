@@ -1,4 +1,5 @@
 from enum import StrEnum
+from mcp.types import ToolAnnotations
 from fastmcp.dependencies import Depends
 
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
@@ -26,7 +27,15 @@ class OntologyPrefix(StrEnum):
     SNOMED = 'snomed'
 
 
-@mcp.tool
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title='Auto-complete',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def auto_complete(vocabulary: ConceptPrefix,
                         query: str,
                         limit: int = None,
@@ -54,7 +63,15 @@ async def auto_complete(vocabulary: ConceptPrefix,
     return [concept async for concept in concepts_iter]
 
 
-@mcp.tool
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title='Expand Ontology',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def expand_ontology(ontology: OntologyPrefix,
                           concept_ids: list[str],
                           depth: int = None,
@@ -85,7 +102,15 @@ async def expand_ontology(ontology: OntologyPrefix,
     return [term async for term in expand_iter]
 
 
-@mcp.tool
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title='Map Concepts',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def map_concepts(source_vocabulary: ConceptPrefix,
                        target_vocabulary: ConceptPrefix,
                        concept_ids: list[str],
@@ -119,7 +144,15 @@ async def map_concepts(source_vocabulary: ConceptPrefix,
     return [term async for term in map_iter]
 
 
-@mcp.tool
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title='Search Vocabulary',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def search_vocabulary(vocabulary: ConceptPrefix,
                             query: str,
                             limit: int = 10,
@@ -155,7 +188,15 @@ async def search_vocabulary(vocabulary: ConceptPrefix,
     return [concept async for concept in concepts_iter]
 
 
-@mcp.tool
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title='Find Similar Concepts',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def get_similar_concepts(vocabulary: ConceptPrefix,
                                concept_ids: list[str],
                                threshold: float = 1.0,
@@ -196,7 +237,15 @@ async def get_similar_concepts(vocabulary: ConceptPrefix,
     return [term async for term in similarity_iter]
 
 
-@mcp.tool
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title='Translate Concept to Constraints',
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 async def translate_concepts_to_constraints(vocabulary: ConceptPrefix,
                                             original_concepts: list[str],
                                             constraint_concepts: list[str],
