@@ -98,8 +98,8 @@ def batch_iterable(seq: Iterable[T] | list[T],
                     progress.advance(task)
         return
 
-    if not isinstance(list, Iterable):
-        raise TypeError('list must be an iterable')
+    if not isinstance(seq, Iterable):
+        raise TypeError('seq must be an iterable')
 
     it = iter(seq)
 
@@ -316,7 +316,7 @@ async def download_rf2(release_url: str,
     """
     with tempfile.TemporaryDirectory() as temp_folder:
         temp_id = str(uuid.uuid4())
-        zip_path = os.path.join(temp_folder.name, f'{temp_id}.zip')
+        zip_path = os.path.join(temp_folder, f'{temp_id}.zip')
 
         await download_file(
             url=release_url,

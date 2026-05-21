@@ -1,0 +1,85 @@
+name: bts-dependencies
+services:
+  # Neo4j as the graph database
+  neo4j:
+    image: neo4j:2026.04.0
+    restart: unless-stopped
+    container_name: neo4j
+    healthcheck:
+      test: [ "CMD-SHELL", "cypher-shell -u $${NEO4J_AUTH%%/*} -p $${NEO4J_AUTH##*/} 'RETURN 1'" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ports:
+      - "8901:7474"   # HTTP
+      - "8902:7687"   # Bolt
+    environment:
+      # The full APOC plugin is required for advanced query and dynamic insertion capabilities
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_PLUGINS=["apoc", "graph-data-science"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_plugins:/plugins
+
+  # MongoDB as the primary document database
+  mongodb:
+    image: mongo:8.2.9
+    restart: unless-stopped
+    container_name: mongodb
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ports:
+      - "8903:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  # Redis as the caching layer
+  redis:
+    image: redis:8.6
+    restart: unless-stopped
+    container_name: redis
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "8904:6379"
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+
+  # Qdrant as the vector database
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    container_name: qdrant
+    # Qdrant explicitly states that they do not support health checks, and will not include
+    # utilities for that in the image. If needed, rely on the docker orchestration platform's
+    # built-in health check mechanisms.
+    ports:
+      - "8905:6333"
+      - "8906:6334"
+    configs:
+      - source: qdrant_config
+        target: /qdrant/config/production.yaml
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+configs:
+  qdrant_config:
+    content: |
+      log_level: INFO
+
+volumes:
+  neo4j_data:
+  neo4j_plugins:
+  mongo_data:
+  redis_data:
+  qdrant_data:
