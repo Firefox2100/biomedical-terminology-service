@@ -39,7 +39,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
     ensure_data_directory()
 
-    annotation_url = 'https://ftp.ensembl.org/pub/release-113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz'
+    annotation_url = 'https://ftp.ensembl.org/pub/release-115/gtf/homo_sapiens/Homo_sapiens.GRCh38.115.gtf.gz'
     gzip_path = os.path.join(CONFIG.data_dir, 'ensembl/homo-sapien.gz')
 
     try:
