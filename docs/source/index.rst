@@ -8,6 +8,7 @@ The BioMedical Terminology Service (BTS) is a comprehensive platform designed to
     :maxdepth: 2
     :caption: Contents:
 
+    about
     installation
     build-database
     vocabularies
