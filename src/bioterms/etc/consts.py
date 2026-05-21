@@ -99,6 +99,10 @@ class Settings(BaseSettings):
         '/redoc',
         description='URL path for the ReDoc documentation',
     )
+    fhir_canonical_url: str = Field(
+        'https://your.deployment.com/fhir',
+        description='Canonical URL for FHIR resources',
+    )
     environment: ServiceEnvironment = Field(
         ServiceEnvironment.DEVELOPMENT,
         description='The environment in which the service is running',

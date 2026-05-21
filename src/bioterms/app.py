@@ -164,6 +164,10 @@ def create_app() -> FastAPI:
                 'description': 'Endpoints for expanding biomedical terms to their descendants.',
             },
             {
+                'name': 'FHIR',
+                'description': 'FHIR compatible API endpoints for interoperability as a FHIR terminology server.'
+            },
+            {
                 'name': 'Mapping',
                 'description': 'Endpoints for mapping biomedical terms between '
                                'different vocabularies.',
