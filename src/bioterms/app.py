@@ -36,7 +36,8 @@ from bioterms.similarity import get_similarity_status
 from bioterms.graphql_api import create_graphql_app
 from bioterms.mcp_api import mcp
 from bioterms.router import CacheControlMiddleware, auto_complete_router, data_router, \
-    expand_router, map_router, misc_router, search_router, similarity_router, trace_router, ui_router
+    expand_router, fhir_router, map_router, misc_router, search_router, similarity_router, trace_router, \
+    ui_router
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
@@ -283,6 +284,7 @@ def create_app() -> FastAPI:
     app.include_router(auto_complete_router)
     app.include_router(data_router)
     app.include_router(expand_router)
+    app.include_router(fhir_router)
     app.include_router(map_router)
     app.include_router(misc_router)
     app.include_router(search_router)

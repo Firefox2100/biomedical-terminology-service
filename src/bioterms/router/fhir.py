@@ -122,6 +122,7 @@ async def _lookup_fhir_code(base_url: str,
                             doc_db: DocumentDatabase,
                             properties: Optional[list[str]] = None,
                             ):
+    base_url += '/CodeSystem/'
     if not system.startswith(base_url):
         return JSONResponse(
             status_code=422,
@@ -182,6 +183,7 @@ async def _validate_fhir_code(base_url: str,
                               code: str,
                               doc_db: DocumentDatabase,
                               ):
+    base_url += '/CodeSystem/'
     if not system.startswith(base_url):
         return JSONResponse(
             status_code=422,
@@ -292,7 +294,7 @@ async def _validate_fhir_code(base_url: str,
     )
 
 
-@fhir_router.get('/metadata', response_model=CapabilityStatement)
+@fhir_router.get('/metadata', response_model=CapabilityStatement, response_model_exclude_none=True)
 async def get_fhir_metadata():
     statement = CapabilityStatement(
         status='active',
@@ -347,7 +349,7 @@ async def get_fhir_metadata():
     return statement
 
 
-@fhir_router.get('/CodeSystem', response_model=Bundle)
+@fhir_router.get('/CodeSystem', response_model=Bundle, response_model_exclude_none=True)
 async def get_fhir_code_systems(doc_db: DocumentDatabase = Depends(get_active_doc_db),
                                 graph_db: GraphDatabase = Depends(get_active_graph_db),
                                 ):
@@ -386,54 +388,13 @@ async def get_fhir_code_systems(doc_db: DocumentDatabase = Depends(get_active_do
 
 
 @fhir_router.get(
-    '/CodeSystem/{prefix}',
-    response_model=CodeSystem,
-    responses={
-        404: {'model': OperationOutcome}
-    }
-)
-async def get_fhir_code_system(prefix: ConceptPrefix,
-                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                               graph_db: GraphDatabase = Depends(get_active_graph_db),
-                               ):
-    base_url = CONFIG.fhir_canonical_url.strip('/')
-    vocab_status = await get_vocabulary_status(
-        prefix,
-        doc_db=doc_db,
-        graph_db=graph_db,
-    )
-
-    if not vocab_status.loaded:
-        return JSONResponse(
-            status_code=404,
-            content=OperationOutcome(
-                issue=[
-                    OperationOutcomeIssue(
-                        severity='error',
-                        code='not-found',
-                        diagnostics=f'CodeSystem/{prefix.value} not found'
-                    )
-                ]
-            ).model_dump(),
-        )
-
-    return CodeSystem(
-        id=vocab_status.prefix.value,
-        url=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
-        name=vocab_status.name,
-        title=vocab_status.name,
-        status='active',
-        content='fragment',
-    )
-
-
-@fhir_router.get(
     '/CodeSystem/$lookup',
     response_model=Parameters,
     responses={
         404: {'model': OperationOutcome},
         422: {'model': OperationOutcome},
-    }
+    },
+    response_model_exclude_none=True
 )
 async def lookup_fhir_code(system: str = Query(..., description='The code system to lookup in.'),
                            code: str = Query(..., description='The code to lookup.'),
@@ -456,7 +417,8 @@ async def lookup_fhir_code(system: str = Query(..., description='The code system
     responses={
         404: {'model': OperationOutcome},
         422: {'model': OperationOutcome},
-    }
+    },
+    response_model_exclude_none=True
 )
 async def lookup_fhir_code_post(search_params: Parameters,
                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
@@ -518,7 +480,50 @@ async def lookup_fhir_code_post(search_params: Parameters,
     )
 
 
-@fhir_router.get('/CodeSystem/$validate-code', response_model=Parameters)
+@fhir_router.get(
+    '/CodeSystem/{prefix}',
+    response_model=CodeSystem,
+    responses={
+        404: {'model': OperationOutcome}
+    },
+    response_model_exclude_none=True
+)
+async def get_fhir_code_system(prefix: ConceptPrefix,
+                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                               graph_db: GraphDatabase = Depends(get_active_graph_db),
+                               ):
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+    vocab_status = await get_vocabulary_status(
+        prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+
+    if not vocab_status.loaded:
+        return JSONResponse(
+            status_code=404,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='not-found',
+                        diagnostics=f'CodeSystem/{prefix.value} not found'
+                    )
+                ]
+            ).model_dump(),
+        )
+
+    return CodeSystem(
+        id=vocab_status.prefix.value,
+        url=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
+        name=vocab_status.name,
+        title=vocab_status.name,
+        status='active',
+        content='fragment',
+    )
+
+
+@fhir_router.get('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
 async def validate_fhir_code(system: str = Query(..., description='The code system to validate against.'),
                              code: str = Query(..., description='The code to validate.'),
                              doc_db: DocumentDatabase = Depends(get_active_doc_db),
@@ -532,7 +537,7 @@ async def validate_fhir_code(system: str = Query(..., description='The code syst
     )
 
 
-@fhir_router.post('/CodeSystem/$validate-code', response_model=Parameters)
+@fhir_router.post('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
 async def validate_fhir_code_post(search_params: Parameters,
                                   doc_db: DocumentDatabase = Depends(get_active_doc_db),
                                   ):
