@@ -30,6 +30,7 @@ def get_vocabulary_config(prefix: ConceptPrefix) -> dict:
         'similarityMethods': vocabulary_module.SIMILARITY_METHODS,
         'filePaths': vocabulary_module.FILE_PATHS,
         'conceptClass': vocabulary_module.CONCEPT_CLASS,
+        'conceptTypes': vocabulary_module.CONCEPT_TYPES,
     }
 
 

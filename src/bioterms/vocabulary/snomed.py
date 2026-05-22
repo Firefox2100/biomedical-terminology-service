@@ -42,6 +42,7 @@ FILE_PATHS: list[str] = [
 ]
 TIMESTAMP_FILE = 'snomed/.timestamp'
 CONCEPT_CLASS = SnomedConcept
+CONCEPT_TYPES = []
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):

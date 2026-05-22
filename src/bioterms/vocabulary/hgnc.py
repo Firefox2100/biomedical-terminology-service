@@ -27,6 +27,7 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'hgnc/.timestamp'
 CONCEPT_CLASS = HgncConcept
+CONCEPT_TYPES = []
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):

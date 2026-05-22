@@ -28,6 +28,7 @@ SIMILARITY_METHODS = [
 FILE_PATHS = ['hpo/hp.owl']
 TIMESTAMP_FILE = 'hpo/.timestamp'
 CONCEPT_CLASS = Concept
+CONCEPT_TYPES = []
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -57,7 +58,6 @@ def _construct_hpo_concept(hpo_class: ThingClass) -> CONCEPT_CLASS:
     """
     concept = CONCEPT_CLASS(
         prefix=VOCABULARY_PREFIX,
-        conceptTypes=[],
         conceptId=hpo_class.name.split('_')[-1],
         label=hpo_class.label[0]
         if hasattr(hpo_class, 'label') and hpo_class.label

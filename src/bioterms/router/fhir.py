@@ -6,12 +6,13 @@ from fhir.resources.capabilitystatement import CapabilityStatement, CapabilitySt
     CapabilityStatementRestResource, CapabilityStatementRestResourceInteraction, \
     CapabilityStatementRestResourceOperation, CapabilityStatementRestResourceSearchParam
 from fhir.resources.codesystem import CodeSystem
-from fhir.resources.bundle import Bundle, BundleEntry
+from fhir.resources.bundle import Bundle, BundleEntry, BundleEntrySearch
 from fhir.resources.operationoutcome import OperationOutcome, OperationOutcomeIssue
 from fhir.resources.parameters import Parameters, ParametersParameter
 from fhir.resources.codeableconcept import CodeableConcept
 from fhir.resources.coding import Coding
 from fhir.resources.extension import Extension
+from fhir.resources.valueset import ValueSet, ValueSetCompose, ValueSetComposeInclude
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus
@@ -134,7 +135,7 @@ async def _lookup_fhir_code(base_url: str,
                         diagnostics=f'Invalid code system: {system}'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(exclude_none=True),
         )
 
     try:
@@ -150,7 +151,7 @@ async def _lookup_fhir_code(base_url: str,
                         diagnostics=f'Code system not found: {system}'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(exclude_none=True),
         )
 
     vocab_config = get_vocabulary_config(prefix)
@@ -170,7 +171,7 @@ async def _lookup_fhir_code(base_url: str,
                         diagnostics=f'Concept not found: {code}'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(exclude_none=True),
         )
 
     concept = concepts[0]
@@ -211,7 +212,7 @@ async def _validate_fhir_code(base_url: str,
                         diagnostics=f'Code system not found: {system}'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(exclude_none=True),
         )
 
     vocab_config = get_vocabulary_config(prefix)
@@ -448,7 +449,7 @@ async def lookup_fhir_code_post(search_params: Parameters,
                         diagnostics='Cannot use both coding and code/system'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(exclude_none=True),
         )
 
     if not coding and not (code and system):
@@ -477,49 +478,6 @@ async def lookup_fhir_code_post(search_params: Parameters,
         system=system_input,
         code=code_input,
         doc_db=doc_db,
-    )
-
-
-@fhir_router.get(
-    '/CodeSystem/{prefix}',
-    response_model=CodeSystem,
-    responses={
-        404: {'model': OperationOutcome}
-    },
-    response_model_exclude_none=True
-)
-async def get_fhir_code_system(prefix: ConceptPrefix,
-                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                               graph_db: GraphDatabase = Depends(get_active_graph_db),
-                               ):
-    base_url = CONFIG.fhir_canonical_url.strip('/')
-    vocab_status = await get_vocabulary_status(
-        prefix,
-        doc_db=doc_db,
-        graph_db=graph_db,
-    )
-
-    if not vocab_status.loaded:
-        return JSONResponse(
-            status_code=404,
-            content=OperationOutcome(
-                issue=[
-                    OperationOutcomeIssue(
-                        severity='error',
-                        code='not-found',
-                        diagnostics=f'CodeSystem/{prefix.value} not found'
-                    )
-                ]
-            ).model_dump(),
-        )
-
-    return CodeSystem(
-        id=vocab_status.prefix.value,
-        url=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
-        name=vocab_status.name,
-        title=vocab_status.name,
-        status='active',
-        content='fragment',
     )
 
 
@@ -566,7 +524,7 @@ async def validate_fhir_code_post(search_params: Parameters,
                         diagnostics='Cannot use both coding and code/system'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(exclude_none=True),
         )
 
     if not coding and not (code and system):
@@ -595,4 +553,166 @@ async def validate_fhir_code_post(search_params: Parameters,
         system=system_input,
         code=code_input,
         doc_db=doc_db,
+    )
+
+
+@fhir_router.get(
+    '/CodeSystem/{prefix}',
+    response_model=CodeSystem,
+    responses={
+        404: {'model': OperationOutcome}
+    },
+    response_model_exclude_none=True
+)
+async def get_fhir_code_system(prefix: ConceptPrefix,
+                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                               graph_db: GraphDatabase = Depends(get_active_graph_db),
+                               ):
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+    vocab_status = await get_vocabulary_status(
+        prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+
+    if not vocab_status.loaded:
+        return JSONResponse(
+            status_code=404,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='not-found',
+                        diagnostics=f'CodeSystem/{prefix.value} not found'
+                    )
+                ]
+            ).model_dump(exclude_none=True),
+        )
+
+    return CodeSystem(
+        id=vocab_status.prefix.value,
+        url=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
+        name=vocab_status.name,
+        title=vocab_status.name,
+        status='active',
+        content='fragment',
+    )
+
+
+@fhir_router.get('/ValueSet', response_model=Bundle)
+async def get_fhir_value_sets(doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                              graph_db: GraphDatabase = Depends(get_active_graph_db),
+                              ):
+    value_sets = []
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+
+    for prefix in ConceptPrefix:
+        vocab_status = await get_vocabulary_status(
+            prefix,
+            doc_db=doc_db,
+            graph_db=graph_db,
+        )
+
+        if vocab_status.loaded:
+            value_sets.append(ValueSet(
+                id=f'{prefix.value}',
+                url=f'{base_url}/ValueSet/{prefix.value}',
+                name=f'{prefix.value}-all',
+                title=vocab_status.name,
+                status='active',
+                date=datetime.now(tz=timezone.utc),
+                description=f'All concepts in the {vocab_status.name} code system',
+                compose=ValueSetCompose(
+                    include=[
+                        ValueSetComposeInclude(
+                            system=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
+                        ),
+                    ],
+                ),
+            ))
+
+            # TODO: Add other sub sets from ConceptType
+            # TODO: Handle OHDSI separately, as it contains domains and multiple vocabularies
+
+    bundle = Bundle(
+        type='searchset',
+        total=len(value_sets),
+        entry=[
+            BundleEntry(
+                fullUrl=f'{base_url}/ValueSet/{vs.id}',
+                search=BundleEntrySearch(
+                    mode='match',
+                ),
+                resource=vs,
+            ) for vs in value_sets
+        ],
+    )
+
+    return bundle
+
+
+@fhir_router.get('/ValueSet/{value_set_id}', response_model=ValueSet)
+async def get_fhir_value_set(value_set_id: str,
+                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             ):
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+
+    for prefix in ConceptPrefix:
+        if value_set_id.startswith(prefix.value):
+            # Belong to this prefix
+            vocab_status = await get_vocabulary_status(
+                prefix,
+                doc_db=doc_db,
+                graph_db=graph_db,
+            )
+            if not vocab_status.loaded:
+                return JSONResponse(
+                    status_code=404,
+                    content=OperationOutcome(
+                        issue=[
+                            OperationOutcomeIssue(
+                                severity='error',
+                                code='not-found',
+                                diagnostics=f'ValueSet/{prefix.value} not found'
+                            )
+                        ]
+                    ).model_dump(exclude_none=True),
+                )
+
+            if value_set_id == prefix.value:
+                # The "all" valueset
+                return ValueSet(
+                    id=f'{prefix.value}',
+                    url=f'{base_url}/ValueSet/{prefix.value}',
+                    name=f'{prefix.value}-all',
+                    title=vocab_status.name,
+                    status='active',
+                    date=datetime.now(tz=timezone.utc),
+                    description=f'All concepts in the {vocab_status.name} code system',
+                    compose=ValueSetCompose(
+                        include=[
+                            ValueSetComposeInclude(
+                                system=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
+                            ),
+                        ],
+                    ),
+                )
+
+                # TODO: Handle fetching other subsets
+
+            break
+
+    # Unknown value set ID
+    return JSONResponse(
+        status_code=404,
+        content=OperationOutcome(
+            issue=[
+                OperationOutcomeIssue(
+                    severity='error',
+                    code='not-found',
+                    diagnostics=f'ValueSet/{value_set_id} not found'
+                )
+            ]
+        ).model_dump(exclude_none=True),
     )

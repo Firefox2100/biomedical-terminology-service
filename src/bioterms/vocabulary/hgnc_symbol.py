@@ -29,6 +29,7 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'hgnc/.timestamp'
 CONCEPT_CLASS = Concept
+CONCEPT_TYPES = []
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,

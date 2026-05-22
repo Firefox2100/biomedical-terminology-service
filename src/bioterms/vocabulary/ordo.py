@@ -28,6 +28,7 @@ SIMILARITY_METHODS = [
 FILE_PATHS = ['ordo/ordo_orphanet.owl']
 TIMESTAMP_FILE = 'ordo/.timestamp'
 CONCEPT_CLASS = Concept
+CONCEPT_TYPES = []
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -61,7 +62,6 @@ def _construct_ordo_concept(ordo_class: ThingClass) -> Concept:
     """
     concept = CONCEPT_CLASS(
         prefix=VOCABULARY_PREFIX,
-        conceptTypes=[],
         conceptId=ordo_class.name.split('_')[-1],
         label=ordo_class.label[0]
         if hasattr(ordo_class, 'label') and ordo_class.label
