@@ -28,6 +28,7 @@ SIMILARITY_METHODS = [
 FILE_PATHS = ['ncit/thesaurus.txt']
 TIMESTAMP_FILE = 'ncit/.timestamp'
 CONCEPT_CLASS = Concept
+CONCEPT_TYPES = []
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):

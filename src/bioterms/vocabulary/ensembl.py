@@ -27,6 +27,12 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'ensembl/.timestamp'
 CONCEPT_CLASS = EnsemblConcept
+CONCEPT_TYPES = [
+    ConceptType.GENE,
+    ConceptType.TRANSCRIPT,
+    ConceptType.EXON,
+    ConceptType.PROTEIN,
+]
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):

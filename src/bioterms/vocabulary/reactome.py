@@ -32,6 +32,11 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = ReactomeConcept
+CONCEPT_TYPES = [
+    ConceptType.PATHWAY,
+    ConceptType.REACTION,
+    ConceptType.GENE,
+]
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):

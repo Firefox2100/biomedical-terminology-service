@@ -29,6 +29,7 @@ SIMILARITY_METHODS = [
 FILE_PATHS = ['omim/omim.csv']
 TIMESTAMP_FILE = 'omim/.timestamp'
 CONCEPT_CLASS = Concept
+CONCEPT_TYPES = []
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):

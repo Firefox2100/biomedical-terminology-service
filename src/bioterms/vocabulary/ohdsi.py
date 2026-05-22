@@ -33,6 +33,7 @@ FILE_PATHS: list[str] = [
 ]
 TIMESTAMP_FILE = 'ohdsi/.timestamp'
 CONCEPT_CLASS = OhdsiConcept
+CONCEPT_TYPES = []
 
 
 _CANONICAL_RELATIONSHIP_CACHE: dict[str, str] = {}
