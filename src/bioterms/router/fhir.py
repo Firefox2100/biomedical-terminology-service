@@ -9,6 +9,9 @@ from fhir.resources.codesystem import CodeSystem
 from fhir.resources.bundle import Bundle, BundleEntry
 from fhir.resources.operationoutcome import OperationOutcome, OperationOutcomeIssue
 from fhir.resources.parameters import Parameters, ParametersParameter
+from fhir.resources.codeableconcept import CodeableConcept
+from fhir.resources.coding import Coding
+from fhir.resources.extension import Extension
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus
@@ -162,7 +165,7 @@ async def _lookup_fhir_code(base_url: str,
                 issue=[
                     OperationOutcomeIssue(
                         severity='error',
-                        code='not-found',
+                        code='code-invalid',
                         diagnostics=f'Concept not found: {code}'
                     )
                 ]
@@ -172,6 +175,121 @@ async def _lookup_fhir_code(base_url: str,
     concept = concepts[0]
 
     return concept_to_parameters(concept, properties)
+
+
+async def _validate_fhir_code(base_url: str,
+                              system: str,
+                              code: str,
+                              doc_db: DocumentDatabase,
+                              ):
+    if not system.startswith(base_url):
+        return JSONResponse(
+            status_code=422,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='invalid',
+                        diagnostics=f'Invalid code system: {system}'
+                    )
+                ]
+            )
+        )
+
+    try:
+        prefix = ConceptPrefix(system[len(base_url):])
+    except ValueError:
+        return JSONResponse(
+            status_code=404,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='not-found',
+                        diagnostics=f'Code system not found: {system}'
+                    )
+                ]
+            ).model_dump(),
+        )
+
+    vocab_config = get_vocabulary_config(prefix)
+    concepts = await doc_db.get_terms_by_ids(
+        prefix=prefix,
+        concept_ids=[code],
+        model_class=vocab_config['conceptClass'],
+    )
+    if not concepts:
+        return Parameters(
+            parameter=[
+                ParametersParameter(
+                    name='result',
+                    valueBoolean=False,
+                ),
+                ParametersParameter(
+                    name='system',
+                    valueUri=system,
+                ),
+                ParametersParameter(
+                    name='code',
+                    valueCode=code,
+                ),
+                ParametersParameter(
+                    name='message',
+                    valueString=f"Unknown code '{code}' in the CodeSystem '{system}'",
+                ),
+                ParametersParameter(
+                    name='issues',
+                    resource=OperationOutcome(
+                        issue=[
+                            OperationOutcomeIssue(
+                                severity='error',
+                                code='code-invalid',
+                                details=CodeableConcept(
+                                    text=f"Unknown code '{code}' in the CodeSystem '{system}'",
+                                    coding=[
+                                        Coding(
+                                            system='http://hl7.org/fhir/tools/CodeSystem/tx-issue-type',
+                                            code='invalid-code',
+                                        ),
+                                    ],
+                                ),
+                                expression=[
+                                    'code',
+                                ],
+                                extension=[
+                                    Extension(
+                                        url='http://hl7.org/fhir/StructureDefinition/operationoutcome-message-id',
+                                        valueString='Unknown_Code_in_Version',
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        )
+
+    concept = concepts[0]
+    return Parameters(
+        parameter=[
+            ParametersParameter(
+                name='result',
+                valueBoolean=True,
+            ),
+            ParametersParameter(
+                name='system',
+                valueUri=f'{base_url}/CodeSystem/{concept.prefix.value}',
+            ),
+            ParametersParameter(
+                name='code',
+                valueCode=concept.concept_id,
+            ),
+            ParametersParameter(
+                name='display',
+                valueString=concept.label,
+            ),
+        ]
+    )
 
 
 @fhir_router.get('/metadata', response_model=CapabilityStatement)
@@ -393,6 +511,81 @@ async def lookup_fhir_code_post(search_params: Parameters,
         system_input = system.valueUri
 
     return await _lookup_fhir_code(
+        base_url=base_url,
+        system=system_input,
+        code=code_input,
+        doc_db=doc_db,
+    )
+
+
+@fhir_router.get('/CodeSystem/$validate-code', response_model=Parameters)
+async def validate_fhir_code(system: str = Query(..., description='The code system to validate against.'),
+                             code: str = Query(..., description='The code to validate.'),
+                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                             ):
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+    return await _validate_fhir_code(
+        base_url=base_url,
+        system=system,
+        code=code,
+        doc_db=doc_db,
+    )
+
+
+@fhir_router.post('/CodeSystem/$validate-code', response_model=Parameters)
+async def validate_fhir_code_post(search_params: Parameters,
+                                  doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                  ):
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+    coding = next((
+        p for p in (search_params.parameter or [])
+        if p.name == 'coding' and p.valueCoding is not None
+    ), None)
+    code = next((
+        p for p in (search_params.parameter or [])
+        if p.name == 'code' and p.valueCode is not None
+    ))
+    system = next((
+        p for p in (search_params.parameter or [])
+        if p.name == 'system' and p.valueCode is not None
+    ))
+
+    if coding and (code or system):
+        return JSONResponse(
+            status_code=422,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='invalid',
+                        diagnostics='Cannot use both coding and code/system'
+                    )
+                ]
+            ).model_dump(),
+        )
+
+    if not coding and not (code and system):
+        return JSONResponse(
+            status_code=422,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='invalid',
+                        diagnostics='Must provide coding or code and system'
+                    )
+                ]
+            )
+        )
+
+    if coding:
+        code_input = coding.valueCoding.code
+        system_input = coding.valueCoding.system
+    else:
+        code_input = code.valueCode
+        system_input = system.valueUri
+
+    return await _validate_fhir_code(
         base_url=base_url,
         system=system_input,
         code=code_input,
