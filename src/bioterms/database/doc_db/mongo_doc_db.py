@@ -264,18 +264,21 @@ class MongoDocumentDatabase(DocumentDatabase):
 
     async def save_terms(self,
                          terms: list[Concept],
+                         no_upsert: bool = False
                          ):
         """
         Save a list of terms into the document database.
         :param terms: A list of Concept instances to save.
-            slow, or you are building on a system to port the data somewhere else later.
+        :param no_upsert: Force direct insert. The caller must ensure that there is no existing data that
+            may be a duplicate, or it will fail from the unique index
         """
-        existing_concept_ids: set[str] = set()
         collection = self.db[f'{terms[0].prefix.value}']
+        existing_concept_ids: set[str] = set()
 
-        result = collection.find({}, {'conceptId': 1})
-        async for doc in result:
-            existing_concept_ids.add(doc['conceptId'])
+        if not no_upsert:
+            result = collection.find({}, {'conceptId': 1})
+            async for doc in result:
+                existing_concept_ids.add(doc['conceptId'])
 
         with pymongo.timeout(None):
             with ProcessPoolExecutor(
@@ -286,6 +289,21 @@ class MongoDocumentDatabase(DocumentDatabase):
                         concepts=batch,
                         executor=executor,
                     )
+
+                    if no_upsert:
+                        new_docs = {
+                            c.concept_id: c.model_dump(exclude_none=True)
+                            for c in batch
+                        }
+
+                        for concept_id, ngrams, search_text in extra_data:
+                            if concept_id in new_docs:
+                                new_docs[concept_id]['nGrams'] = ngrams
+                                new_docs[concept_id]['searchText'] = search_text
+
+                        if new_docs:
+                            await collection.insert_many(new_docs.values())
+                        continue
 
                     existing_docs: dict[str, dict] = {}
                     new_docs: dict[str, dict] = {}

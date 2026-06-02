@@ -160,7 +160,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         verbose_print('Saving HPO concepts and graph to databases')
 
         await doc_db.save_terms(
-            terms=concepts
+            terms=concepts,
+            no_upsert=True,
         )
 
         await graph_db.save_vocabulary_graph(

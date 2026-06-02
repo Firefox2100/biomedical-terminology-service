@@ -71,10 +71,13 @@ class DocumentDatabase(ABC):
     @abstractmethod
     async def save_terms(self,
                          terms: list[Concept],
+                         no_upsert: bool = False
                          ):
         """
         Save a list of terms into the document database.
         :param terms: A list of Concept instances to save.
+        :param no_upsert: Force direct insert. The caller must ensure that there is no existing data that
+            may be a duplicate, or it will fail from the unique index
         """
 
     @abstractmethod

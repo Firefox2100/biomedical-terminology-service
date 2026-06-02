@@ -551,6 +551,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
         await doc_db.save_terms(
             terms=concepts,
+            no_upsert=True,
         )
         await graph_db.save_vocabulary_graph(
             concepts=concepts,
