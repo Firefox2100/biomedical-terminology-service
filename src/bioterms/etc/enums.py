@@ -33,6 +33,7 @@ class ConceptPrefix(Enum):
     HGNC = 'hgnc'
     HGNC_SYMBOL = 'gene'
     HPO = 'hpo'
+    MONDO = 'mondo'
     NCIT = 'ncit'
     OHDSI = 'ohdsi'
     OMIM = 'omim'

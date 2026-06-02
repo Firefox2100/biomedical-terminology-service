@@ -28,6 +28,7 @@ ALL_VOCABULARIES = {
     ConceptPrefix.HGNC: 'hgnc',
     ConceptPrefix.HGNC_SYMBOL: 'hgnc_symbol',
     ConceptPrefix.HPO: 'hpo',
+    ConceptPrefix.MONDO: 'mondo',
     ConceptPrefix.NCIT: 'ncit',
     ConceptPrefix.OHDSI: 'ohdsi',
     ConceptPrefix.OMIM: 'omim',
