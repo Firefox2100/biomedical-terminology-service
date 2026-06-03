@@ -38,10 +38,13 @@ class Cache(ABC):
     @abstractmethod
     async def save_annotation_status(self,
                                      status: AnnotationStatus,
+                                     ttl: int = 86400,
                                      ):
         """
         Store the annotation status in the cache.
         :param status: The annotation status to store.
+        :param ttl: Time to live in seconds. Defaults to 86400 seconds (1 day). If set to 0,
+            the status will be stored indefinitely, and must be manually invalidated.
         """
 
     @abstractmethod
@@ -59,10 +62,13 @@ class Cache(ABC):
     @abstractmethod
     async def save_similarity_status(self,
                                      status: SimilarityStatus,
+                                     ttl: int = 86400,
                                      ):
         """
         Store the similarity status in the cache.
         :param status: The similarity status to store.
+        :param ttl: Time to live in seconds. Defaults to 86400 seconds (1 day). If set to 0,
+            the status will be stored indefinitely, and must be manually invalidated.
         """
 
     @abstractmethod

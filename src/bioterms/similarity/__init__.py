@@ -280,6 +280,7 @@ async def get_similarity_status(prefix: ConceptPrefix,
         cache=cache,
         doc_db=doc_db,
         graph_db=graph_db,
+        use_cache=use_cache,
     )
 
     annotations = vocab_status.annotations

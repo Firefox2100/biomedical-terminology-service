@@ -190,6 +190,16 @@ class Settings(BaseSettings):
         0,
         description='Redis database index for the cache',
     )
+    cache_hard_ttl_multiplier: int = Field(
+        7,
+        description='Multiplier applied to cache item TTLs for Redis hard expiration. '
+                    'The item TTL is treated as the stale-after time; Redis expiration is '
+                    'only used as a safety limit.',
+    )
+    cache_rebuild_lock_ttl: int = Field(
+        3600,
+        description='Time in seconds to hold the cache rebuild single-flight lock.',
+    )
 
     bioportal_api_key: Optional[str] = Field(
         None,
