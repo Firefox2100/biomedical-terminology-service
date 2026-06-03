@@ -16,7 +16,10 @@ from .utils import write_concepts_to_file, write_graph_to_file, write_annotation
 
 VOCABULARY_NAME = 'OHDSI Standardized Vocabularies'
 VOCABULARY_PREFIX = ConceptPrefix.OHDSI
-ANNOTATIONS = []
+ANNOTATIONS = [
+    ConceptPrefix.NCIT,
+    ConceptPrefix.SNOMED,
+]
 SIMILARITY_METHODS = []
 FILE_PATHS: list[str] = [
     # Core OHDSI files

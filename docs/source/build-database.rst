@@ -130,25 +130,74 @@ This service does not support incremental updates of the vocabularies, because i
 Loading offline files
 ^^^^^^^^^^^^^^^^^^^^^
 
-Because some offline files needs database tools to import, we provide example queries and commands to facilitate the process.
+Because some offline files need database tools to import, we provide example queries and commands to facilitate the process.
 
 For ``xxx.doc.dump`` files, they are line-separated JSON documents that can be imported into MongoDB directly using the following command:
 
 .. code-block:: bash
 
-    mongoimport --uri <mongodb-connection-string> --db <database-name> --collection <collection-name> --file <path-to-dump-file> --jsonArray
+    mongoimport --uri <mongodb-connection-string> --db <database-name> --collection <collection-name> --file <path-to-dump-file>
 
-For ``xxx.node_ids.dump`` files, they are CSV files that contains node IDs and types for creating nodes in graph database. They can be imported into Neo4j using the following Cypher query:
+Neo4j ``LOAD CSV`` reads from Neo4j's configured import directory. Copy the ``*.node_ids.dump``, ``*.graph.dump``, and ``*.annotation.dump`` files there, or adjust the ``file:///`` paths below to match your Neo4j setup. Before importing graph data, create the indexes and uniqueness constraint used by the service:
+
+.. code-block:: cypher
+
+    CREATE INDEX concept_prefix_index IF NOT EXISTS
+    FOR (n:Concept)
+    ON (n.prefix);
+
+    CREATE INDEX concept_id_index IF NOT EXISTS
+    FOR (n:Concept)
+    ON (n.id);
+
+    CREATE CONSTRAINT concept_prefix_id_unique IF NOT EXISTS
+    FOR (n:Concept)
+    REQUIRE (n.prefix, n.id) IS UNIQUE;
+
+For ``xxx.node_ids.dump`` files, they are CSV files that contain node IDs and concept types for creating graph nodes. The second column is written as a Python-style list string, for example ``['pathway', 'reaction']``. Import one vocabulary at a time, replacing ``some-prefix`` with the vocabulary prefix in the file name:
 
 .. code-block:: cypher
 
     CALL apoc.periodic.iterate(
-        "LOAD CSV FROM 'file:///xxx.node_ids.dump' AS row FIELDTERMINATOR ',' RETURN row",
-        "MERGE (:Concept {prefix:'some-prefix', id: toString(row[0])})",
-        {batchSize: 10000, parallel: true}
+        "
+        LOAD CSV FROM 'file:///xxx.node_ids.dump' AS row
+        WITH row
+        WHERE size(row) >= 1 AND row[0] IS NOT NULL AND trim(row[0]) <> ''
+        WITH
+            toString(row[0]) AS conceptId,
+            CASE WHEN size(row) >= 2 AND row[1] IS NOT NULL THEN trim(row[1]) ELSE '' END AS rawTypes
+        WITH conceptId,
+            CASE
+                WHEN rawTypes = '' OR rawTypes = '[]' THEN []
+                ELSE [
+                    label IN split(
+                        replace(
+                            replace(
+                                replace(
+                                    replace(rawTypes, '[', ''),
+                                    ']', ''
+                                ),
+                                \"'\", ''
+                            ),
+                            '\"', ''
+                        ),
+                        ','
+                    )
+                    | trim(label)
+                ]
+            END AS parsedLabels
+        RETURN conceptId, [label IN parsedLabels WHERE label <> ''] AS labels
+        ",
+        "
+        MERGE (n:Concept {prefix: $concept_prefix, id: conceptId})
+        WITH n, labels
+        CALL apoc.create.addLabels(n, labels) YIELD node
+        RETURN count(node) AS upserted
+        ",
+        {batchSize: 10000, parallel: true, params: {concept_prefix: 'some-prefix'}}
     );
 
-For ``xxx.graph.dump`` files, they are CSV files that contains internal relationships for creating relationships in graph database. They can be imported into Neo4j using the following Cypher query:
+For ``xxx.graph.dump`` files, they are CSV files that contain internal relationships for the same vocabulary. Each row is ``source_id,target_id,relationship_type,relationship_key``. The relationship key is used by multi-edge vocabularies such as OHDSI and is stored in the Neo4j relationship's ``label`` list property:
 
 .. code-block:: cypher
 
@@ -160,12 +209,18 @@ For ``xxx.graph.dump`` files, they are CSV files that contains internal relation
         RETURN
             toString(row[0]) AS src,
             toString(row[1]) AS dst,
-            CASE WHEN row[2] IS NULL OR trim(row[2]) = '' THEN 'related_to' ELSE trim(row[2]) END AS relType,
-            CASE WHEN size(row) >= 4 AND trim(row[3]) <> '' THEN trim(row[3]) ELSE NULL END AS relKey
+            CASE
+                WHEN row[2] IS NULL OR trim(row[2]) = '' THEN 'related_to'
+                ELSE trim(row[2])
+            END AS relType,
+            CASE
+                WHEN size(row) >= 4 AND row[3] IS NOT NULL AND trim(row[3]) <> '' THEN trim(row[3])
+                ELSE NULL
+            END AS relKey
         ",
         "
-        MATCH (source:Concept {prefix: $concept_prefix, id: src})
-        MATCH (target:Concept {prefix: $concept_prefix, id: dst})
+        MERGE (source:Concept {prefix: $concept_prefix, id: src})
+        MERGE (target:Concept {prefix: $concept_prefix, id: dst})
         CALL apoc.merge.relationship(source, relType, {}, {}, target) YIELD rel
         FOREACH (_ IN CASE WHEN relKey IS NULL THEN [] ELSE [1] END |
             SET rel.label =
@@ -177,9 +232,9 @@ For ``xxx.graph.dump`` files, they are CSV files that contains internal relation
         {batchSize: 10000, parallel: false, params: {concept_prefix: 'some-prefix'}}
     );
 
-Note that parallel execution is disabled to prevent deadlocks.
+Note that parallel execution is disabled for relationship imports to prevent deadlocks.
 
-For ``xxx.annotation.dump`` files, they are CSV files that contains cross-vocabulary relationships for creating relationships in graph database. They can be imported into Neo4j using the following Cypher query:
+For ``xxx.annotation.dump`` files, they are CSV files that contain cross-vocabulary relationships for creating relationships in the graph database. Each row is ``source_prefix,source_id,target_prefix,target_id,annotation_type,properties_json``:
 
 .. code-block:: cypher
 

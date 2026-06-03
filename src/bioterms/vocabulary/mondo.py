@@ -19,6 +19,12 @@ from .utils import write_concepts_to_file, write_graph_to_file, write_annotation
 VOCABULARY_NAME = 'Mondo Disease Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.MONDO
 ANNOTATIONS = [
+    ConceptPrefix.HGNC,
+    ConceptPrefix.HPO,
+    ConceptPrefix.NCIT,
+    ConceptPrefix.OMIM,
+    ConceptPrefix.ORDO,
+    ConceptPrefix.SNOMED,
 ]
 SIMILARITY_METHODS = [
 ]

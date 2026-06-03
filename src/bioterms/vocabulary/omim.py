@@ -19,6 +19,7 @@ VOCABULARY_NAME = 'Online Mendelian Inheritance in Man'
 VOCABULARY_PREFIX = ConceptPrefix.OMIM
 ANNOTATIONS = [
     ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.MONDO,
     ConceptPrefix.ORDO,
 ]
 SIMILARITY_METHODS = [

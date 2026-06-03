@@ -18,7 +18,9 @@ from .utils import write_concepts_to_file, write_graph_to_file
 VOCABULARY_NAME = 'National Cancer Institute Thesaurus'
 VOCABULARY_PREFIX = ConceptPrefix.NCIT
 ANNOTATIONS = [
-    ConceptPrefix.HGNC_SYMBOL
+    ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.MONDO,
+    ConceptPrefix.OHDSI,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,

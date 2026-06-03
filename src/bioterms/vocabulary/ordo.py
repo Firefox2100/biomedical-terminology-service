@@ -17,6 +17,7 @@ VOCABULARY_NAME = 'Orphanet Rare Disease Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.ORDO
 ANNOTATIONS = [
     ConceptPrefix.HPO,
+    ConceptPrefix.MONDO,
     ConceptPrefix.OMIM,
 ]
 SIMILARITY_METHODS = [

@@ -17,7 +17,9 @@ from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_grap
 
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC
-ANNOTATIONS = []
+ANNOTATIONS = [
+    ConceptPrefix.MONDO,
+]
 SIMILARITY_METHODS = []
 FILE_PATHS = [
     'hgnc/symbol.txt',

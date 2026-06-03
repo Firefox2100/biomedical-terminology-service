@@ -17,6 +17,7 @@ VOCABULARY_NAME = 'Human Phenotype Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.HPO
 ANNOTATIONS = [
     ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.MONDO,
     ConceptPrefix.ORDO,
 ]
 SIMILARITY_METHODS = [
