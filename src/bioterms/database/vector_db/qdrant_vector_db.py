@@ -111,14 +111,13 @@ class QdrantVectorDatabase(VectorDatabase):
         points = []
         id_map = {}
         async for concept_id, vector_id, vector in embeddings:
-            for concept_id, vector in embedded_batch:
-                points.append(PointStruct(
-                    id=vector_id,
-                    vector=vector,
-                    payload={'conceptId': concept_id}
-                ))
+            points.append(PointStruct(
+                id=vector_id,
+                vector=vector,
+                payload={'conceptId': concept_id}
+            ))
 
-                id_map[concept_id] = point_id
+            id_map[concept_id] = vector_id
 
             if len(points) > 1000:
                 await self.client.upsert(

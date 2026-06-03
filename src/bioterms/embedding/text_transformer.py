@@ -46,7 +46,7 @@ class TextTransformer:
         def encode_with_metrics():
             enc_start = time.perf_counter()
             vs = self.transformer.encode(
-                sentences=texts,
+                inputs=texts,
                 normalize_embeddings=True,
             )
             enc_end = time.perf_counter()

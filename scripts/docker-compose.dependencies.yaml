@@ -4,7 +4,7 @@ services:
   neo4j:
     image: neo4j:2026.04.0
     restart: unless-stopped
-    container_name: neo4j
+    container_name: bts-neo4j
     healthcheck:
       test: [ "CMD-SHELL", "cypher-shell -u $${NEO4J_AUTH%%/*} -p $${NEO4J_AUTH##*/} 'RETURN 1'" ]
       interval: 30s
@@ -28,7 +28,7 @@ services:
   mongodb:
     image: mongo:8.2.9
     restart: unless-stopped
-    container_name: mongodb
+    container_name: bts-mongodb
     healthcheck:
       test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
       interval: 30s
@@ -43,7 +43,7 @@ services:
   redis:
     image: redis:8.6
     restart: unless-stopped
-    container_name: redis
+    container_name: bts-redis
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 30s
@@ -59,7 +59,7 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    container_name: qdrant
+    container_name: bts-qdrant
     # Qdrant explicitly states that they do not support health checks, and will not include
     # utilities for that in the image. If needed, rely on the docker orchestration platform's
     # built-in health check mechanisms.

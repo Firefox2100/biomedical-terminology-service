@@ -444,8 +444,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                     MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
 
                     WITH n, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
-                    CALL apoc.create.addLabels(n, labels) YIELD node
-                    RETURN count(node) AS upserted
+                    SET n:$(labels)
+                    RETURN count(n) AS upserted
                     """,
                     session=session,
                     parameters={
