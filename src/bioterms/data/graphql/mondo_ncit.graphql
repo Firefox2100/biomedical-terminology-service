@@ -1,0 +1,7 @@
+extend type MondoConcept {
+    annotatedNcit: [NcitConcept!]!
+}
+
+extend type NcitConcept {
+    annotatedMondo: [MondoConcept!]!
+}

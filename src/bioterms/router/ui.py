@@ -524,8 +524,8 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
         ])
 
         if prefix in [
-            ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.NCIT, ConceptPrefix.OMIM,
-            ConceptPrefix.ORDO, ConceptPrefix.SNOMED
+            ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.MONDO. ConceptPrefix.NCIT,
+            ConceptPrefix.OMIM, ConceptPrefix.ORDO, ConceptPrefix.SNOMED
         ]:
             params = {
                 'ontology': prefix.value,
@@ -611,8 +611,14 @@ async def get_term_browser():
     Serve the term browser page.
     :return:
     """
-    html_path = STATIC_FILE_PATH / 'term-browser' / 'index.html'
-    return FileResponse(html_path)
+    try:
+        html_path = STATIC_FILE_PATH / 'term-browser' / 'index.html'
+        return FileResponse(html_path)
+    except RuntimeError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Term browser not compiled or deployed.'
+        )
 
 
 @ui_router.post('/rebuild-cache', status_code=status.HTTP_202_ACCEPTED)

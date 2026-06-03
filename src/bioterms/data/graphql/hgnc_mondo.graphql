@@ -1,0 +1,7 @@
+extend type HgncConcept {
+    annotatedMondo: [MondoConcept!]!
+}
+
+extend type MondoConcept {
+    annotatedHgnc: [HgncConcept!]!
+}

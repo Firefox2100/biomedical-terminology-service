@@ -1,0 +1,7 @@
+extend type MondoConcept {
+    annotatedOrdo: [OrdoConcept!]!
+}
+
+extend type OrdoConcept {
+    annotatedMondo: [MondoConcept!]!
+}

@@ -1,0 +1,47 @@
+type MondoConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    synonyms: [String!]
+    comment: String
+    status: ConceptStatus!
+
+    children: [MondoConcept!]!
+    parents: [MondoConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarMondoConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
+}
+
+type SimilarMondoConcept implements SimilarConcept {
+    from: MondoConcept!
+    to: MondoConcept!
+    score: Float!
+}
+
+type MondoConceptResponse {
+    error: QueryError
+    data: MondoConcept
+}
+
+type MondoConceptListResponse {
+    error: QueryError
+    data: [MondoConcept]
+}
+
+type MondoQuery {
+    mondoConcept(conceptId: String!): MondoConceptResponse
+    autoComplete(query: String!, limit: Int): MondoConceptListResponse
+    search(query: String!, limit: Int): MondoConceptListResponse
+}
+
+extend type Query {
+    mondo: MondoQuery
+}

@@ -1,0 +1,7 @@
+extend type HpoConcept {
+    annotatedMondo: [MondoConcept!]!
+}
+
+extend type MondoConcept {
+    annotatedHpo: [HpoConcept!]!
+}

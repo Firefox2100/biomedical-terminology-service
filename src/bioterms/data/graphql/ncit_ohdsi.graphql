@@ -1,0 +1,7 @@
+extend type NcitConcept {
+    annotatedOhdsi: [OhdsiConcept!]!
+}
+
+extend type OhdsiConcept {
+    annotatedNcit: [NcitConcept!]!
+}

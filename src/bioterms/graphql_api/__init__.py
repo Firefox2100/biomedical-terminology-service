@@ -92,7 +92,15 @@ async def create_graphql_app() -> GraphQL:
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO),
+        (ConceptPrefix.HGNC, ConceptPrefix.MONDO),
+        (ConceptPrefix.HPO, ConceptPrefix.MONDO),
         (ConceptPrefix.HPO, ConceptPrefix.ORDO),
+        (ConceptPrefix.MONDO, ConceptPrefix.NCIT),
+        (ConceptPrefix.MONDO, ConceptPrefix.OMIM),
+        (ConceptPrefix.MONDO, ConceptPrefix.ORDO),
+        (ConceptPrefix.MONDO, ConceptPrefix.SNOMED),
+        (ConceptPrefix.NCIT, ConceptPrefix.OHDSI),
+        (ConceptPrefix.OHDSI, ConceptPrefix.SNOMED),
         (ConceptPrefix.OMIM, ConceptPrefix.ORDO),
         (ConceptPrefix.ORDO, ConceptPrefix.SNOMED),
     ]
@@ -141,6 +149,13 @@ async def create_graphql_app() -> GraphQL:
         graphql_schemas.append(HPO_SCHEMA)
         graphql_objects.append(HPO_CONCEPT)
         graphql_queries.append(HPO_QUERY)
+    if vocabulary_statuses[ConceptPrefix.MONDO].loaded:
+        from .schemas import MONDO_SCHEMA
+        from .resolver.mondo import MONDO_CONCEPT, MONDO_QUERY
+
+        graphql_schemas.append(MONDO_SCHEMA)
+        graphql_objects.append(MONDO_CONCEPT)
+        graphql_queries.append(MONDO_QUERY)
     if vocabulary_statuses[ConceptPrefix.NCIT].loaded:
         from .schemas import NCIT_SCHEMA
         from .resolver.ncit import NCIT_CONCEPT, NCIT_QUERY
@@ -221,6 +236,46 @@ async def create_graphql_app() -> GraphQL:
         import bioterms.graphql_api.resolver.gene_ordo
 
         graphql_schemas.append(GENE_ORDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.HGNC, ConceptPrefix.MONDO)].loaded:
+        from .schemas import HGNC_MONDO_SCHEMA
+        import bioterms.graphql_api.resolver.hgnc_mondo
+
+        graphql_schemas.append(HGNC_MONDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.HPO, ConceptPrefix.MONDO)].loaded:
+        from .schemas import HPO_MONDO_SCHEMA
+        import bioterms.graphql_api.resolver.hpo_mondo
+
+        graphql_schemas.append(HPO_MONDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.NCIT)].loaded:
+        from .schemas import MONDO_NCIT_SCHEMA
+        import bioterms.graphql_api.resolver.mondo_ncit
+
+        graphql_schemas.append(MONDO_NCIT_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.OMIM)].loaded:
+        from .schemas import MONDO_OMIM_SCHEMA
+        import bioterms.graphql_api.resolver.mondo_omim
+
+        graphql_schemas.append(MONDO_OMIM_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.ORDO)].loaded:
+        from .schemas import MONDO_ORDO_SCHEMA
+        import bioterms.graphql_api.resolver.mondo_ordo
+
+        graphql_schemas.append(MONDO_ORDO_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.SNOMED)].loaded:
+        from .schemas import MONDO_SNOMED_SCHEMA
+        import bioterms.graphql_api.resolver.mondo_snomed
+
+        graphql_schemas.append(MONDO_SNOMED_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.NCIT, ConceptPrefix.OHDSI)].loaded:
+        from .schemas import NCIT_OHDSI_SCHEMA
+        import bioterms.graphql_api.resolver.ncit_ohdsi
+
+        graphql_schemas.append(NCIT_OHDSI_SCHEMA)
+    if annotation_statuses[(ConceptPrefix.OHDSI, ConceptPrefix.SNOMED)].loaded:
+        from .schemas import OHDSI_SNOMED_SCHEMA
+        import bioterms.graphql_api.resolver.ohdsi_snomed
+
+        graphql_schemas.append(OHDSI_SNOMED_SCHEMA)
     if annotation_statuses[(ConceptPrefix.OMIM, ConceptPrefix.ORDO)].loaded:
         from .schemas import OMIM_ORDO_SCHEMA
         import bioterms.graphql_api.resolver.omim_ordo

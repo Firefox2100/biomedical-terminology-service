@@ -1,0 +1,7 @@
+extend type OhdsiConcept {
+    annotatedSnomed: [SnomedConcept!]!
+}
+
+extend type SnomedConcept {
+    annotatedOhdsi: [OhdsiConcept!]!
+}

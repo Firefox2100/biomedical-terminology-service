@@ -1,0 +1,7 @@
+extend type MondoConcept {
+    annotatedSnomed: [SnomedConcept!]!
+}
+
+extend type SnomedConcept {
+    annotatedMondo: [MondoConcept!]!
+}
