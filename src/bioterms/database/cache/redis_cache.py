@@ -117,7 +117,7 @@ class RedisCache(Cache):
             return raw_value, True
 
         value = payload.get('value')
-        stale_at = payload.get('stale_at')
+        stale_at = float(payload.get('stale_at'))
 
         if not isinstance(value, str):
             await self.db.delete(key)
@@ -162,17 +162,14 @@ class RedisCache(Cache):
         if not acquired:
             return
 
-        async def queue_rebuild():
-            try:
-                from bioterms.task.cache import rebuild_cache_task
+        try:
+            from bioterms.task.cache import rebuild_cache_task
 
-                await asyncio.to_thread(rebuild_cache_task.delay)
-                LOGGER.info('Scheduled stale cache rebuild task.')
-            except Exception as e:     # pylint: disable=broad-exception-caught
-                await self.db.delete(REFRESH_LOCK_KEY)
-                LOGGER.error('Failed to schedule stale cache rebuild: %s', str(e), exc_info=True)
-
-        asyncio.create_task(queue_rebuild())
+            await asyncio.to_thread(rebuild_cache_task.delay)
+            LOGGER.info('Scheduled stale cache rebuild task.')
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            await self.db.delete(REFRESH_LOCK_KEY)
+            LOGGER.error('Failed to schedule stale cache rebuild: %s', str(e), exc_info=True)
 
     async def save_vocabulary_status(self,
                                      status: VocabularyStatus,

@@ -1468,7 +1468,6 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         if not trace_queries:
             return
-            yield
 
         prepared = []
         for (prefix_start, id_start, prefix_end, id_end, relationship_type, forward, max_depth) in trace_queries:

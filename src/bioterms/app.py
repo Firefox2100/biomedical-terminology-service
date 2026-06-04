@@ -306,7 +306,7 @@ def create_app() -> FastAPI:
         LOGGER.exception('BTS Service Exception occurred: %s', exc.message)
         LOGGER.debug('Request body: %s', (await request.body()).decode(errors='ignore'))
 
-        report_exception(exc, request)
+        report_exception(exc)
 
         return JSONResponse(
             status_code=exc.status_code,
