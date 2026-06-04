@@ -86,7 +86,7 @@ async def map_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The active graph database.
     :return: A list of mapped terms.
     """
-    mode = 'bounded' if limit is not None else 'unbounded'
+    mode = 'bounded' if result_threshold else 'unbounded'
     MAP_REQS.labels(
         prefix=prefix.value,
         target_prefix=target_prefix.value,

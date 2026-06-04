@@ -311,7 +311,7 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     :return: A list of translated terms with their similarity scores.
     """
     translate_iter = graph_db.translate_terms_iter(
-        original_ids=translate_request.original_ids,
+        original_ids=translate_request.term_ids,
         original_prefix=prefix,
         constraint_ids={
             prefix: set(translate_request.constraint_ids),
@@ -324,7 +324,7 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     async for translated_term in translate_iter:
         v1_translated_terms.append(TranslatedTermV1(
             termId=translated_term.concept_id,
-            score=translated_term.similarity,
+            score=translated_term.score,
         ))
 
     return v1_translated_terms

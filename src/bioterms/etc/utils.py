@@ -15,21 +15,22 @@ from collections.abc import MutableSequence, Iterable
 from pathlib import Path
 from itertools import islice
 from concurrent.futures import Executor
-from typing import Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar
+from typing import Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar, TYPE_CHECKING
 import aiofiles
 import aiofiles.os
 import httpx
 import pandas as pd
 import networkx as nx
-from sentence_transformers import SentenceTransformer
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, \
     TimeRemainingColumn
 
 from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT
 from .errors import FilesNotFound
 
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
-_TRANSFORMER: SentenceTransformer | None = None
+_TRANSFORMER: Optional['SentenceTransformer'] = None
 T = TypeVar('T')
 R = TypeVar('R')
 
@@ -348,7 +349,7 @@ def rf2_dataframe_deduplicate(df: pd.DataFrame) -> pd.DataFrame:
     return unique_df
 
 
-def get_transformer() -> SentenceTransformer:
+def get_transformer() -> 'SentenceTransformer':
     """
     Get the global SentenceTransformer instance, initializing it if necessary.
     :return: The SentenceTransformer instance
@@ -356,6 +357,8 @@ def get_transformer() -> SentenceTransformer:
     global _TRANSFORMER
 
     if _TRANSFORMER is None:
+        from sentence_transformers import SentenceTransformer
+
         _TRANSFORMER = SentenceTransformer(CONFIG.transformer_model_name)
 
     return _TRANSFORMER

@@ -2,14 +2,31 @@
 Router module for Bioterms application.
 """
 
-from .auto_complete import auto_complete_router
-from .data import data_router
-from .expand import expand_router
-from .fhir import fhir_router
-from .map import map_router
-from .misc import misc_router
-from .search import search_router
-from .similarity import similarity_router
-from .trace import trace_router
-from .ui import ui_router
-from .utils import CacheControlMiddleware
+_ROUTER_IMPORTS = {
+    'auto_complete_router': '.auto_complete',
+    'data_router': '.data',
+    'expand_router': '.expand',
+    'fhir_router': '.fhir',
+    'map_router': '.map',
+    'misc_router': '.misc',
+    'search_router': '.search',
+    'similarity_router': '.similarity',
+    'trace_router': '.trace',
+    'ui_router': '.ui',
+    'CacheControlMiddleware': '.utils',
+}
+
+__all__ = list(_ROUTER_IMPORTS)
+
+
+def __getattr__(name):
+    if name not in _ROUTER_IMPORTS:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+
+    from importlib import import_module
+
+    module = import_module(_ROUTER_IMPORTS[name], __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+
+    return value

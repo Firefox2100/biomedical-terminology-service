@@ -82,9 +82,7 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
                             headers={
                                 'ETag': etag,
                                 'Last-Modified': last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT'),
-                                'Cache-Control': f'public, max-age={config.max_age}' +
-                                                 (f', stale-while-revalidate={config.stale_while_revalidate}'
-                                                  if config.stale_while_revalidate is not None else ''),
+                                'Cache-Control': f'public, max-age=86400, stale-while-revalidate=172800',
                             }
                         )
                 except Exception:

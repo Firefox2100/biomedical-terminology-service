@@ -12,7 +12,6 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
-from bioterms.embedding import ConceptTransformer, EmbeddingContainerV1, EmbeddingContainerFileV1
 from .utils import ALL_VOCABULARIES, get_vocabulary_module, get_vocabulary_status
 
 
@@ -293,6 +292,8 @@ async def embed_vocabulary(prefix: ConceptPrefix,
             mapping=id_map,
         )
     else:
+        from bioterms.embedding import ConceptTransformer, EmbeddingContainerV1, EmbeddingContainerFileV1
+
         offline_concept_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.doc.dump')
         if not os.path.exists(offline_concept_path):
             raise ValueError(f'Offline concept file for {prefix} not found at {offline_concept_path}.')
@@ -354,6 +355,8 @@ async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
 
     if drop_existing:
         await vector_db.delete_vectors_for_prefix(prefix=prefix)
+
+    from bioterms.embedding import EmbeddingContainerFileV1
 
     offline_embedding_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.embed.dump')
     embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
