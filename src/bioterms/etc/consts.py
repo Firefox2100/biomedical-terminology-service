@@ -218,6 +218,15 @@ class Settings(BaseSettings):
         'BAAI/bge-base-en-v1.5',
         description='Name of the transformer model to use for embeddings',
     )
+    embedding_process_limit: int = Field(
+        1,
+        description='Number of worker processes used for embedding generation. '
+                    'Set to 1 to disable multiprocessing.',
+    )
+    embedding_batch_size: int = Field(
+        32,
+        description='Batch size used when generating concept embeddings.',
+    )
     torch_device: str = Field(
         'cpu',
         description='Torch device to use for model inference (e.g., "cpu", "cuda")',

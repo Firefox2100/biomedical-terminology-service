@@ -113,7 +113,14 @@ async def load_command(prefix_1: Annotated[
                               '--overwrite',
                               '-o',
                               help='Overwrite existing data in the database.')
-                       ] = False
+                       ] = False,
+                       offline: Annotated[
+                           bool,
+                           typer.Option(
+                               '--offline',
+                               help='Write annotation output to offline dump file instead of database.',
+                           )
+                       ] = False,
                        ):
     if load_all:
         if prefix_1 or prefix_2:
@@ -138,15 +145,23 @@ async def load_command(prefix_1: Annotated[
                 prefix_1=prefix_a,
                 prefix_2=prefix_b,
                 overwrite=overwrite,
+                offline=offline,
             )
-            CONSOLE.print(
-                f'[green]Successfully loaded annotation between '
-                f'{prefix_a.value} and {prefix_b.value} into the database.[/green]'
-            )
+            if offline:
+                CONSOLE.print(
+                    f'[green]Successfully loaded annotation between '
+                    f'{prefix_a.value} and {prefix_b.value} into offline dump file.[/green]'
+                )
+            else:
+                CONSOLE.print(
+                    f'[green]Successfully loaded annotation between '
+                    f'{prefix_a.value} and {prefix_b.value} into the database.[/green]'
+                )
         except Exception as e:
+            destination = 'offline dump file' if offline else 'database'
             CONSOLE.print(
                 f'[red]Failed to load annotation between '
-                f'{prefix_a.value} and {prefix_b.value} into the database: {e}[/red]'
+                f'{prefix_a.value} and {prefix_b.value} into the {destination}: {e}[/red]'
             )
             traceback.print_exc()
 

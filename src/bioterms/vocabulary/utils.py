@@ -11,7 +11,7 @@ import aiofiles
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType, AnnotationType
 from bioterms.etc.errors import VocabularyNotLoaded
 from bioterms.etc.utils import check_files_exist, edge_iter, batch_iterable
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
@@ -419,11 +419,16 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
     async with aiofiles.open(offline_file_path) as f:
         async for line in f:
             row = next(csv.reader([line]))
+
+            if len(row) < 6:
+                # Skip malformed rows instead of failing the whole load.
+                continue
+
             source_prefix, source_id, target_prefix, target_id, annotation_type, properties_str = row
             graph.add_edge(
-                source_id,
-                target_id,
-                label=ConceptRelationshipType(annotation_type),
+                f'{source_prefix}:{source_id}',
+                f'{target_prefix}:{target_id}',
+                label=AnnotationType(annotation_type),
                 properties=json.loads(properties_str),
             )
 

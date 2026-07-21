@@ -1,13 +1,70 @@
 import importlib
 import importlib.resources
 import inspect
+import os
 import aiofiles
 import aiofiles.os
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import Cache, GraphDatabase, get_active_cache, get_active_graph_db
 from bioterms.model.annotation_status import AnnotationStatus
+from bioterms.model.annotation import Annotation
+from bioterms.vocabulary.utils import write_annotations_to_file
+
+
+class _OfflineAnnotationGraphDB:
+    """
+    Lightweight adapter that captures annotation writes into offline dump files.
+    """
+
+    def __init__(self,
+                 prefix_1: ConceptPrefix,
+                 prefix_2: ConceptPrefix,
+                 overwrite: bool,
+                 ):
+        self.prefix_1 = prefix_1
+        self.prefix_2 = prefix_2
+        self.overwrite = overwrite
+        self._written = False
+
+    async def count_terms(self,
+                          prefix: ConceptPrefix,
+                          ) -> int:
+        # Offline annotation generation may run without online databases.
+        return 1
+
+    async def count_annotations(self,
+                                prefix_1: ConceptPrefix,
+                                prefix_2: ConceptPrefix,
+                                ) -> int:
+        if self.overwrite:
+            return 0
+
+        offline_file_path = os.path.join(
+            CONFIG.data_dir,
+            'offline',
+            f'{self.prefix_1.value}-{self.prefix_2.value}.annotation.dump',
+        )
+        return 1 if os.path.exists(offline_file_path) and os.path.getsize(offline_file_path) > 0 else 0
+
+    async def save_annotations(self,
+                               annotations: list[Annotation],
+                               ):
+        await write_annotations_to_file(
+            prefix_from=self.prefix_1,
+            prefix_to=self.prefix_2,
+            annotations=annotations,
+            overwrite=self.overwrite and not self._written,
+        )
+        self._written = True
+
+
+def _offline_annotation_dump_path(prefix_1: ConceptPrefix,
+                                  prefix_2: ConceptPrefix,
+                                  ) -> str:
+    return os.path.join(CONFIG.data_dir, 'offline', f'{prefix_1.value}-{prefix_2.value}.annotation.dump')
 
 
 def _get_annotation_module_name(prefix_1: ConceptPrefix,
@@ -155,6 +212,7 @@ async def delete_annotation(prefix_1: ConceptPrefix,
 async def load_annotation(prefix_1: ConceptPrefix,
                           prefix_2: ConceptPrefix,
                           overwrite: bool = True,
+                          offline: bool = False,
                           graph_db: GraphDatabase = None,
                           ):
     """
@@ -162,16 +220,16 @@ async def load_annotation(prefix_1: ConceptPrefix,
     :param prefix_1: The first prefix.
     :param prefix_2: The second prefix.
     :param overwrite: Whether to overwrite existing annotation data.
+    :param offline: Whether to write output to offline dump file instead of graph database.
     :param graph_db: Optional GraphDatabase instance to use.
     """
     annotation_module = get_annotation_module(prefix_1, prefix_2)
-    cache = get_active_cache()
 
     if not check_files_exist(annotation_module.FILE_PATHS):
         raise ValueError(f'Annotation files for {prefix_1} and {prefix_2} not found. '
                          f'Are they downloaded?')
 
-    if overwrite:
+    if overwrite and not offline:
         # Drop existing data before loading
         await delete_annotation(
             prefix_1=prefix_1,
@@ -184,11 +242,49 @@ async def load_annotation(prefix_1: ConceptPrefix,
         raise ValueError(f'Annotation module for {prefix_1} and {prefix_2} does not '
                          f'have a load_annotation_from_file function.')
 
-    result = load_func(
-        graph_db=graph_db,
-    )
+    active_graph_db = graph_db
+    if offline:
+        active_graph_db = _OfflineAnnotationGraphDB(
+            prefix_1=annotation_module.VOCABULARY_PREFIX_1,
+            prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+            overwrite=overwrite,
+        )
+
+    try:
+        result = load_func(
+            graph_db=active_graph_db,
+        )
+    except NotImplementedError:
+        if not offline:
+            raise
+
+        dump_path = _offline_annotation_dump_path(
+            annotation_module.VOCABULARY_PREFIX_1,
+            annotation_module.VOCABULARY_PREFIX_2,
+        )
+        if not os.path.exists(dump_path):
+            raise
+        return
+
     if inspect.iscoroutine(result):
-        await result
+        try:
+            await result
+        except NotImplementedError:
+            if not offline:
+                raise
+
+            dump_path = _offline_annotation_dump_path(
+                annotation_module.VOCABULARY_PREFIX_1,
+                annotation_module.VOCABULARY_PREFIX_2,
+            )
+            if not os.path.exists(dump_path):
+                raise
+            return
+
+    if offline:
+        return
+
+    cache = get_active_cache()
 
     await cache.rotate_dataset_version()
 
