@@ -90,6 +90,7 @@ async def calculate_similarity(method: SimilarityMethod,
                                corpus_prefix: ConceptPrefix = None,
                                similarity_threshold: float | None = None,
                                offline: bool = False,
+                               cache: Cache = None,
                                doc_db: DocumentDatabase = None,
                                graph_db: GraphDatabase = None,
                                ):
@@ -106,7 +107,6 @@ async def calculate_similarity(method: SimilarityMethod,
     """
     similarity_module = get_similarity_module(method)
     similarity_config = get_similarity_method_config(method)
-    cache = get_active_cache()
 
     if similarity_threshold is None:
         similarity_threshold = similarity_config['defaultThreshold']
@@ -244,7 +244,12 @@ async def calculate_similarity(method: SimilarityMethod,
         if offline and offline_file is not None:
             await offline_file.close()
 
-        await cache.rotate_dataset_version()
+        if not offline:
+            # Cache invalidation is only needed for online graph writes.
+            if cache is None:
+                cache = get_active_cache()
+
+            await cache.rotate_dataset_version()
 
 
 async def get_similarity_status(prefix: ConceptPrefix,

@@ -197,7 +197,6 @@ async def load_vocabulary(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     """
     vocabulary_module = get_vocabulary_module(prefix)
-    cache = cache or get_active_cache()
 
     if not check_files_exist(vocabulary_module.FILE_PATHS):
         raise ValueError(f'Vocabulary files for {prefix} not found. Are they downloaded?')
@@ -231,17 +230,18 @@ async def load_vocabulary(prefix: ConceptPrefix,
         await result
 
     if not offline:
-        # Purge cache after loading
+        # Cache is only required when mutating online databases.
         if cache is None:
             cache = get_active_cache()
-        await cache.purge()
 
-    await cache.rotate_dataset_version()
+        await cache.purge()
+        await cache.rotate_dataset_version()
 
 
 async def embed_vocabulary(prefix: ConceptPrefix,
                            drop_existing: bool = True,
                            offline: bool = False,
+                           cache: Cache = None,
                            doc_db: DocumentDatabase = None,
                            graph_db: GraphDatabase = None,
                            vector_db: VectorDatabase = None,
@@ -256,7 +256,6 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     :param vector_db: The vector database instance.
     """
     config = get_vocabulary_config(prefix)
-    cache = get_active_cache()
 
     if not offline:
         if doc_db is None:
@@ -321,7 +320,12 @@ async def embed_vocabulary(prefix: ConceptPrefix,
         embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
         await embedding_file.write(embed_iter())
 
-    await cache.rotate_dataset_version()
+    if not offline:
+        # Offline embedding writes files only, so cache invalidation is unnecessary.
+        if cache is None:
+            cache = get_active_cache()
+
+        await cache.rotate_dataset_version()
 
 
 async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
