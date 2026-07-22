@@ -503,16 +503,20 @@ async def schedule_tasks(executor: Executor,
         )
 
         for fut in done:
-            yield fut.result()
-            if progress is not None:
-                progress.advance(task)
-
             try:
                 next_arg = next(it)
             except StopIteration:
-                continue
+                pass
+            else:
+                # Refill the executor before handing the result to the caller.
+                # An async-generator consumer may take an arbitrary amount of
+                # time before requesting the next result; refilling afterwards
+                # can therefore leave worker processes idle.
+                pending.add(loop.run_in_executor(executor, func, next_arg))
 
-            pending.add(loop.run_in_executor(executor, func, next_arg))
+            yield fut.result()
+            if progress is not None:
+                progress.advance(task)
 
     if progress is not None:
         progress.stop()

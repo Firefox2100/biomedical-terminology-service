@@ -309,10 +309,10 @@ async def write_annotations_to_file(prefix_from: ConceptPrefix,
         batch = annotations[i:i + 10000]
         rows = [
             (
-                ann.prefix_from.value if isinstance(ann.prefix_from, ConceptPrefix) else ann.prefix_from,
-                ann.concept_id_from,
-                ann.prefix_to.value if isinstance(ann.prefix_to, ConceptPrefix) else ann.prefix_to,
-                ann.concept_id_to,
+                _prefix_value(ann.prefix_from),
+                normalise_annotation_curie(ann.prefix_from, ann.concept_id_from),
+                _prefix_value(ann.prefix_to),
+                normalise_annotation_curie(ann.prefix_to, ann.concept_id_to),
                 ann.annotation_type.value,
                 json.dumps(ann.properties) if ann.properties else '{}',
             )
@@ -324,6 +324,66 @@ async def write_annotations_to_file(prefix_from: ConceptPrefix,
     await q.join()
     await q.put(None)
     await wt
+
+
+def _prefix_value(prefix: ConceptPrefix | str) -> str:
+    """Return a prefix's serialized value."""
+    return prefix.value if isinstance(prefix, ConceptPrefix) else str(prefix)
+
+
+def normalise_annotation_curie(prefix: ConceptPrefix | str,
+                               concept_id: str,
+                               ) -> str:
+    """Return a canonical CURIE, accepting either a local ID or an existing CURIE.
+
+    Prefix comparison is case-insensitive, which converts source values such as
+    ``HGNC:5`` to the service's canonical ``hgnc:5`` representation.
+    """
+    prefix_value = _prefix_value(prefix).strip()
+    concept_id = str(concept_id).strip()
+    if not prefix_value:
+        raise ValueError('Annotation prefix cannot be empty.')
+    if not concept_id:
+        raise ValueError('Annotation concept ID cannot be empty.')
+
+    if ':' in concept_id:
+        embedded_prefix, local_id = concept_id.split(':', 1)
+        if embedded_prefix.casefold() != prefix_value.casefold():
+            raise ValueError(
+                f'Annotation concept ID {concept_id!r} conflicts with prefix {prefix_value!r}.'
+            )
+        concept_id = local_id
+    if not concept_id:
+        raise ValueError('Annotation CURIE cannot have an empty local ID.')
+    return f'{prefix_value}:{concept_id}'
+
+
+def parse_annotation_curie(prefix: ConceptPrefix | str | None,
+                           concept_id: str,
+                           fallback_prefix: ConceptPrefix | str | None = None,
+                           ) -> str:
+    """Parse legacy or normalized annotation columns into one canonical CURIE.
+
+    ``concept_id`` may be a local ID or a CURIE. The separate prefix column may
+    be populated or empty. When both are absent, ``fallback_prefix`` supplies the
+    vocabulary requested by the caller.
+    """
+    explicit_prefix = _prefix_value(prefix).strip() if prefix is not None else ''
+    fallback_value = _prefix_value(fallback_prefix).strip() if fallback_prefix is not None else ''
+    concept_id = str(concept_id).strip()
+    embedded_prefix = ''
+    local_id = concept_id
+    if ':' in concept_id:
+        embedded_prefix, local_id = concept_id.split(':', 1)
+
+    selected_prefix = explicit_prefix or fallback_value or embedded_prefix
+    if not selected_prefix:
+        raise ValueError(f'Cannot determine annotation prefix for concept ID {concept_id!r}.')
+    if embedded_prefix and embedded_prefix.casefold() != selected_prefix.casefold():
+        raise ValueError(
+            f'Annotation CURIE {concept_id!r} conflicts with prefix {selected_prefix!r}.'
+        )
+    return normalise_annotation_curie(selected_prefix, local_id)
 
 
 async def load_graph_from_file(prefix: ConceptPrefix,
@@ -426,8 +486,8 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
 
             source_prefix, source_id, target_prefix, target_id, annotation_type, properties_str = row
             graph.add_edge(
-                f'{source_prefix}:{source_id}',
-                f'{target_prefix}:{target_id}',
+                parse_annotation_curie(source_prefix, source_id, prefix_from),
+                parse_annotation_curie(target_prefix, target_id, prefix_to),
                 label=AnnotationType(annotation_type),
                 properties=json.loads(properties_str),
             )

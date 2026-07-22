@@ -2,13 +2,14 @@ import math
 import itertools
 from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor
-from typing import AsyncIterator
+from functools import lru_cache
+from typing import AsyncIterator, Iterable, Iterator, TypeVar
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import iter_progress, verbose_print, schedule_tasks
-from .utils import filter_edges_by_relationship, calculate_relevance
+from .utils import filter_edges_by_relationship
 
 
 METHOD_NAME = 'Weighed Relevance Method'
@@ -20,6 +21,8 @@ _populated_target_graph: nx.DiGraph | None = None
 _max_annotation_sum: float | None = None
 _tune_factor = 0.5
 _convergence_threshold = 1e-3
+_PAIR_BATCH_SIZE = 256
+_T = TypeVar('_T')
 
 
 def _sum_annotation_for_graph(target_graph: nx.DiGraph,
@@ -112,23 +115,45 @@ def _calculate_ic(target_graph: nx.DiGraph) -> float:
     return max_delta
 
 
-def _relevance_worker(node_pair: tuple[str, str]) -> tuple[str, str, float | None]:
-    """
-    Worker function to calculate the weighed Relevance similarity for a pair of nodes.
-    :param node_pair: A tuple of two node IDs.
-    :return: A tuple containing the two node IDs and their Relevance similarity score.
-    """
-    node_1, node_2 = node_pair
+@lru_cache(maxsize=None)
+def _ancestors(node: str) -> frozenset[str]:
+    """Return the ontology ancestors of a node, cached within each worker."""
+    return frozenset(nx.descendants(_populated_target_graph, node)) | {node}
 
-    relevance = calculate_relevance(
-        node_1=node_1,
-        node_2=node_2,
-        graph=_populated_target_graph,
-        max_annotation=_max_annotation_sum,
-        annotation_attribute='annotation_sum',
+
+def _calculate_relevance_cached(node_1: str, node_2: str) -> float | None:
+    """Calculate weighed relevance without repeating graph traversals."""
+    common_ancestors = _ancestors(node_1).intersection(_ancestors(node_2))
+    mica = max(
+        (node for node in common_ancestors if 'ic' in _populated_target_graph.nodes[node]),
+        key=lambda node: _populated_target_graph.nodes[node]['ic'],
+        default=None,
     )
+    if mica is None:
+        return None
 
-    return node_1, node_2, relevance
+    return 2 * _populated_target_graph.nodes[mica]['ic'] / (
+        _populated_target_graph.nodes[node_1]['ic'] + _populated_target_graph.nodes[node_2]['ic']
+    ) * (1 - _populated_target_graph.nodes[mica]['annotation_sum'] / _max_annotation_sum)
+
+
+def _relevance_worker(
+    node_pairs: tuple[tuple[str, str], ...],
+) -> list[tuple[str, str, float | None]]:
+    """
+    Worker function to calculate weighed Relevance for a batch of node pairs.
+    """
+    return [
+        (node_1, node_2, _calculate_relevance_cached(node_1, node_2))
+        for node_1, node_2 in node_pairs
+    ]
+
+
+def _batched(iterable: Iterable[_T], size: int) -> Iterator[tuple[_T, ...]]:
+    """Yield fixed-size tuples without materialising every node pair."""
+    iterator = iter(iterable)
+    while batch := tuple(itertools.islice(iterator, size)):
+        yield batch
 
 
 def _worker_init(target_graph: nx.DiGraph,
@@ -143,6 +168,7 @@ def _worker_init(target_graph: nx.DiGraph,
 
     _populated_target_graph = target_graph
     _max_annotation_sum = max_annotation_sum
+    _ancestors.cache_clear()
 
 
 async def calculate_similarity(target_graph: nx.MultiDiGraph,
@@ -221,26 +247,29 @@ async def calculate_similarity(target_graph: nx.MultiDiGraph,
     # IC is ready, use the same formula as standard Relevance method
     nodes_with_ic = [node for node in target_graph.nodes if 'ic' in target_graph.nodes[node]]
     node_pairs = itertools.combinations(nodes_with_ic, 2)
+    pair_count = len(nodes_with_ic) * (len(nodes_with_ic) - 1) // 2
+    pair_batches = _batched(node_pairs, _PAIR_BATCH_SIZE)
+    batch_count = math.ceil(pair_count / _PAIR_BATCH_SIZE)
     max_annotation_sum = max(
         target_graph.nodes[node].get('annotation_sum', 0) for node in target_graph
     )
 
     verbose_print(f'Calculating similarity for {len(nodes_with_ic)} nodes, '
-                  f'total {len(nodes_with_ic) * (len(nodes_with_ic) - 1) // 2} pairs.')
+                  f'total {pair_count} pairs.')
 
     with ProcessPoolExecutor(
         max_workers=CONFIG.process_limit,
         initializer=_worker_init,
         initargs=(target_graph, max_annotation_sum),
     ) as executor:
-        async for result in schedule_tasks(
+        async for results in schedule_tasks(
             executor=executor,
             func=_relevance_worker,
-            iterable=node_pairs,
+            iterable=pair_batches,
             description='Calculate weighed relevance similarity scores between terms in the target graph.',
-            total=len(nodes_with_ic) * (len(nodes_with_ic) - 1) // 2,
+            total=batch_count,
         ):
-            concept_from, concept_to, similarity = result
+            for concept_from, concept_to, similarity in results:
 
-            if similarity is not None:
-                yield concept_from, concept_to, similarity
+                if similarity is not None:
+                    yield concept_from, concept_to, similarity

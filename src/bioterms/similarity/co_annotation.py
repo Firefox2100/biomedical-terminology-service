@@ -2,7 +2,8 @@ import math
 import itertools
 from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor
-from typing import AsyncIterator
+from functools import lru_cache
+from typing import AsyncIterator, Iterable, Iterator, TypeVar
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
@@ -22,6 +23,8 @@ _annotation_graph: nx.Graph | None = None
 _target_prefix: ConceptPrefix | None = None
 _corpus_prefix: ConceptPrefix | None = None
 _total_annotation_count: int | None = None
+_PAIR_BATCH_SIZE = 256
+_T = TypeVar('_T')
 
 
 def _calculate_co_annotation(node_1: str,
@@ -103,25 +106,68 @@ def _calculate_co_annotation(node_1: str,
     return similarity
 
 
-def _co_annotation_worker(node_pair: tuple[str, str]) -> tuple[str, str, float | None]:
-    """
-    Worker function to calculate co-annotation similarity for a pair of nodes.
-    :param node_pair: A tuple of two node IDs.
-    :return: A tuple containing the two node IDs and their co-annotation similarity score.
-    """
-    node_1, node_2 = node_pair
+@lru_cache(maxsize=None)
+def _annotation_set(node: str) -> frozenset[str]:
+    """Return all corpus annotations below a node, cached per worker."""
+    descendants = nx.ancestors(_pruned_target_graph, node) | {node}
+    corpus_prefix = f'{_corpus_prefix.value}:'
+    annotations = set()
+    for descendant in descendants:
+        annotation_name = f'{_target_prefix.value}:{descendant}'
+        if annotation_name in _annotation_graph:
+            annotations.update(
+                neighbor for neighbor in _annotation_graph.neighbors(annotation_name)
+                if neighbor.startswith(corpus_prefix)
+            )
+    return frozenset(annotations)
 
-    similarity = _calculate_co_annotation(
-        node_1=node_1,
-        node_2=node_2,
-        target_graph=_pruned_target_graph,
-        target_prefix=_target_prefix,
-        corpus_prefix=_corpus_prefix,
-        annotation_graph=_annotation_graph,
-        total_annotation_count=_total_annotation_count,
-    )
 
-    return node_1, node_2, similarity
+def _calculate_co_annotation_cached(node_1: str, node_2: str) -> float | None:
+    """Calculate co-annotation similarity using cached node annotation sets."""
+    annotation_set_1 = _annotation_set(node_1)
+    annotation_set_2 = _annotation_set(node_2)
+
+    if _total_annotation_count == 0 or not annotation_set_1 or not annotation_set_2:
+        return None
+
+    annotation_intersection = annotation_set_1 & annotation_set_2
+    if not annotation_intersection:
+        return 0.0
+
+    intersection_len = len(annotation_intersection)
+    if math.isclose(_total_annotation_count, intersection_len):
+        npmi = 1.0
+    else:
+        numerator = (intersection_len * _total_annotation_count) / (
+            len(annotation_set_1) * len(annotation_set_2)
+        )
+        try:
+            num_log = math.log(numerator)
+            denom_log = math.log(_total_annotation_count / intersection_len)
+            npmi = 1.0 if denom_log == 0 else (1 + num_log / denom_log) / 2
+        except (ValueError, ZeroDivisionError):
+            npmi = 0.0
+
+    return npmi * intersection_len / len(annotation_set_1 | annotation_set_2)
+
+
+def _co_annotation_worker(
+    node_pairs: tuple[tuple[str, str], ...],
+) -> list[tuple[str, str, float | None]]:
+    """
+    Worker function to calculate co-annotation similarity for a batch of pairs.
+    """
+    return [
+        (node_1, node_2, _calculate_co_annotation_cached(node_1, node_2))
+        for node_1, node_2 in node_pairs
+    ]
+
+
+def _batched(iterable: Iterable[_T], size: int) -> Iterator[tuple[_T, ...]]:
+    """Yield fixed-size tuples without materialising every node pair."""
+    iterator = iter(iterable)
+    while batch := tuple(itertools.islice(iterator, size)):
+        yield batch
 
 
 def _worker_init(target_graph: nx.DiGraph,
@@ -145,6 +191,7 @@ def _worker_init(target_graph: nx.DiGraph,
     _target_prefix = target_prefix
     _corpus_prefix = corpus_prefix
     _total_annotation_count = total_annotation_count
+    _annotation_set.cache_clear()
 
 
 async def calculate_similarity(target_graph: nx.MultiDiGraph,
@@ -200,22 +247,25 @@ async def calculate_similarity(target_graph: nx.MultiDiGraph,
 
     nodes = list(pruned_target_graph.nodes)
     node_pairs = itertools.combinations(nodes, 2)
+    pair_count = len(nodes) * (len(nodes) - 1) // 2
+    pair_batches = _batched(node_pairs, _PAIR_BATCH_SIZE)
+    batch_count = math.ceil(pair_count / _PAIR_BATCH_SIZE)
     verbose_print(f'Calculating similarity for {len(nodes)} nodes, '
-                  f'total {len(nodes)*(len(nodes)-1)//2} pairs.')
+                  f'total {pair_count} pairs.')
 
     with ProcessPoolExecutor(
         max_workers=CONFIG.process_limit,
         initializer=_worker_init,
         initargs=(pruned_target_graph, target_prefix, corpus_prefix, annotation_graph, total_annotation_count),
     ) as executor:
-        async for result in schedule_tasks(
+        async for results in schedule_tasks(
             executor=executor,
             func=_co_annotation_worker,
-            iterable=node_pairs,
+            iterable=pair_batches,
             description='Calculate co-annotation similarity scores between terms in the target graph.',
-            total=len(nodes)*(len(nodes)-1)//2,
+            total=batch_count,
         ):
-            concept_from, concept_to, similarity = result
+            for concept_from, concept_to, similarity in results:
 
-            if similarity is not None:
-                yield concept_from, concept_to, similarity
+                if similarity is not None:
+                    yield concept_from, concept_to, similarity

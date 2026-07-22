@@ -67,9 +67,9 @@ async def get_home_page(request: Request,
         structured_data = build_structured_data(base_url)
 
         return TEMPLATES.TemplateResponse(
-            'home.html',
-            {
-                'request': request,
+            request=request,
+            name='home.html',
+            context={
                 'page_title': 'Home | BioMedical Terminology Service',
                 'vocabulary_count': loaded_sum,
                 'concept_count': concept_sum,
@@ -108,9 +108,9 @@ async def get_login_page(request: Request,
     nav_links = await build_nav_links(request, doc_db)
 
     return TEMPLATES.TemplateResponse(
-        'login.html',
-        {
-            'request': request,
+        request=request,
+        name='login.html',
+        context={
             'page_title': 'Login | BioMedical Terminology Service',
             'next_url': sanitised_next_url,
             'error': error,
@@ -214,9 +214,9 @@ async def get_api_keys_page(request: Request,
     nav_links = await build_nav_links(request, doc_db)
 
     return TEMPLATES.TemplateResponse(
-        'api_keys.html',
-        {
-            'request': request,
+        request=request,
+        name='api_keys.html',
+        context={
             'page_title': 'API Keys | BioMedical Terminology Service',
             'api_keys': user.api_keys if user and user.api_keys else [],
             'nav_links': nav_links,
@@ -239,9 +239,9 @@ async def create_new_api_key(request: Request,
     nav_links = await build_nav_links(request, doc_db)
 
     return TEMPLATES.TemplateResponse(
-        'create_new_api_key.html',
-        {
-            'request': request,
+        request=request,
+        name='create_new_api_key.html',
+        context={
             'page_title': 'New API Key | BioMedical Terminology Service',
             'nav_links': nav_links,
         }
@@ -288,9 +288,9 @@ async def post_new_api_key(request: Request,
     nav_links = await build_nav_links(request, doc_db)
 
     return TEMPLATES.TemplateResponse(
-        'display_new_api_key.html',
-        {
-            'request': request,
+        request=request,
+        name='display_new_api_key.html',
+        context={
             'page_title': 'New API Key | BioMedical Terminology Service',
             'api_key': new_key_str,
             'nav_links': nav_links,
@@ -380,8 +380,9 @@ async def list_vocabularies(request: Request,
         })
 
         return TEMPLATES.TemplateResponse(
-            'vocabularies.html',
-            {
+            request=request,
+            name='vocabularies.html',
+            context={
                 'request': request,
                 'page_title': 'Vocabularies | BioMedical Terminology Service',
                 'vocabularies': vocab_statuses,
@@ -536,8 +537,9 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             term_browser_url = None
 
         return TEMPLATES.TemplateResponse(
-            'vocabulary_detail.html',
-            {
+            request=request,
+            name='vocabulary_detail.html',
+            context={
                 'request': request,
                 'page_title': f'{vocab_status.name} | BioMedical Terminology Service',
                 'vocabulary': vocab_status,
@@ -589,9 +591,9 @@ async def get_concept_detail(prefix: ConceptPrefix,
         structured_data = build_structured_data(base_url)
 
         return TEMPLATES.TemplateResponse(
-            'concept_detail.html',
-            {
-                'request': request,
+            request=request,
+            name='concept_detail.html',
+            context={
                 'page_title': f'{concept.label} | {prefix.value} Concept | BioMedical Terminology Service',
                 'concept': concept,
                 'vocabulary_prefix': prefix,

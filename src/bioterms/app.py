@@ -353,7 +353,6 @@ def create_app() -> FastAPI:
         nav_links = await build_nav_links(request, doc_db)
 
         context = {
-            'request': request,
             'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
             'detail': getattr(exc, 'detail', None),
             'nav_links': nav_links,
@@ -363,13 +362,15 @@ def create_app() -> FastAPI:
 
         if exc.status_code == 404:
             return TEMPLATES.TemplateResponse(
-                '404.html',
+                request=request,
+                name='404.html',
                 context=context,
                 status_code=404
             )
 
         return TEMPLATES.TemplateResponse(
-            '500.html',
+            request=request,
+            name='500.html',
             context=context,
             status_code=exc.status_code
         )

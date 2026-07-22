@@ -184,7 +184,7 @@ async def calculate_similarity(method: SimilarityMethod,
     offline_file_path = os.path.join(
         CONFIG.data_dir,
         'offline',
-        f'{target_prefix.value}-{method}{("-" + corpus_prefix.value) if corpus_prefix else ""}.similarity.dump'
+        f'{target_prefix.value}-{method.value}{("-" + corpus_prefix.value) if corpus_prefix else ""}.similarity.dump'
     )
 
     async def write_batch_to_file(f):

@@ -467,12 +467,19 @@ class Neo4jGraphDatabase(GraphDatabase):
                     CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
                     WITH rel, rel_key
                     FOREACH (_ IN CASE WHEN rel_key IS NULL THEN [] ELSE [1] END |
-                        SET rel.label = coll.distinct(
+                        SET rel.label = reduce(
+                            unique_labels = [],
+                            item IN (
+                                CASE
+                                    WHEN rel.label IS NULL THEN []
+                                    WHEN rel.label IS TYPED LIST<ANY> THEN rel.label
+                                    ELSE [rel.label]
+                                END + [rel_key]
+                            ) |
                             CASE
-                                WHEN rel.label IS NULL THEN []
-                                WHEN rel.label IS TYPED LIST<ANY> THEN rel.label
-                                ELSE [rel.label]
-                            END + [rel_key]
+                                WHEN item IN unique_labels THEN unique_labels
+                                ELSE unique_labels + item
+                            END
                         )
                     )
                     RETURN count(rel) AS created
