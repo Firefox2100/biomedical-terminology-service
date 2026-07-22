@@ -630,6 +630,27 @@ async def rebuild_cache_endpoint(_: str = Depends(login_required),
     Trigger a cache rebuild task.
     \f
     :param _: Authentication dependency to ensure the user is logged in.
-    :return: A redirect response to the home page.
+    :return: No response.
     """
     rebuild_cache_task.delay()
+
+
+@ui_router.post('/reload-graphql', status_code=status.HTTP_202_ACCEPTED)
+async def reload_graphql_endpoint(request: Request,
+                                  _: str = Depends(login_required),
+                                  ):
+    """
+    Reload the GraphQL sub application, so that the schema matches the latest capability
+    :param request: The incoming request object.
+    :param _: Authentication dependency to ensure the user is logged in.
+    :return: No response.
+    """
+    graphql_service = request.app.state.graphql_service
+
+    try:
+        await graphql_service.reload
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail="GraphQL schema reload failed",
+        ) from e
