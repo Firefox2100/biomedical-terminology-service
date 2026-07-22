@@ -29,6 +29,7 @@ from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import BtsError
 from bioterms.etc.utils import report_exception
+from bioterms.etc.asgi_management import ReloadableASGIApp
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
 from bioterms.annotation import get_annotation_status
@@ -53,10 +54,8 @@ async def lifespan(app: FastAPI):
     doc_db = await get_active_doc_db()
     graph_db = get_active_graph_db()
 
-    graphql_app = await create_graphql_app()
-
     try:
-        app.mount('/api/graphql', graphql_app)
+        await app.state.graphql_service.initialise()
         yield
     except Exception as e:
         LOGGER.critical('Fatal error during application lifespan: %s', str(e), exc_info=True)
@@ -281,6 +280,8 @@ def create_app() -> FastAPI:
 
         return response
 
+    graphql_service = ReloadableASGIApp(create_graphql_app)
+
     app.include_router(auto_complete_router)
     app.include_router(data_router)
     app.include_router(expand_router)
@@ -294,6 +295,9 @@ def create_app() -> FastAPI:
 
     app.mount('/static', StaticFiles(directory=str(STATIC_FILE_PATH)), name='static')
     app.mount('/mcp', mcp_app)
+    app.mount('/api/graphql', graphql_service)
+
+    app.state.graphql_service = graphql_service
 
     @app.exception_handler(BtsError)
     async def bioterms_exception_handler(request: Request, exc: BtsError):

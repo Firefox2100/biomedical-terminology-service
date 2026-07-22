@@ -8,6 +8,7 @@ from ariadne.asgi import GraphQL
 from ariadne.graphql import GraphQLSchema
 from ariadne.explorer import ExplorerGraphiQL
 from ariadne.utils import convert_camel_case_to_snake
+from starlette.types import ASGIApp
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -69,10 +70,10 @@ async def get_context_value(request: Request,
     return context_value
 
 
-async def create_graphql_app() -> GraphQL:
+async def create_graphql_app() -> ASGIApp:
     """
     Create a GraphQL application using Ariadne.
-    :return: An instance of GraphQL ASGI application.
+    :return: An instance of GraphQL ASGI application in CORS middleware wrapper.
     """
     cache = get_active_cache()
     doc_db = await get_active_doc_db()
