@@ -1,4 +1,5 @@
 import traceback
+from pathlib import Path
 from typing import Annotated, Optional
 import typer
 
@@ -56,7 +57,18 @@ async def calculate_command(target_prefix: Annotated[
                                          'files from loading functions.'
                                 )
                             ] = False,
+                            annotation_file: Annotated[
+                                Optional[Path],
+                                typer.Option(
+                                    '--annotation-file',
+                                    help='Override the annotation dump used in offline mode. '
+                                         'Only rows for the selected target/corpus pair are loaded.'
+                                )
+                            ] = None,
                             ):
+    if annotation_file is not None and not offline:
+        raise typer.BadParameter('--annotation-file requires --offline.')
+
     if target_prefix:
         targets = [target_prefix]
     else:
@@ -84,6 +96,7 @@ async def calculate_command(target_prefix: Annotated[
                         corpus_prefix=corp,
                         similarity_threshold=threshold,
                         offline=offline,
+                        annotation_file_path=annotation_file,
                     )
                     CONSOLE.print(
                         f'[green]Successfully calculated similarity between '

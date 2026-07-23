@@ -75,3 +75,50 @@ async def test_calculate_similarity_offline_does_not_require_cache(monkeypatch, 
         offline=True,
     )
 
+
+@pytest.mark.asyncio
+async def test_calculate_similarity_forwards_annotation_file_override(monkeypatch, tmp_path):
+    async def fake_calculate_similarity(**_kwargs):
+        if False:
+            yield
+
+    monkeypatch.setattr(
+        similarity,
+        'get_similarity_module',
+        lambda _method: types.SimpleNamespace(calculate_similarity=fake_calculate_similarity),
+    )
+    monkeypatch.setattr(
+        similarity,
+        'get_similarity_method_config',
+        lambda _method: {
+            'defaultThreshold': 0.5,
+            'corpusRequired': True,
+            'corpusGraphRequired': False,
+        },
+    )
+
+    async def fake_load_graph_from_file(_prefix):
+        return nx.MultiDiGraph()
+
+    annotation_path = tmp_path / 'mondo.annotation.dump'
+    annotation_path.write_text('')
+
+    async def fake_load_annotation_from_file(prefix_from, prefix_to, annotation_file_path=None):
+        assert prefix_from == ConceptPrefix.HPO
+        assert prefix_to == ConceptPrefix.MONDO
+        assert annotation_file_path == annotation_path
+        return nx.DiGraph()
+
+    monkeypatch.setattr(similarity, 'load_graph_from_file', fake_load_graph_from_file)
+    monkeypatch.setattr(similarity, 'load_annotation_from_file', fake_load_annotation_from_file)
+    data_dir = tmp_path / 'data'
+    (data_dir / 'offline').mkdir(parents=True)
+    monkeypatch.setattr(CONFIG, 'data_dir', str(data_dir))
+
+    await similarity.calculate_similarity(
+        method=SimilarityMethod.RELEVANCE,
+        target_prefix=ConceptPrefix.HPO,
+        corpus_prefix=ConceptPrefix.MONDO,
+        offline=True,
+        annotation_file_path=annotation_path,
+    )

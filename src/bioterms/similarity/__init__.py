@@ -90,6 +90,7 @@ async def calculate_similarity(method: SimilarityMethod,
                                corpus_prefix: ConceptPrefix = None,
                                similarity_threshold: float | None = None,
                                offline: bool = False,
+                               annotation_file_path: str | os.PathLike | None = None,
                                cache: Cache = None,
                                doc_db: DocumentDatabase = None,
                                graph_db: GraphDatabase = None,
@@ -102,11 +103,15 @@ async def calculate_similarity(method: SimilarityMethod,
     :param similarity_threshold: The similarity threshold to apply.
         If None, use the default threshold for the method.
     :param offline: Whether to run the calculation in offline mode.
+    :param annotation_file_path: Optional annotation dump override for offline calculation.
     :param doc_db: The document database instance to use. If None, use the active document database.
     :param graph_db: The graph database instance to use. If None, use the active graph database.
     """
     similarity_module = get_similarity_module(method)
     similarity_config = get_similarity_method_config(method)
+
+    if annotation_file_path is not None and not offline:
+        raise ValueError('annotation_file_path can only be used in offline mode.')
 
     if similarity_threshold is None:
         similarity_threshold = similarity_config['defaultThreshold']
@@ -159,6 +164,7 @@ async def calculate_similarity(method: SimilarityMethod,
             annotation_graph = await load_annotation_from_file(
                 prefix_from=target_prefix,
                 prefix_to=corpus_prefix,
+                annotation_file_path=annotation_file_path,
             )
         else:
             annotation_graph = await graph_db.get_annotation_graph(

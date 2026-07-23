@@ -29,6 +29,18 @@ SCRIPT = runpy.run_path(
             ['', 'hgnc:5', '', 'gene:A1BG', 'has_symbol', '{}'],
             ('hgnc', '5', 'gene', 'A1BG'),
         ),
+        (
+            ['hgnc', 'HGNC:5', 'gene', 'Em:AC068896.4', 'has_symbol', '{}'],
+            ('hgnc', '5', 'gene', 'Em:AC068896.4'),
+        ),
+        (
+            ['mondo', 'mondo:1', 'mesh', 'mesh:D0123', 'exact', '{}'],
+            ('mondo', '1', 'mesh', 'D0123'),
+        ),
+        (
+            ['ohdsi', '123', 'cgi', 'ABL1:F317L', 'exact', '{}'],
+            ('ohdsi', '123', 'cgi', 'ABL1:F317L'),
+        ),
     ],
 )
 def test_parse_annotation_row_compatibility(row, expected):

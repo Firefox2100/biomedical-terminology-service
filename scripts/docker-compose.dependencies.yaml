@@ -2,7 +2,7 @@ name: bts-dependencies
 services:
   # Neo4j as the graph database
   neo4j:
-    image: neo4j:2026.04.0
+    image: neo4j:2026.06.0
     restart: unless-stopped
     container_name: bts-neo4j
     healthcheck:
@@ -21,12 +21,12 @@ services:
       - NEO4J_apoc_import_file_use__neo4j__config=true
       - NEO4J_PLUGINS=["apoc", "graph-data-science"]
     volumes:
-      - neo4j_data:/data
-      - neo4j_plugins:/plugins
+      - ${BTS_DATABASE_PATH:-../data/database}/neo4j/data:/data
+      - ${BTS_DATABASE_PATH:-../data/database}/neo4j/plugins:/plugins
 
   # MongoDB as the primary document database
   mongodb:
-    image: mongo:8.2.9
+    image: mongo:8.3.4
     restart: unless-stopped
     container_name: bts-mongodb
     healthcheck:
@@ -37,11 +37,11 @@ services:
     ports:
       - "8903:27017"
     volumes:
-      - mongo_data:/data/db
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb/data/db:/data/db
 
   # Redis as the caching layer
   redis:
-    image: redis:8.6
+    image: redis:8.8
     restart: unless-stopped
     container_name: bts-redis
     healthcheck:
@@ -53,7 +53,7 @@ services:
       - "8904:6379"
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     volumes:
-      - redis_data:/data
+      - ${BTS_DATABASE_PATH:-../data/database}/redis/data:/data
 
   # Qdrant as the vector database
   qdrant:
@@ -70,7 +70,7 @@ services:
       - source: qdrant_config
         target: /qdrant/config/production.yaml
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ${BTS_DATABASE_PATH:-../data/database}/qdrant/storage:/qdrant/storage
 
 configs:
   qdrant_config:

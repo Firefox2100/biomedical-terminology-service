@@ -13,7 +13,7 @@ import networkx as nx
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType, AnnotationType
 from bioterms.etc.errors import VocabularyNotLoaded
-from bioterms.etc.utils import check_files_exist, edge_iter, batch_iterable
+from bioterms.etc.utils import check_files_exist, edge_iter, batch_iterable, verbose_print
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.database.doc_db.utils import generate_extra_data
@@ -283,6 +283,10 @@ async def write_annotations_to_file(prefix_from: ConceptPrefix,
     Write the given annotations to an offline file for the specified vocabulary prefix.
     :param prefix_from: The vocabulary prefix of the source concepts.
     :param prefix_to: The vocabulary prefix of the target concepts.
+    :param annotation_file_path: Explicit dump path override. Rows outside the
+        requested prefix pair are filtered from the returned graph.
+    :param annotation_file_path: Explicit dump path override. Rows outside the
+        requested prefix pair are filtered from the returned graph.
     :param annotations: The list of annotations to write.
     :param overwrite: Whether to overwrite the existing file.
     """
@@ -328,7 +332,32 @@ async def write_annotations_to_file(prefix_from: ConceptPrefix,
 
 def _prefix_value(prefix: ConceptPrefix | str) -> str:
     """Return a prefix's serialized value."""
-    return prefix.value if isinstance(prefix, ConceptPrefix) else str(prefix)
+    if isinstance(prefix, ConceptPrefix):
+        return prefix.value
+    value = str(prefix).strip()
+    try:
+        return ConceptPrefix(value.casefold()).value
+    except ValueError:
+        return value
+
+
+def _is_annotation_prefix(value: str,
+                          declared_prefix: str = '',
+                          ) -> bool:
+    """Whether text before a colon is a vocabulary prefix rather than ID text.
+
+    For external/unpacked vocabularies not represented by ``ConceptPrefix``, only
+    the row's exact declared prefix is recognized. Other colon-containing values
+    are opaque local identifiers and do not participate in conflict checking.
+    """
+    value = value.strip().casefold()
+    declared_prefix = declared_prefix.strip().casefold()
+    predefined_prefixes = {prefix.value.casefold() for prefix in ConceptPrefix}
+    if not value:
+        return False
+    if declared_prefix and declared_prefix not in predefined_prefixes:
+        return value == declared_prefix
+    return value in predefined_prefixes
 
 
 def normalise_annotation_curie(prefix: ConceptPrefix | str,
@@ -348,11 +377,12 @@ def normalise_annotation_curie(prefix: ConceptPrefix | str,
 
     if ':' in concept_id:
         embedded_prefix, local_id = concept_id.split(':', 1)
-        if embedded_prefix.casefold() != prefix_value.casefold():
-            raise ValueError(
-                f'Annotation concept ID {concept_id!r} conflicts with prefix {prefix_value!r}.'
-            )
-        concept_id = local_id
+        if _is_annotation_prefix(embedded_prefix, prefix_value):
+            if embedded_prefix.casefold() != prefix_value.casefold():
+                raise ValueError(
+                    f'Annotation concept ID {concept_id!r} conflicts with prefix {prefix_value!r}.'
+                )
+            concept_id = local_id
     if not concept_id:
         raise ValueError('Annotation CURIE cannot have an empty local ID.')
     return f'{prefix_value}:{concept_id}'
@@ -373,10 +403,14 @@ def parse_annotation_curie(prefix: ConceptPrefix | str | None,
     concept_id = str(concept_id).strip()
     embedded_prefix = ''
     local_id = concept_id
+    selected_prefix = explicit_prefix or fallback_value
     if ':' in concept_id:
-        embedded_prefix, local_id = concept_id.split(':', 1)
+        candidate_prefix, candidate_local_id = concept_id.split(':', 1)
+        if _is_annotation_prefix(candidate_prefix, selected_prefix):
+            embedded_prefix = candidate_prefix
+            local_id = candidate_local_id
 
-    selected_prefix = explicit_prefix or fallback_value or embedded_prefix
+    selected_prefix = selected_prefix or embedded_prefix
     if not selected_prefix:
         raise ValueError(f'Cannot determine annotation prefix for concept ID {concept_id!r}.')
     if embedded_prefix and embedded_prefix.casefold() != selected_prefix.casefold():
@@ -445,6 +479,7 @@ async def load_graph_from_file(prefix: ConceptPrefix,
 
 async def load_annotation_from_file(prefix_from: ConceptPrefix,
                                     prefix_to: ConceptPrefix | None = None,
+                                    annotation_file_path: str | os.PathLike | None = None,
                                     ) -> nx.DiGraph:
     """
     Load the annotation graph from an offline file for the specified vocabulary prefix.
@@ -452,12 +487,17 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
     :param prefix_to: The vocabulary prefix of the target concepts.
     :return: The annotation graph.
     """
-    offline_file_path = os.path.join(
-        CONFIG.data_dir,
-        'offline',
-        f'{prefix_from.value}{("-" + prefix_to.value if prefix_to is not None else "")}.annotation.dump'
-    )
-    if not os.path.exists(offline_file_path):
+    if annotation_file_path is not None:
+        offline_file_path = os.fspath(annotation_file_path)
+        if not os.path.exists(offline_file_path):
+            raise FileNotFoundError(f'Offline annotation file not found: {offline_file_path}')
+    else:
+        offline_file_path = os.path.join(
+            CONFIG.data_dir,
+            'offline',
+            f'{prefix_from.value}{("-" + prefix_to.value if prefix_to is not None else "")}.annotation.dump'
+        )
+    if annotation_file_path is None and not os.path.exists(offline_file_path):
         if prefix_to is not None:
             offline_file_path = os.path.join(
                 CONFIG.data_dir,
@@ -475,6 +515,12 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
             )
 
     graph = nx.DiGraph()
+    requested_prefixes = (
+        frozenset((prefix_from.value, prefix_to.value))
+        if prefix_to is not None else None
+    )
+    loaded_count = 0
+    filtered_count = 0
 
     async with aiofiles.open(offline_file_path) as f:
         async for line in f:
@@ -485,11 +531,27 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
                 continue
 
             source_prefix, source_id, target_prefix, target_id, annotation_type, properties_str = row
+            source_curie = parse_annotation_curie(source_prefix, source_id, prefix_from)
+            target_curie = parse_annotation_curie(target_prefix, target_id, prefix_to)
+            if requested_prefixes is not None:
+                edge_prefixes = frozenset((
+                    source_curie.split(':', 1)[0],
+                    target_curie.split(':', 1)[0],
+                ))
+                if edge_prefixes != requested_prefixes:
+                    filtered_count += 1
+                    continue
             graph.add_edge(
-                parse_annotation_curie(source_prefix, source_id, prefix_from),
-                parse_annotation_curie(target_prefix, target_id, prefix_to),
+                source_curie,
+                target_curie,
                 label=AnnotationType(annotation_type),
                 properties=json.loads(properties_str),
             )
+            loaded_count += 1
+
+    verbose_print(
+        f'Loaded {loaded_count} annotations from {offline_file_path}; '
+        f'filtered out {filtered_count} outside the requested prefix pair.'
+    )
 
     return graph

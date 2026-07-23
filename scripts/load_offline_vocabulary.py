@@ -543,6 +543,103 @@ async def finalize_mongo_indexes(
         )
 
 
+def resolve_only_file(path: Path, offline_dir: Path) -> Path:
+    """Resolve an incremental-import file from cwd or the offline directory."""
+    if path.is_absolute() or path.is_file():
+        return path.resolve()
+    return (offline_dir / path).resolve()
+
+
+def classify_only_file(prefix: ConceptPrefix, path: Path) -> str:
+    """Return the supported incremental artifact type or reject the filename."""
+    if path.name.endswith('.similarity.dump'):
+        parse_similarity_filename(path, prefix)
+        return 'similarity'
+    if path.name == f'{prefix.value}.embed.dump':
+        return 'embedding'
+    raise ValueError(
+        '--only-file supports a .similarity.dump file or the selected '
+        f'vocabulary\'s {prefix.value}.embed.dump file; got {path.name!r}'
+    )
+
+
+async def load_only_file(
+    prefix: ConceptPrefix,
+    path: Path,
+    *,
+    batch_size: int,
+    timeout: float,
+    attempts: int,
+) -> None:
+    """Load one incremental artifact without requiring the base dump files.
+
+    Similarity dumps use only Neo4j. Embedding dumps use only Qdrant and MongoDB
+    (the latter stores each concept's vector UUID mapping).
+    """
+    if not path.is_file():
+        raise SystemExit(f'Incremental import file not found: {path}')
+    try:
+        artifact_type = classify_only_file(prefix, path)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print(f'Incrementally importing only {path}')
+    print(f'Batch size={batch_size}, timeout={timeout}s, attempts={attempts}')
+
+    if artifact_type == 'similarity':
+        neo4j = AsyncGraphDatabase.driver(
+            CONFIG.neo4j_uri,
+            auth=(CONFIG.neo4j_username, CONFIG.neo4j_password),
+            connection_timeout=timeout,
+            connection_acquisition_timeout=timeout,
+        )
+        try:
+            await retry(
+                'Neo4j connection', neo4j.verify_connectivity,
+                timeout=timeout, attempts=attempts,
+            )
+            await ensure_neo4j_indexes(neo4j, timeout, attempts)
+            await load_similarities(
+                neo4j,
+                prefix,
+                path,
+                batch_size=batch_size,
+                timeout=timeout,
+                attempts=attempts,
+            )
+        finally:
+            await neo4j.close()
+    else:
+        mongo = AsyncMongoClient(
+            host=CONFIG.mongodb_host,
+            port=CONFIG.mongodb_port,
+            username=CONFIG.mongodb_username,
+            password=CONFIG.mongodb_password,
+            authSource=CONFIG.mongodb_auth_source,
+            connectTimeoutMS=int(timeout * 1000),
+            serverSelectionTimeoutMS=int(timeout * 1000),
+        )
+        qdrant = AsyncQdrantClient(location=CONFIG.qdrant_location, timeout=timeout)
+        try:
+            await retry(
+                'MongoDB connection', lambda: mongo.admin.command('ping'),
+                timeout=timeout, attempts=attempts,
+            )
+            await load_embeddings(
+                qdrant,
+                mongo,
+                prefix,
+                path,
+                batch_size=batch_size,
+                timeout=timeout,
+                attempts=attempts,
+            )
+        finally:
+            await qdrant.close()
+            await mongo.close()
+    print(f'Finished importing {path.name!r}.')
+
+
 async def run(args: argparse.Namespace) -> None:
     try:
         prefix = ConceptPrefix(args.prefix.lower())
@@ -551,6 +648,16 @@ async def run(args: argparse.Namespace) -> None:
         raise SystemExit(f'Unknown vocabulary prefix {args.prefix!r}; choose one of: {choices}') from exc
 
     offline_dir = args.offline_dir.resolve()
+    if args.only_file is not None:
+        await load_only_file(
+            prefix,
+            resolve_only_file(args.only_file, offline_dir),
+            batch_size=args.batch_size,
+            timeout=args.timeout,
+            attempts=args.retries,
+        )
+        return
+
     doc_path = offline_dir / f'{prefix.value}.doc.dump'
     node_path = offline_dir / f'{prefix.value}.node_ids.dump'
     graph_path = offline_dir / f'{prefix.value}.graph.dump'
@@ -659,6 +766,14 @@ Import tuning variables:
         type=Path,
         default=Path(CONFIG.data_dir) / 'offline',
         help='Directory containing offline dumps (default: BTS_DATA_DIR/offline)',
+    )
+    parser.add_argument(
+        '--only-file',
+        type=Path,
+        help=(
+            'Incrementally load one similarity or embedding dump, skipping every '
+            'other offline file. A bare filename is resolved under --offline-dir.'
+        ),
     )
     parser.add_argument(
         '--batch-size',
