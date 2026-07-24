@@ -31,9 +31,10 @@
         <h2 class="h5">About</h2>
         <p>
           The BioMedical Terminology Service is designed to facilitate access to and usage of biomedical
-          terminologies, ontologies, and vocabularies. It offers a centralised API service that allows users
-          to query, retrieve and interact with a wide range of biomedical terminological resources in various
-          use cases, including research, clinical applications, and data analysis.
+          terminologies, ontologies, and vocabularies. It offers a centralised service, exposed through REST,
+          GraphQL, FHIR, and MCP interfaces, that allows users and applications to query, retrieve, and interact
+          with a wide range of biomedical terminological resources in various use cases, including research,
+          clinical applications, and data analysis.
         </p>
       </section>
 
@@ -44,14 +45,21 @@
           provides advanced features:
         </p>
         <ul>
-          <li>Parent-Child traversal for use in external queries.</li>
+          <li>Unified access to multiple terminologies, ontologies, and vocabularies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, and OHDSI.</li>
+          <li>Parent-child and other relationship traversal, for use in external queries.</li>
           <li>Inter- and intra-vocabulary mapping for normalising subject tagging.</li>
-          <li>Semantic similarity based searches and translations in between term sets.</li>
-          <li>Support for multiple terminologies, ontologies, and vocabularies.</li>
-          <li>RESTful API for easy integration with other applications and services.</li>
+          <li>Semantic similarity based searches and translations between term sets, backed by multiple pluggable similarity methods.</li>
+          <li>Auto-complete and full-text search across loaded vocabularies.</li>
+          <li>A GraphQL endpoint for fine-grained, client-selected field access, alongside the REST API.</li>
+          <li>A FHIR-compatible terminology server interface, for interoperability with FHIR-based clinical systems.</li>
+          <li>An MCP server, for use with LLMs and agents.</li>
           <li>Regular updates to ensure access to the latest versions of terminological resources.</li>
           <li>Comprehensive documentation and usage examples.</li>
         </ul>
+        <p>
+          See the <a href="https://biomedical-terminology-service.readthedocs.io/en/latest/" target="_blank" rel="noopener">full documentation</a>
+          for installation instructions, API usage guides, and the mathematical background of the similarity methods.
+        </p>
       </section>
     </div>
   </div>

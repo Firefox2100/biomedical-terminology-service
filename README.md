@@ -4,6 +4,31 @@
 
 The BioMedical Terminology Service (BTS) is a comprehensive platform designed to provide unified access and other features related to biomedical terminologies, like ontologies, thesauri, and controlled vocabularies. It aims to facilitate the integration, retrieval, and research of biomedical terms for various applications in healthcare, research, and data analysis.
 
+## Features
+
+* Unified access to multiple biomedical vocabularies and ontologies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, and OHDSI.
+* Cross-vocabulary annotations and mappings, for normalising subject tagging and translating between term sets.
+* Parent-child and other relationship traversal, for use in external queries.
+* Auto-complete and full-text search across loaded vocabularies.
+* Semantic similarity and translation between concepts, backed by multiple pluggable similarity methods (co-annotation vectors, relevance, weighed relevance).
+* REST API with legacy, batched, and streaming versions to suit different client needs, plus a GraphQL endpoint for fine-grained, client-selected field access.
+* A FHIR-compatible terminology server interface (`CodeSystem` lookup and validation) for interoperability with FHIR-based clinical systems.
+* An MCP server, for use with LLMs and agents.
+* Pluggable database backends for document, graph, cache, and vector storage, selectable independently at deployment time.
+
+## Documentation
+
+Full documentation, including installation, database build instructions, per-vocabulary notes, API usage guides, and the mathematical background of the similarity methods, is available at [Read the Docs](https://biomedical-terminology-service.readthedocs.io/en/latest/):
+
+* [About](https://biomedical-terminology-service.readthedocs.io/en/latest/about.html)
+* [Installation](https://biomedical-terminology-service.readthedocs.io/en/latest/installation.html)
+* [Building the database](https://biomedical-terminology-service.readthedocs.io/en/latest/build-database.html)
+* [Supported vocabularies](https://biomedical-terminology-service.readthedocs.io/en/latest/vocabularies.html)
+* [Usage guide](https://biomedical-terminology-service.readthedocs.io/en/latest/usage/index.html)
+* [GraphQL API](https://biomedical-terminology-service.readthedocs.io/en/latest/graphql.html)
+* [FHIR API](https://biomedical-terminology-service.readthedocs.io/en/latest/fhir.html)
+* [Similarity methods](https://biomedical-terminology-service.readthedocs.io/en/latest/similarity-methods/index.html)
+
 ## Licence, Acknowledgements, and Disclaimer
 
 This software itself is released under [MIT Licence](LICENSE). You should have received a copy of the licence file with this software. If not, see [https://opensource.org/licenses/MIT](https://opensource.org/licenses/MIT).
