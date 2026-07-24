@@ -14,6 +14,11 @@ MongoDB
 
 The recommended database for storing document data is MongoDB. Follow the official `MongoDB installation guide <https://www.mongodb.com/docs/manual/installation/>`_ to set up MongoDB on your machine. Ensure that the MongoDB server is running before proceeding with the database construction. There's no specific configurations needed for MongoDB, but the WireTiger cache may need to be adjusted based on the available RAM.
 
+SQL (alternative to MongoDB)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As an alternative to MongoDB, the document database can be backed by a SQL database instead, via SQLAlchemy's async engine. PostgreSQL, MySQL/MariaDB, and SQLite are supported. This requires the ``sql`` extra (``pip install .[sql]``) and, depending on the chosen dialect, an async driver package that this project does not bundle, for example ``asyncpg`` for PostgreSQL, ``aiomysql`` or ``asyncmy`` for MySQL/MariaDB, or ``aiosqlite`` for SQLite. Set ``BTS_DOC_DATABASE_DRIVER=sql`` and ``BTS_SQL_DB_URL`` to a SQLAlchemy async URL to enable it, e.g. ``postgresql+asyncpg://user:password@host:5432/bts``. SQLite is convenient for local development and small deployments but is not recommended for the concurrent write load of a full database build.
+
 Neo4j
 ^^^^^
 
@@ -80,7 +85,16 @@ After multiple vocabularies are loaded, the annotations between them can be load
     bioterms-cli annotation download <vocabulary> <another-vocabulary>
     bioterms-cli annotation load <vocabulary> <another-vocabulary>
 
-The order of the vocabulary arguments does not matter. This downloads the mapping (mind the API keys), and loads them into the graph database as relationships between the concepts from the two vocabularies.
+The order of the vocabulary arguments does not matter. This downloads the mapping (mind the API keys), and loads them into the graph database as relationships between the concepts from the two vocabularies. See :doc:`vocabularies` for the full list of supported annotation pairs and their sources.
+
+The status of a vocabulary or an annotation pair, including whether it is currently loaded and its concept/relationship counts, can be checked at any time:
+
+.. code-block:: bash
+
+    bioterms-cli vocabulary status [<the-vocabulary-id>]
+    bioterms-cli annotation status [<vocabulary> <another-vocabulary>]
+
+Omitting the vocabulary/prefix arguments reports the status of every vocabulary or annotation pair.
 
 Embedding the concepts
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -108,7 +122,7 @@ This is one of the core features this service offers. Semantic similarities have
 
     bioterms-cli similarity calculate --target <the-vocabulary-id> --corpus <corpus-vocabulary-id> --method <similarity-method> --threshold <similarity-threshold>
 
-The target is the vocabulary for which the similarities are calculated, and the corpus is the vocabulary against which the similarities are calculated. The corpus may not be required if the metric is intrinsic, in which case it can be omitted. If the corpus is required but omitted, the software understands this as all possible corpus should be used, and it will calculate multiple metrics for different corpus. Similarly, if no method is specified, it will use all methods that can be applied to this vocabulary. The threshold is used to filter out low-similarity results, and can be adjusted based on the desired sensitivity. Because most similarity pairs will have a low score, we recommend setting it to at least 0.2 to get meaningful results, and possibly over 0.7 to get high-confidence results. This operation also supports the ``--offline`` flag, which writes the similarity results to a CSV file in the offline directory.
+The target is the vocabulary for which the similarities are calculated, and the corpus is the vocabulary against which the similarities are calculated. The corpus may not be required if the metric is intrinsic, in which case it can be omitted. If the corpus is required but omitted, the software understands this as all possible corpus should be used, and it will calculate multiple metrics for different corpus. Similarly, if no method is specified, it will use all methods that can be applied to this vocabulary. The threshold is used to filter out low-similarity results, and can be adjusted based on the desired sensitivity. Because most similarity pairs will have a low score, we recommend setting it to at least 0.2 to get meaningful results, and possibly over 0.7 to get high-confidence results. This operation also supports the ``--offline`` flag, which writes the similarity results to a CSV file in the offline directory. When running offline, ``--annotation-file`` can override the annotation dump used for the target/corpus pair, in case it is not in its default location.
 
 The supported similarity methods are:
 
@@ -126,6 +140,18 @@ This service does not support incremental updates of the vocabularies, because i
 .. code-block:: bash
 
     bioterms-cli vocabulary delete <the-vocabulary-id>
+
+Managing the cache
+^^^^^^^^^^^^^^^^^^
+
+Vocabulary, annotation, and similarity status are cached to keep repeated status queries fast. The cache is invalidated automatically whenever a vocabulary or annotation is loaded or deleted through the CLI, so this is normally only needed after data is modified out of band, such as after restoring an offline dump directly with database import tools:
+
+.. code-block:: bash
+
+    bioterms-cli cache purge
+    bioterms-cli cache rebuild
+
+``purge`` clears all cached status entries so they are recomputed the next time they are requested. ``rebuild`` walks every vocabulary, annotation, and similarity combination and recomputes their cached status immediately; this is the same operation the Celery worker performs when triggered from the web UI's "Rebuild Cache" action.
 
 Loading offline files
 ^^^^^^^^^^^^^^^^^^^^^

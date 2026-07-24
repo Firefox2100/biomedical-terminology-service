@@ -9,7 +9,7 @@ Prerequisites
 
 The following software must be installed on your system before proceeding with the installation:
 
-* A document database for storing and retrieving biomedical terminologies text data. For now, only MongoDB is supported.
+* A document database for storing and retrieving biomedical terminologies text data. MongoDB is recommended and used throughout this guide; a SQL database (PostgreSQL, MySQL/MariaDB, or SQLite) is also supported as an alternative, see :doc:`build-database`.
 * A graph database for storing the relationships between the terminology concepts. For now, only Neo4j is supported.
 * A cache database for caching hot data and inter-process communication. For now, only Redis is supported.
 * A vector database for storing and searching vector embeddings of biomedical terms. For now, only Qdrant is supported.
@@ -180,6 +180,7 @@ It's recommended to use docker compose to manage the software and its dependenci
           - BTS_REDIS_DB=0
           - BTS_BIOPORTAL_API_KEY=your-bioportal-api-key
           - BTS_NHS_TRUD_API_KEY=your-nhs-trud-api-key
+          - BTS_NIH_UMLS_API_KEY=your-nih-umls-api-key
           - BTS_TRANSFORMER_MODEL_NAME=BAAI/bge-base-en-v1.5
           - BTS_TORCH_DEVICE=cpu
           - BTS_GNN_EPOCHS=100
@@ -248,6 +249,7 @@ It's recommended to use docker compose to manage the software and its dependenci
           - BTS_REDIS_DB=0
           - BTS_BIOPORTAL_API_KEY=your-bioportal-api-key
           - BTS_NHS_TRUD_API_KEY=your-nhs-trud-api-key
+          - BTS_NIH_UMLS_API_KEY=your-nih-umls-api-key
           - BTS_TRANSFORMER_MODEL_NAME=BAAI/bge-base-en-v1.5
           - BTS_TORCH_DEVICE=cpu
           - BTS_GNN_EPOCHS=100
@@ -272,7 +274,13 @@ It's recommended to use docker compose to manage the software and its dependenci
       redis_data:
       qdrant_data:
 
-Note that the above configuration is a starting point. You may need to adjust settings such as database credentials, ports, and resource limits based on your specific environment and requirements. The worker service is optional, and is used to handle database related operations such as rebuilding cache, or rebuilding the entire database.
+Note that the above configuration is a starting point. You may need to adjust settings such as database credentials, ports, and resource limits based on your specific environment and requirements. The worker service is optional, and is used to handle database related operations such as rebuilding cache, or rebuilding the entire database. ``BTS_SECRET_KEY`` and ``BTS_SERVER_HMAC_KEY`` are placeholders above and should be replaced with generated values before deploying; a HMAC key can be generated with ``docker compose exec bioterms bioterms-cli generate-hmac-key``.
+
+Once the containers are up, create an administrator account to log into the web UI:
+
+.. code-block:: bash
+
+    docker compose exec bioterms bioterms-cli user create <username>
 
 From Source Code
 ----------------
@@ -287,14 +295,25 @@ Using source code is easier for development and building the database. Ensure yo
        cd biomedical-terminology-service
        pip install .[all]
 
-2. Configure environment variables as needed. The environment variables are read from the shell first, then it will look for a `.env` file in the `./conf/.env` path. This can be overridden by specifying a different path using the `BTS_ENV_FILE` environment variable. An example `example.env` file is provided in the project root directory.
-3. If the database is not yet built, build it first. The web service will start with an empty database, but all query functions will be disabled until the database is built. Refer to the :doc:`build-database` guide for more details. After a database change, the web service should be restarted to allow GraphQL schema to be reloaded.
-4. Start the web service:
+2. Configure environment variables as needed. The environment variables are read from the shell first, then it will look for a `.env` file in the `./conf/.env` path. This can be overridden by specifying a different path using the `BTS_ENV_FILE` environment variable. An example `example.env` file is provided in the project root directory. ``BTS_SERVER_HMAC_KEY`` is required and has no default; generate one with:
+
+    .. code-block:: bash
+
+         bioterms-cli generate-hmac-key
+
+3. If the database is not yet built, build it first. The web service will start with an empty database, but all query functions will be disabled until the database is built. Refer to the :doc:`build-database` guide for more details. After loading or deleting a vocabulary or annotation, the GraphQL schema needs to be refreshed to reflect the change. Either send an authenticated ``POST /reload-graphql`` request, or restart the web service; a full restart is not required.
+4. Create an administrator account, used to log into the web UI and manage API keys:
+
+    .. code-block:: bash
+
+         bioterms-cli user create <username>
+
+5. Start the web service:
 
     .. code-block:: bash
 
          uvicorn bioterms.asgi:application --host 127.0.0.1 --port 5000 --log-config ./conf/uvicorn-log.config.yaml
-5. (Optional) Start a Celery worker if you need to trigger database operations from the web UI. This is generally not needed for production deployments.
+6. (Optional) Start a Celery worker if you need to trigger database operations from the web UI. This is generally not needed for production deployments.
 
     .. code-block:: bash
 

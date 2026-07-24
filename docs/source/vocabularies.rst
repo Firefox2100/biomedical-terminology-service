@@ -7,35 +7,27 @@ Vocabulary Support
 
 This software aims to support a wide range of biomedical vocabularies and ontologies to provide comprehensive coverage of biomedical concepts, starting from the most commonly adopted ones. Below is a list of vocabularies and their support status:
 
-+------------+------------------+-------------------------------------------------------+
-| Vocabulary | Status           | Note                                                  |
-+============+==================+=======================================================+
-| CTV3       | Supported        | Downloaded from the NHS TRUD API                      |
-+------------+------------------+-------------------------------------------------------+
-| Ensembl    | Supported        | Downloaded via FTP from Ensembl                       |
-+------------+------------------+-------------------------------------------------------+
-| HGNC       | Supported        | Downloaded from HGNC release on Google Drive          |
-+------------+------------------+-------------------------------------------------------+
-| HPO        | Supported        | Downloaded from GitHub release                        |
-+------------+------------------+-------------------------------------------------------+
-| HPO        | Supported        | Downloaded from GitHub release                        |
-+------------+------------------+-------------------------------------------------------+
-| NCIT       | Supported        | Downloaded via FTP from NIH                           |
-+------------+------------------+-------------------------------------------------------+
-| OMIM       | Supported        | Downloaded from BioPortal API                         |
-+------------+------------------+-------------------------------------------------------+
-| ORDO       | Supported        | Downloaded from BioPortal API                         |
-+------------+------------------+-------------------------------------------------------+
-| Reactome   | Supported        | Using the official Neo4j dump, this program creates a |
-|            |                  | custom CSV dump for import, and released in GitHub    |
-+------------+------------------+-------------------------------------------------------+
-| SNOMED     | Supported        | Downloaded from the NHS TRUD API                      |
-+------------+------------------+-------------------------------------------------------+
-| ICD 10     | Not Supported    | On the roadmap for future support                     |
-+------------+------------------+-------------------------------------------------------+
-| ICD 11     | Will Not Support | ICD 11 does not release the full terminology, only    |
-|            |                  | some linearizations.                                  |
-+------------+------------------+-------------------------------------------------------+
+============================ ================== ===========================================================================
+Vocabulary                   Status             Note
+============================ ================== ===========================================================================
+CTV3                         Supported          Downloaded from the NHS TRUD API.
+Ensembl                      Supported          Downloaded via FTP from Ensembl.
+HGNC                         Supported          Downloaded from the HGNC release on Google Drive.
+HGNC Symbol (``gene``)       Supported          Derived automatically from the HGNC release when HGNC or Ensembl is
+                                                 loaded; it is not downloaded separately.
+HPO                          Supported          Downloaded from a GitHub release.
+Mondo                        Supported          Downloaded from a GitHub release.
+NCIT                         Supported          Downloaded via FTP from NIH.
+OHDSI                        Supported          No public download API. The release must be obtained manually from
+                                                 Athena and placed in the data folder.
+OMIM                         Supported          Downloaded from the BioPortal API.
+ORDO                         Supported          Downloaded from the BioPortal API.
+Reactome                     Supported          Reactome only releases a Neo4j/SQL dump; this project provides a script
+                                                 to convert that dump into the CSV import format it expects.
+SNOMED CT                    Supported          Downloaded from the NHS TRUD API.
+ICD 10                       Not Supported       On the roadmap for future support.
+ICD 11                       Will Not Support    ICD 11 does not release the full terminology, only some linearizations.
+============================ ================== ===========================================================================
 
 For other vocabularies not listed here, if you have a use case for their inclusion, please open an issue on the GitHub repository to discuss potential support and implementation.
 
@@ -56,4 +48,27 @@ Additionally, vocabularies that are widely adopted in the biomedical community a
 Annotations Support
 ===================
 
-This software also utilises mappings and annotations between the supported vocabularies to enhance the connectivity and semantic richness of the integrated knowledge graph. These annotations help link concepts across different vocabularies, facilitating more comprehensive queries and analyses. Below is a list of annotation sources and their support status:
+This software also utilises mappings and annotations between the supported vocabularies to enhance the connectivity and semantic richness of the integrated knowledge graph. These annotations help link concepts across different vocabularies, facilitating more comprehensive queries and analyses. Annotations are loaded with ``bioterms-cli annotation load <vocabulary> <another-vocabulary>``, as described in :doc:`build-database`. Below is a list of supported annotation pairs and their sources:
+
+===================== ======================================================================================
+Vocabulary Pair       Source
+===================== ======================================================================================
+CTV3 - SNOMED         SNOMED's CTV3 map file, from the NHS TRUD API (requires an NHS TRUD API key).
+Gene Symbol - HPO     HPO's own gene mapping file, downloaded alongside HPO.
+Gene Symbol - NCIT    NCIT's own gene mapping file, downloaded alongside NCIT.
+Gene Symbol - OMIM    Derived from the OMIM release (BioPortal API).
+Gene Symbol - ORDO    ORDO's own gene mapping file, downloaded alongside ORDO.
+HGNC - Mondo          Derived from cross-references in the Mondo release.
+HPO - Mondo           Derived from cross-references in the Mondo release.
+HPO - ORDO            HPO-ORDO Ontological Module (HOOM), from the BioPortal API (requires a BioPortal API key).
+Mondo - NCIT          Derived from cross-references in the Mondo release.
+Mondo - OMIM          Derived from cross-references in the Mondo release.
+Mondo - ORDO          Derived from cross-references in the Mondo release.
+Mondo - SNOMED        Derived from cross-references in the Mondo release.
+NCIT - OHDSI          Derived from the OHDSI release.
+OHDSI - SNOMED        Derived from the OHDSI release.
+ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
+ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
+===================== ======================================================================================
+
+Annotation pairs that are derived from a vocabulary's own release files (Mondo's cross-references, or a vocabulary's own gene/mapping file) do not require a separate download step or credential beyond what the parent vocabulary already needs.
