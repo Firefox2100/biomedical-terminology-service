@@ -191,6 +191,11 @@ def _add_relationship(ohdsi_graph: nx.MultiDiGraph,
         )
     elif relationship_id in [
         'Is a',
+        # Vocabulary-qualified variant of 'Is a'/'Subsumes' -- same semantics, own
+        # relationship_id/reverse pair in RELATIONSHIP.csv. Confirmed via that file: no
+        # other "X is a"/"X subsumes" variant has any actual rows in CONCEPT_RELATIONSHIP.csv
+        # for this data extract.
+        'RxNorm is a',
     ]:
         ohdsi_graph.add_edge(
             source_concept_id,

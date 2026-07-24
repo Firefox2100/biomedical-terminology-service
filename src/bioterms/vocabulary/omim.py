@@ -97,11 +97,12 @@ def _build_omim_concept(row,
             )
 
     if not pd.isna(row['Moved from']):
-        omim_graph.add_edge(
-            row['Moved from'],
-            concept.concept_id,
-            label=ConceptRelationshipType.REPLACED_BY
-        )
+        for moved_from_id in row['Moved from'].split('|'):
+            omim_graph.add_edge(
+                moved_from_id,
+                concept.concept_id,
+                label=ConceptRelationshipType.REPLACED_BY
+            )
 
     return concept
 

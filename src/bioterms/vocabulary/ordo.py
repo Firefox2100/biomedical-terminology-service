@@ -133,13 +133,16 @@ def _process_ordo_class(ordo_class: ThingClass,
         concept.status = ConceptStatus.DEPRECATED
 
     if part_of_prop[ordo_class]:
-        # Has part_of property, link as is_a
+        # ORDO's BFO 'part of' axiom (e.g. a specific disorder that is part of a disease
+        # group/family in Orphanet's classification) is a distinct relation from subClassOf
+        # is_a -- keep it as PART_OF rather than collapsing it into is_a (see project
+        # convention: never overwrite/relabel the observed source relation).
         for parent in part_of_prop[ordo_class]:
             if isinstance(parent, ThingClass) and parent.name.startswith('Orphanet_'):
                 relationships.append((
                     concept.concept_id,
                     parent.name.split('_')[-1],
-                    ConceptRelationshipType.IS_A
+                    ConceptRelationshipType.PART_OF
                 ))
 
     return concept, relationships

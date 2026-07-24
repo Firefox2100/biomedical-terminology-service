@@ -76,6 +76,7 @@ class ConceptRelationshipType(Enum):
     HAS_OUTPUT = 'has_output'
     OHDSI_RELATIONSHIP = 'ohdsi_relationship'
     ANNOTATED_WITH = 'annotated_with'
+    CONSIDER = 'consider'
 
 
 class DocDatabaseDriverType(Enum):

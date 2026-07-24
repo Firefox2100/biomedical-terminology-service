@@ -70,11 +70,11 @@ def map_xref_url(url: str) -> str | None:
         'http://purl.bioontology.org/ontology/ICD10CM/': 'ICD10CM',
         'http://purl.obolibrary.org/obo/DOID_': 'DOID',
         'http://purl.obolibrary.org/obo/NCIT_': 'NCIT',
-        'http://www.ebi.ac.uk/efo/': 'EFO',
+        'http://www.ebi.ac.uk/efo/EFO_': 'EFO',
         'http://www.orpha.net/ORDO/Orphanet_': 'Orphanet',
         'https://icd.who.int/browse10/2019/en#/': 'ICD10WHO',
         'https://omim.org/entry/': 'OMIM',
-        'https://omim.org/phenotypicSeries/': 'OMIMPS',
+        'https://omim.org/phenotypicSeries/PS': 'OMIMPS',
     }
 
     url = unquote(str(url).strip())

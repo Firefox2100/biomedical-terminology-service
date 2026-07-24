@@ -161,6 +161,10 @@ def _process_descriptions(description_file_path: str,
         description='Processing SNOMED descriptions',
         total=len(description_df)
     ):
+        if not bool(row['active']):
+            # See _process_relationships -- deduplication alone does not imply active.
+            continue
+
         if row['conceptId'] not in concepts:
             concepts[row['conceptId']] = CONCEPT_CLASS(
                 prefix=VOCABULARY_PREFIX,
@@ -197,6 +201,10 @@ def _process_definitions(definition_file_path: str,
         description='Processing SNOMED definitions',
         total=len(definition_df)
     ):
+        if not bool(row['active']):
+            # See _process_relationships -- deduplication alone does not imply active.
+            continue
+
         if row['conceptId'] not in concepts:
             raise ValueError(f'Concept ID {row["conceptId"]} not found in concepts dictionary.')
 
@@ -221,6 +229,13 @@ def _process_relationships(relationship_file_path: str,
         description='Processing SNOMED relationships',
         total=len(relationship_df)
     ):
+        if not bool(row['active']):
+            # rf2_dataframe_deduplicate only keeps the latest effectiveTime per relationship
+            # id -- it does not imply the kept row is active. Unlike _process_concepts, this
+            # was previously unfiltered, silently loading retracted/superseded relationships
+            # (~36% of is_a rows across the three releases) as if current.
+            continue
+
         if row['typeId'] == 116680003:
             # IS_A relationship
             snomed_graph.add_edge(
@@ -229,7 +244,13 @@ def _process_relationships(relationship_file_path: str,
                 label=ConceptRelationshipType.IS_A
             )
         elif row['typeId'] == 370124000:
-            # REPLACED_BY relationship
+            # REPLACED_BY relationship -- NOTE: this typeId does not appear anywhere in the
+            # current release's relationship files (verified: 0 rows, active or inactive).
+            # SNOMED's actual concept-inactivation history (SAME_AS/REPLACED_BY/WAS_A/
+            # MOVED_TO) lives in the separate Association Reference Set files
+            # (der2_cRefset_AssociationReferenceFull*.txt), which this loader does not read.
+            # Left in place rather than guessing a replacement SCTID; SNOMED replaced_by is
+            # effectively non-functional until that's addressed.
             snomed_graph.add_edge(
                 str(row['sourceId']),
                 str(row['destinationId']),

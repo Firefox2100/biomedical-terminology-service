@@ -104,11 +104,16 @@ def _process_hpo_class(hpo_class: ThingClass,
             ))
 
     if hasattr(hpo_class, 'consider'):
-        for replaced_classes in hpo_class.consider:
+        # OBO's `consider` is advisory ("this obsolete term has no confirmed replacement,
+        # but you might consider these instead") -- unlike hasAlternativeId, it is not a
+        # confident 1:1 identity-preserving merge, so it must not share REPLACED_BY's
+        # semantics (multiple non-exclusive suggestions are normal, e.g. HP_0000489 above
+        # has two).
+        for considered_class in hpo_class.consider:
             relationships.append((
-                replaced_classes.split(':')[-1],
                 concept.concept_id,
-                ConceptRelationshipType.REPLACED_BY
+                considered_class.split(':')[-1],
+                ConceptRelationshipType.CONSIDER
             ))
 
     return concept, relationships
