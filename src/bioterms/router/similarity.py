@@ -12,6 +12,7 @@ from bioterms.etc.metrics import SIM_REQS, SIM_ROOTS, SIM_THRESHOLD, SIM_LIMIT
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.similar_term import SimilarTerm
+from bioterms.model.translated_term import TranslatedTerm
 from .utils import response_generator
 
 
@@ -66,6 +67,12 @@ class TranslateRequestV1(JsonModel):
         ...,
         description='List of constraint term IDs to filter the translations.',
         alias='constraintIds',
+    )
+    constraint_prefix: Optional[ConceptPrefix] = Field(
+        None,
+        description='The vocabulary prefix that constraintIds belong to. Defaults to the same '
+                    'vocabulary as termIds (the prefix path parameter) if not provided.',
+        alias='constraintPrefix',
     )
     threshold: float | List[float] = Field(
         ...,
@@ -324,11 +331,13 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of translated terms with their similarity scores.
     """
+    constraint_prefix = translate_request.constraint_prefix or prefix
+
     translate_iter = graph_db.translate_terms_iter(
         original_ids=translate_request.term_ids,
         original_prefix=prefix,
         constraint_ids={
-            prefix: set(translate_request.constraint_ids),
+            constraint_prefix: set(translate_request.constraint_ids),
         },
         threshold=translate_request.threshold,
         limit=result_threshold if result_threshold > 0 else None,
@@ -344,7 +353,7 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     return v1_translated_terms
 
 
-@similarity_router.get('/{prefix}/translate/v2', response_model=List[SimilarTerm])
+@similarity_router.get('/{prefix}/translate/v2', response_model=List[TranslatedTerm])
 async def translate_terms_v2(prefix: ConceptPrefix,
                              original_ids: Annotated[
                                  List[str],
