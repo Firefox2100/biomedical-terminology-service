@@ -14,6 +14,8 @@ class AnnotationType(Enum):
     NARROW = 'narrow'
     RELATED = 'related'
     HAS_SYMBOL = 'has_symbol'
+    ALIAS_SYMBOL = 'alias_symbol'
+    PREVIOUS_SYMBOL = 'previous_symbol'
     ANNOTATED_WITH = 'annotated_with'
 
 

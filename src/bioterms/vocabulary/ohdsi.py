@@ -418,6 +418,11 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
                                     ):
             if row['valid_end_date'] < date_int:
                 continue
+            if row['concept_id_1'] == row['concept_id_2']:
+                # Self-mapping rows (overwhelmingly 'Maps to'/'Mapped from' pairs, where every
+                # standard concept trivially maps to itself) carry no graph-topological
+                # information -- skip, mirroring the same guard in _process_annotations.
+                continue
             _add_relationship(
                 ohdsi_graph,
                 row['relationship_id'],
@@ -447,7 +452,12 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
                                     total=len(chunk),
                                     transient=True,
                                     ):
-            if row['min_levels_of_separation'] != 0:
+            # min_levels_of_separation == 0 means ancestor and descendant are the SAME
+            # concept (CONCEPT_ANCESTOR's documented self-row convention) -- that is not a
+            # hierarchy edge. Direct parent-child pairs are separation == 1; deeper values
+            # are transitive (grandparent, etc.) and are intentionally not flattened into
+            # is_a here.
+            if row['min_levels_of_separation'] != 1:
                 continue
 
             ohdsi_graph.add_edge(

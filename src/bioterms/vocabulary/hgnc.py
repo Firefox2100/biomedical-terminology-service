@@ -113,7 +113,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                     prefixTo=ConceptPrefix.HGNC_SYMBOL,
                     conceptIdFrom=row['hgnc_id'],
                     conceptIdTo=alias_symbol,
-                    annotationType=AnnotationType.HAS_SYMBOL,
+                    annotationType=AnnotationType.ALIAS_SYMBOL,
                 ))
 
         if row['alias_name'] and pd.notna(row['alias_name']):
@@ -165,13 +165,17 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                 symbol.split('|')[0].split(':')[1],
                 label=ConceptRelationshipType.REPLACED_BY,
             )
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=VOCABULARY_PREFIX,
-                conceptIdFrom=row['HGNC_ID'],
-                conceptIdTo=row['WITHDRAWN_SYMBOL'],
-                annotationType=AnnotationType.HAS_SYMBOL,
-            ))
+
+        # The withdrawn ID's own former symbol is a HGNC_SYMBOL-space value, not another
+        # HGNC identifier -- prefixTo must be HGNC_SYMBOL, not VOCABULARY_PREFIX (HGNC).
+        # Only one such annotation per row, independent of how many replacing symbols exist.
+        annotations.append(Annotation(
+            prefixFrom=VOCABULARY_PREFIX,
+            prefixTo=ConceptPrefix.HGNC_SYMBOL,
+            conceptIdFrom=row['HGNC_ID'],
+            conceptIdTo=row['WITHDRAWN_SYMBOL'],
+            annotationType=AnnotationType.PREVIOUS_SYMBOL,
+        ))
 
         concepts.append(concept)
         hgnc_graph.add_node(concept.concept_id)
