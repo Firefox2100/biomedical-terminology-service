@@ -170,7 +170,7 @@ async def download_annotation(prefix_1: ConceptPrefix,
         raise ValueError(f'Annotation module for {prefix_1} and {prefix_2} does not '
                          f'have a download_annotation function.')
 
-    result = download_func()
+    result = download_func(download_client=download_client)
     if inspect.iscoroutine(result):
         await result
 

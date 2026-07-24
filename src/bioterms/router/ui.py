@@ -10,6 +10,7 @@ import secrets
 import hmac
 import hashlib
 import base64
+from typing import Annotated
 from uuid import UUID
 from urllib.parse import urlencode, urlparse, quote
 from markdown import markdown
@@ -35,10 +36,14 @@ ui_router = APIRouter(
 )
 
 
-@ui_router.get('/', response_class=HTMLResponse)
+@ui_router.get(
+    '/',
+    response_class=HTMLResponse,
+    responses={500: {'description': 'Failed to load vocabulary status for the home page.'}},
+)
 async def get_home_page(request: Request,
-                        doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                        graph_db: GraphDatabase = Depends(get_active_graph_db),
+                        doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                        graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                         ):
     """
     Serve the home page of the BioMedical Terminology Service.
@@ -84,9 +89,9 @@ async def get_home_page(request: Request,
 
 @ui_router.get('/login', response_class=HTMLResponse)
 async def get_login_page(request: Request,
-                         next_url: str | None = Query(None, alias='next'),
-                         error: str | None = Query(None),
-                         doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                         doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                         next_url: Annotated[str | None, Query(alias='next')] = None,
+                         error: Annotated[str | None, Query()] = None,
                          ):
     """
     Serve the login page for the BioMedical Terminology Service.
@@ -164,10 +169,10 @@ def _is_safe_relative_path(url: str,
 
 @ui_router.post('/login', response_class=RedirectResponse)
 async def post_login_credentials(request: Request,
-                                 next_url: str | None = Query(None, alias='next'),
-                                 username: str = Form(...),
-                                 password: str = Form(...),
-                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                 username: Annotated[str, Form()],
+                                 password: Annotated[str, Form()],
+                                 doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                 next_url: Annotated[str | None, Query(alias='next')] = None,
                                  ):
     """
     Process login credentials and authenticate the user.
@@ -218,8 +223,8 @@ async def handle_logout(request: Request):
 
 @ui_router.get('/api-keys', response_class=HTMLResponse)
 async def get_api_keys_page(request: Request,
-                            doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                            username: str = Depends(login_required),
+                            doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                            username: Annotated[str, Depends(login_required)],
                             ):
     """
     Serve the API keys management page.
@@ -246,8 +251,8 @@ async def get_api_keys_page(request: Request,
 
 @ui_router.get('/api-keys/new', response_class=HTMLResponse)
 async def create_new_api_key(request: Request,
-                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                             _: str = Depends(login_required),
+                             doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                             _: Annotated[str, Depends(login_required)],
                              ):
     """
     Create a new API key for the logged-in user.
@@ -268,11 +273,15 @@ async def create_new_api_key(request: Request,
     )
 
 
-@ui_router.post('/api-keys/new', response_class=HTMLResponse)
+@ui_router.post(
+    '/api-keys/new',
+    response_class=HTMLResponse,
+    responses={404: {'description': 'User not found.'}},
+)
 async def post_new_api_key(request: Request,
-                           name: str = Form(...),
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                           username: str = Depends(login_required),
+                           name: Annotated[str, Form()],
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           username: Annotated[str, Depends(login_required)],
                            ):
     """
     Process the creation of a new API key for the logged-in user.
@@ -320,8 +329,8 @@ async def post_new_api_key(request: Request,
 
 @ui_router.delete('/api-keys/{key_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_api_key(key_id: str,
-                         doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                         username: str = Depends(login_required),
+                         doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                         username: Annotated[str, Depends(login_required)],
                          ):
     """
     Delete an API key for the logged-in user.
@@ -336,11 +345,15 @@ async def delete_api_key(key_id: str,
     )
 
 
-@ui_router.get('/vocabularies', response_class=HTMLResponse)
+@ui_router.get(
+    '/vocabularies',
+    response_class=HTMLResponse,
+    responses={500: {'description': 'Failed to load vocabulary statuses.'}},
+)
 async def list_vocabularies(request: Request,
-                            doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                            graph_db: GraphDatabase = Depends(get_active_graph_db),
-                            username: str | None = Depends(login_optional),
+                            doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                            graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                            username: Annotated[str | None, Depends(login_optional)],
                             ):
     """
     List all available vocabularies.
@@ -415,12 +428,16 @@ async def list_vocabularies(request: Request,
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@ui_router.get('/vocabularies/{prefix}', response_class=HTMLResponse)
+@ui_router.get(
+    '/vocabularies/{prefix}',
+    response_class=HTMLResponse,
+    responses={500: {'description': 'Failed to load vocabulary detail information.'}},
+)
 async def get_vocabulary_info(prefix: ConceptPrefix,
                               request: Request,
-                              cache: Cache = Depends(get_active_cache),
-                              doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                              graph_db: GraphDatabase = Depends(get_active_graph_db),
+                              cache: Annotated[Cache, Depends(get_active_cache)],
+                              doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                              graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                               ):
     """
     Get information about the specified vocabulary.
@@ -575,13 +592,20 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@ui_router.get('/vocabularies/{prefix}/{concept_id}', response_class=HTMLResponse)
+@ui_router.get(
+    '/vocabularies/{prefix}/{concept_id}',
+    response_class=HTMLResponse,
+    responses={
+        404: {'description': 'Concept not found in the specified vocabulary.'},
+        500: {'description': 'Failed to load concept detail information.'},
+    },
+)
 async def get_concept_detail(prefix: ConceptPrefix,
                              concept_id: str,
                              request: Request,
-                             cache: Cache = Depends(get_active_cache),
-                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             cache: Annotated[Cache, Depends(get_active_cache)],
+                             doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                             graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                              ):
     """
     Get detailed information about a specific concept within a vocabulary.
@@ -627,7 +651,11 @@ async def get_concept_detail(prefix: ConceptPrefix,
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@ui_router.get('/term-browser', response_class=HTMLResponse)
+@ui_router.get(
+    '/term-browser',
+    response_class=HTMLResponse,
+    responses={404: {'description': 'Term browser not compiled or deployed.'}},
+)
 async def get_term_browser():
     """
     Serve the term browser page.
@@ -644,7 +672,7 @@ async def get_term_browser():
 
 
 @ui_router.post('/rebuild-cache', status_code=status.HTTP_202_ACCEPTED)
-async def rebuild_cache_endpoint(_: str = Depends(login_required),
+async def rebuild_cache_endpoint(_: Annotated[str, Depends(login_required)],
                                  ):
     """
     Trigger a cache rebuild task.
@@ -655,9 +683,13 @@ async def rebuild_cache_endpoint(_: str = Depends(login_required),
     rebuild_cache_task.delay()
 
 
-@ui_router.post('/reload-graphql', status_code=status.HTTP_202_ACCEPTED)
+@ui_router.post(
+    '/reload-graphql',
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={500: {'description': 'GraphQL schema reload failed.'}},
+)
 async def reload_graphql_endpoint(request: Request,
-                                  _: str = Depends(login_required),
+                                  _: Annotated[str, Depends(login_required)],
                                   ):
     """
     Reload the GraphQL sub application, so that the schema matches the latest capability

@@ -2,7 +2,7 @@
 Router for mapping concepts between different vocabularies.
 """
 
-from typing import List
+from typing import Annotated, List
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -24,29 +24,31 @@ trace_router = APIRouter(
 @trace_router.get('/{prefix}/trace/v1/{target_prefix}', response_model=List[ConceptPath])
 async def trace_terms_v1(prefix: ConceptPrefix,
                          target_prefix: ConceptPrefix,
-                         start_id: str = Query(
-                             ...,
-                             description='The ID of the starting concept.',
-                         ),
-                         end_id: str = Query(
-                             ...,
-                             description='The ID of the ending concept.',
-                         ),
-                         relationship: ConceptRelationshipType | AnnotationType = Query(
-                             ...,
-                             description='The type of relationship to trace.',
-                         ),
-                         forward: bool | None = Query(
-                             True,
-                             description='If True, the direction of path must be from start to end; if '
-                                         'False, it shall be from end to start. If None, direction is '
-                                         'ignored, but only the shortest path is returned.'
-                         ),
-                         max_hops: int = Query(
-                             12,
-                             description='The maximum number of hops to trace from start to end.'
-                         ),
-                         graph_db: GraphDatabase = Depends(get_active_graph_db),
+                         start_id: Annotated[
+                             str,
+                             Query(description='The ID of the starting concept.')
+                         ],
+                         end_id: Annotated[
+                             str,
+                             Query(description='The ID of the ending concept.')
+                         ],
+                         relationship: Annotated[
+                             ConceptRelationshipType | AnnotationType,
+                             Query(description='The type of relationship to trace.')
+                         ],
+                         graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                         forward: Annotated[
+                             bool | None,
+                             Query(
+                                 description='If True, the direction of path must be from start to end; if '
+                                             'False, it shall be from end to start. If None, direction is '
+                                             'ignored, but only the shortest path is returned.'
+                             )
+                         ] = True,
+                         max_hops: Annotated[
+                             int,
+                             Query(description='The maximum number of hops to trace from start to end.')
+                         ] = 12,
                          ):
     """
     Trace paths between two concepts in the graph database.

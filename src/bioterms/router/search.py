@@ -4,7 +4,7 @@ endpoint that utilizes embedding-based search to find relevant terms based on th
 query.
 """
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
@@ -25,14 +25,16 @@ search_router = APIRouter(
 
 @search_router.get('/{prefix}/search/v1', response_model=List[Concept])
 async def search_terms_v1(prefix: ConceptPrefix,
-                          query: str = Query(..., description='The search query string'),
-                          limit: Optional[int] = Query(
-                              10,
-                              description='Maximum number of concepts to return.',
-                              ge=1,
-                          ),
-                          doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                          vector_db: VectorDatabase = Depends(get_active_vector_db),
+                          query: Annotated[str, Query(description='The search query string')],
+                          doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                          vector_db: Annotated[VectorDatabase, Depends(get_active_vector_db)],
+                          limit: Annotated[
+                              Optional[int],
+                              Query(
+                                  description='Maximum number of concepts to return.',
+                                  ge=1,
+                              )
+                          ] = 10,
                           ):
     """
     Search for terms matching the query within the specified vocabulary prefix.

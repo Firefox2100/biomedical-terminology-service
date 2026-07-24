@@ -2,7 +2,7 @@
 Router for expanding terms in vocabularies.
 """
 
-from typing import List
+from typing import Annotated, List
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -66,16 +66,18 @@ class ExpandedTermV1(JsonModel):
 @expand_router.post('/{prefix}/expand/v1', response_model=List[ExpandedTermV1])
 async def expand_terms_v1(prefix: ConceptPrefix,
                           requested_terms: ExpandRequestV1,
-                          depth: int = Query(
-                              3,
-                              description='The depth of the expansion. 0 for no limit.'
-                          ),
-                          result_threshold: int = Query(
-                              0,
-                              description='The maximum number of terms to return in the response. '
-                                          '0 for no limit.'
-                          ),
-                          graph_db: GraphDatabase = Depends(get_active_graph_db),
+                          graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                          depth: Annotated[
+                              int,
+                              Query(description='The depth of the expansion. 0 for no limit.')
+                          ] = 3,
+                          result_threshold: Annotated[
+                              int,
+                              Query(
+                                  description='The maximum number of terms to return in the response. '
+                                              '0 for no limit.'
+                              )
+                          ] = 0,
                           ):
     """
     Expand terms to their descendants up to a specified depth (V1). This API is compatible with
@@ -119,19 +121,19 @@ async def expand_terms_v1(prefix: ConceptPrefix,
 
 @expand_router.get('/{prefix}/expand/v2', response_model=List[RelatedTerm])
 async def expand_terms_v2(prefix: ConceptPrefix,
-                          concept_ids: List[str] = Query(
-                              ...,
-                              description='List of concept IDs to expand.'
-                          ),
-                          depth: int | None = Query(
-                              None,
-                              description='Maximum depth for expansion.'
-                          ),
-                          limit: int | None = Query(
-                              None,
-                              description='Maximum number of descendants to return for each term.'
-                          ),
-                          graph_db: GraphDatabase = Depends(get_active_graph_db),
+                          concept_ids: Annotated[
+                              List[str],
+                              Query(description='List of concept IDs to expand.')
+                          ],
+                          graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                          depth: Annotated[
+                              int | None,
+                              Query(description='Maximum depth for expansion.')
+                          ] = None,
+                          limit: Annotated[
+                              int | None,
+                              Query(description='Maximum number of descendants to return for each term.')
+                          ] = None,
                           ):
     """
     Expand terms to their descendants up to a specified depth (V2). This API returns

@@ -2,7 +2,7 @@
 Router for mapping concepts between different vocabularies.
 """
 
-from typing import List
+from typing import Annotated, List
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -69,12 +69,14 @@ class MappedTermV1(JsonModel):
 async def map_terms_v1(prefix: ConceptPrefix,
                        target_prefix: ConceptPrefix,
                        requested_terms: MapRequestV1,
-                       result_threshold: int = Query(
-                           0,
-                           description='The maximum number of terms to return in the response. '
-                                       '0 for no limit.'
-                       ),
-                       graph_db: GraphDatabase = Depends(get_active_graph_db),
+                       graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                       result_threshold: Annotated[
+                           int,
+                           Query(
+                               description='The maximum number of terms to return in the response. '
+                                           '0 for no limit.'
+                           )
+                       ] = 0,
                        ):
     """
     Map terms from one prefix to another (V1). This API is compatible with Cafe Variome V3 backend.
@@ -129,22 +131,24 @@ async def map_terms_v1(prefix: ConceptPrefix,
 @map_router.get('/{prefix}/map/v2/{target_prefix}', response_model=List[RelatedTerm])
 async def map_terms_v2(prefix: ConceptPrefix,
                        target_prefix: ConceptPrefix,
-                       concept_ids: List[str] = Query(
-                           ...,
-                           description='List of concept IDs to expand.'
-                       ),
-                       max_hops: int = Query(
-                           1,
-                           description='Maximum number of hops between source and target terms. '
-                                       'Set this to higher for going across more than one '
-                                       'vocabulary.',
-                           ge=1,
-                       ),
-                       limit: int | None = Query(
-                           None,
-                           description='Maximum number of descendants to return for each term.'
-                       ),
-                       graph_db: GraphDatabase = Depends(get_active_graph_db),
+                       concept_ids: Annotated[
+                           List[str],
+                           Query(description='List of concept IDs to expand.')
+                       ],
+                       graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                       max_hops: Annotated[
+                           int,
+                           Query(
+                               description='Maximum number of hops between source and target terms. '
+                                           'Set this to higher for going across more than one '
+                                           'vocabulary.',
+                               ge=1,
+                           )
+                       ] = 1,
+                       limit: Annotated[
+                           int | None,
+                           Query(description='Maximum number of descendants to return for each term.')
+                       ] = None,
                        ):
     """
     Map terms from one prefix to another (V2).

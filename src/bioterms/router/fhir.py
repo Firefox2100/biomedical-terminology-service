@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from fhir.resources.capabilitystatement import CapabilityStatement, CapabilityStatementRest, \
@@ -366,8 +366,8 @@ async def get_fhir_metadata():
 
 
 @fhir_router.get('/CodeSystem', response_model=Bundle, response_model_exclude_none=True)
-async def get_fhir_code_systems(doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                                graph_db: GraphDatabase = Depends(get_active_graph_db),
+async def get_fhir_code_systems(doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                                 ):
     code_systems = []
     base_url = CONFIG.fhir_canonical_url.strip('/')
@@ -412,10 +412,13 @@ async def get_fhir_code_systems(doc_db: DocumentDatabase = Depends(get_active_do
     },
     response_model_exclude_none=True
 )
-async def lookup_fhir_code(system: str = Query(..., description='The code system to lookup in.'),
-                           code: str = Query(..., description='The code to lookup.'),
-                           property: Optional[list[str]] = Query(None, description='The properties to return.'),
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
+async def lookup_fhir_code(system: Annotated[str, Query(description='The code system to lookup in.')],
+                           code: Annotated[str, Query(description='The code to lookup.')],
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           property: Annotated[
+                               Optional[list[str]],
+                               Query(description='The properties to return.')
+                           ] = None,
                            ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     return await _lookup_fhir_code(
@@ -437,7 +440,7 @@ async def lookup_fhir_code(system: str = Query(..., description='The code system
     response_model_exclude_none=True
 )
 async def lookup_fhir_code_post(search_params: Parameters,
-                                doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                                 ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     coding = next((
@@ -505,8 +508,8 @@ async def lookup_fhir_code_post(search_params: Parameters,
     response_model_exclude_none=True
 )
 async def get_fhir_code_system(prefix: ConceptPrefix,
-                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                               graph_db: GraphDatabase = Depends(get_active_graph_db),
+                               doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                               graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                                ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     vocab_status = await get_vocabulary_status(
@@ -540,9 +543,9 @@ async def get_fhir_code_system(prefix: ConceptPrefix,
 
 
 @fhir_router.get('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
-async def validate_fhir_code(system: str = Query(..., description='The code system to validate against.'),
-                             code: str = Query(..., description='The code to validate.'),
-                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+async def validate_fhir_code(system: Annotated[str, Query(description='The code system to validate against.')],
+                             code: Annotated[str, Query(description='The code to validate.')],
+                             doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                              ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     return await _validate_fhir_code(
@@ -555,7 +558,7 @@ async def validate_fhir_code(system: str = Query(..., description='The code syst
 
 @fhir_router.post('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
 async def validate_fhir_code_post(search_params: Parameters,
-                                  doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                  doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                                   ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     coding = next((

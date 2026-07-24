@@ -9,7 +9,7 @@ import hmac
 import base64
 import importlib.resources as pkg_resources
 from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import Annotated, AsyncIterator, Optional
 from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import FastAPI, Request, Depends, HTTPException, status
@@ -307,7 +307,7 @@ def sanitise_next_url(next_url: str | None = None,
 
 
 async def login_optional(request: Request,
-                         db: DocumentDatabase = Depends(get_active_doc_db),
+                         db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                          ) -> str | None:
     """
     A dependency to optionally get the logged-in user.
@@ -329,7 +329,7 @@ async def login_optional(request: Request,
 
 
 async def login_required(request: Request,
-                         db: DocumentDatabase = Depends(get_active_doc_db),
+                         db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                          ) -> str:
     """
     A dependency to ensure that the user is logged in.
@@ -356,8 +356,8 @@ async def login_required(request: Request,
     )
 
 
-async def api_key_required(credentials: HTTPAuthorizationCredentials = Depends(BEARER_SECURITY),
-                           db: DocumentDatabase = Depends(get_active_doc_db),
+async def api_key_required(credentials: Annotated[HTTPAuthorizationCredentials, Depends(BEARER_SECURITY)],
+                           db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                            ) -> str:
     """
     A dependency to ensure that a valid API key is provided.

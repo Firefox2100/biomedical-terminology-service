@@ -5,7 +5,7 @@ vocabulary status information.
 """
 
 import zlib
-from typing import AsyncIterator
+from typing import Annotated, AsyncIterator
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
@@ -70,9 +70,9 @@ class ConceptInfoResponse(JsonModel):
 
 @data_router.get('/{prefix}', response_model=VocabularyStatus)
 async def get_vocabulary_status_info(prefix: ConceptPrefix,
-                                     cache: Cache = Depends(get_active_cache),
-                                     doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                                     graph_db: GraphDatabase = Depends(get_active_graph_db),
+                                     cache: Annotated[Cache, Depends(get_active_cache)],
+                                     doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                     graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                                      ):
     """
     Get status about the specified vocabulary.
@@ -95,11 +95,11 @@ async def get_vocabulary_status_info(prefix: ConceptPrefix,
 
 @data_router.delete('/{prefix}')
 async def delete_vocabulary_data(prefix: ConceptPrefix,
-                                 cache: Cache = Depends(get_active_cache),
-                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                                 graph_db: GraphDatabase = Depends(get_active_graph_db),
-                                 vector_db: VectorDatabase = Depends(get_active_vector_db),
-                                 _: str = Depends(api_key_required),
+                                 cache: Annotated[Cache, Depends(get_active_cache)],
+                                 doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                 graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                                 vector_db: Annotated[VectorDatabase, Depends(get_active_vector_db)],
+                                 _: Annotated[str, Depends(api_key_required)],
                                  ):
     """
     Delete all documents/records for the specified vocabulary from the document database.
@@ -120,7 +120,11 @@ async def delete_vocabulary_data(prefix: ConceptPrefix,
     )
 
 
-@data_router.get('/{prefix}/license', response_class=Response)
+@data_router.get(
+    '/{prefix}/license',
+    response_class=Response,
+    responses={404: {'description': 'No license information found for the vocabulary.'}},
+)
 async def get_license(prefix: ConceptPrefix):
     """
     Get the licence information for the specified vocabulary.
@@ -143,13 +147,15 @@ async def get_license(prefix: ConceptPrefix):
 
 @data_router.get('/{prefix}/random', response_model=list[str])
 async def get_random_concept_ids(prefix: ConceptPrefix,
-                                 count: int = Query(
-                                     10,
-                                     description='Number of random concepts to return.',
-                                     ge=1,
-                                     le=100,
-                                 ),
-                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                 doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                 count: Annotated[
+                                     int,
+                                     Query(
+                                         description='Number of random concepts to return.',
+                                         ge=1,
+                                         le=100,
+                                     )
+                                 ] = 10,
                                  ):
     """
     Get a list of random concept IDs from the specified vocabulary.
@@ -169,7 +175,7 @@ async def get_random_concept_ids(prefix: ConceptPrefix,
 
 @data_router.get('/{prefix}/documents')
 async def get_documents(prefix: ConceptPrefix,
-                        doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                        doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                         ):
     """
     Download all documents from the specified vocabulary database as a JSON list.
@@ -232,11 +238,15 @@ async def _iter_request_lines(request: Request,
         yield buffer
 
 
-@data_router.post('/{prefix}/documents', response_model=IngestResponse)
+@data_router.post(
+    '/{prefix}/documents',
+    response_model=IngestResponse,
+    responses={400: {'description': 'Failed to ingest one or more of the uploaded documents.'}},
+)
 async def ingest_documents(prefix: ConceptPrefix,
                            request: Request,
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                           _: str = Depends(api_key_required),
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           _: Annotated[str, Depends(api_key_required)],
                            ):
     """
     Ingest documents into the specified vocabulary database.
@@ -287,11 +297,15 @@ async def ingest_documents(prefix: ConceptPrefix,
     )
 
 
-@data_router.get('/{prefix}/{concept_id}', response_model=ConceptInfoResponse)
+@data_router.get(
+    '/{prefix}/{concept_id}',
+    response_model=ConceptInfoResponse,
+    responses={404: {'description': 'Concept not found in the specified vocabulary.'}},
+)
 async def get_concept(prefix: ConceptPrefix,
                       concept_id: str,
-                      doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                      graph_db: GraphDatabase = Depends(get_active_graph_db),
+                      doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                      graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                       ):
     """
     Get a specific concept by its ID from the specified vocabulary.
