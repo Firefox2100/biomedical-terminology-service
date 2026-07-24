@@ -42,6 +42,9 @@ from bioterms.router import CacheControlMiddleware, auto_complete_router, data_r
 from bioterms.router.utils import TEMPLATES, build_nav_links
 
 
+API_PATH_PREFIX = '/api/'
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -107,31 +110,199 @@ async def rebuild_cache():
         )
 
 
+def _init_error_reporting():
+    """
+    Initialise Sentry error reporting if enabled and configured.
+    """
+    if not CONFIG.enable_error_reporting:
+        return
+
+    import sentry_sdk
+
+    if not CONFIG.sentry_dsn:
+        LOGGER.warning('Sentry DSN is not provided; error reporting will not be enabled.')
+        return
+
+    if CONFIG.enable_profiling:
+        sentry_sdk.init(
+            dsn=CONFIG.sentry_dsn,
+            release=__version__,
+            send_default_pii=True,
+            traces_sample_rate=1.0,
+            profile_session_sample_rate=1.0,
+            profile_lifecycle="trace",
+        )
+    else:
+        sentry_sdk.init(
+            dsn=CONFIG.sentry_dsn,
+            release=__version__,
+        )
+
+
+async def metrics_endpoint():
+    """
+    Expose Prometheus metrics for the application.
+    """
+    return generate_metrics()
+
+
+async def csp_headers(request, call_next):
+    """
+    Middleware to add Content Security Policy and other security headers to responses,
+    skipping static/API/docs paths that don't render the CSP-protected HTML pages.
+    """
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
+
+    response = await call_next(request)
+
+    if any([
+        request.url.path.startswith('/static/'),
+        request.url.path.startswith(API_PATH_PREFIX),
+        request.url.path.startswith('/docs'),
+        request.url.path.startswith('/redoc'),
+    ]):
+        return response
+
+    # Build a strict policy (adjust as you add features)
+    policy = "; ".join([
+        "default-src 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'self'",
+        "form-action 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "style-src 'self'",
+        f"script-src 'self' 'nonce-{nonce}'",
+    ])
+    if CONFIG.use_https or request.url.scheme == 'https':
+        policy += "; upgrade-insecure-requests"
+
+    response.headers['Content-Security-Policy'] = policy
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+
+    return response
+
+
+async def disable_cors_for_api(request, call_next):
+    """
+    Middleware to exempt API/MCP/FHIR paths from the browser CORS policy, since they are
+    meant to be consumed by non-browser clients directly.
+    """
+    if request.url.path.startswith(('/api', '/mcp', '/fhir')):
+        request.scope['cors_exempt'] = True
+
+    response = await call_next(request)
+
+    if request.url.path.startswith(('/api', '/fhir')):
+        response.headers['Access-Control-Allow-Origin'] = '*'
+
+    return response
+
+
+async def bioterms_exception_handler(request: Request, exc: BtsError):
+    """
+    Custom exception handler for BtsError exceptions.
+    :param request: The request object.
+    :param exc: The exception instance.
+    :return: A JSON response with the error message and status code.
+    """
+    LOGGER.exception('BTS Service Exception occurred: %s', exc.message)
+    LOGGER.debug('Request body: %s', (await request.body()).decode(errors='ignore'))
+
+    report_exception(exc)
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            'error': {
+                'message': exc.message,
+            }
+        }
+    )
+
+
+async def http_exception_handler(request, exc):
+    """
+    Custom exception handler for HTTPException, rendering a FHIR OperationOutcome, an API JSON
+    error, a login redirect, or a server-rendered error page depending on the request path and
+    status code.
+    """
+    LOGGER.error('HTTP Exception: %s', exc)
+
+    report_exception(exc)
+
+    if request.url.path.startswith(API_PATH_PREFIX):
+        return await fastapi_http_exception_handler(request, exc)
+
+    if request.url.path.startswith('/fhir/'):
+        # FHIR requires returning a specialised error format
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='exception',
+                        diagnostics=str(exc),
+                    )
+                ]
+            ).model_dump(),
+        )
+
+    if exc.status_code == 401:
+        return RedirectResponse(
+            url=f'{request.url_for("get_login_page")}?'
+                f'next={request.url.path}&'
+                f'error=Please+login+to+access+this+page.',
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    doc_db = await get_active_doc_db()
+    nav_links = await build_nav_links(request, doc_db)
+
+    context = {
+        'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
+        'detail': getattr(exc, 'detail', None),
+        'nav_links': nav_links,
+        'return_url': '/',
+        'return_label': 'Back to Home',
+    }
+
+    if exc.status_code == 404:
+        return TEMPLATES.TemplateResponse(
+            request=request,
+            name='404.html',
+            context=context,
+            status_code=404
+        )
+
+    return TEMPLATES.TemplateResponse(
+        request=request,
+        name='500.html',
+        context=context,
+        status_code=exc.status_code
+    )
+
+
+def skip_paths(scope):
+    """
+    Determine whether a request scope's path should be exempted from CSRF protection, since
+    API/MCP/FHIR clients authenticate via API key rather than session cookies.
+    """
+    return scope['path'].startswith((API_PATH_PREFIX, '/mcp/', '/fhir/'))
+
+
 def create_app() -> FastAPI:
     """
     FastAPI application factory function.
     :return: An instance of FastAPI application.
     """
-    if CONFIG.enable_error_reporting:
-        import sentry_sdk
-
-        if not CONFIG.sentry_dsn:
-            LOGGER.warning('Sentry DSN is not provided; error reporting will not be enabled.')
-        else:
-            if CONFIG.enable_profiling:
-                sentry_sdk.init(
-                    dsn=CONFIG.sentry_dsn,
-                    release=__version__,
-                    send_default_pii=True,
-                    traces_sample_rate=1.0,
-                    profile_session_sample_rate=1.0,
-                    profile_lifecycle="trace",
-                )
-            else:
-                sentry_sdk.init(
-                    dsn=CONFIG.sentry_dsn,
-                    release=__version__,
-                )
+    _init_error_reporting()
 
     mcp_app = mcp.http_app(path='/')
 
@@ -199,48 +370,9 @@ def create_app() -> FastAPI:
 
     if CONFIG.enable_metrics:
         app.add_middleware(PytheusMiddlewareASGI)
+        app.get('/metrics', response_class=PlainTextResponse, include_in_schema=False)(metrics_endpoint)
 
-        @app.get('/metrics', response_class=PlainTextResponse, include_in_schema=False)
-        async def metrics_endpoint():
-            return generate_metrics()
-
-    @app.middleware('http')
-    async def csp_headers(request, call_next):
-        nonce = secrets.token_urlsafe(16)
-        request.state.csp_nonce = nonce
-
-        response = await call_next(request)
-
-        if any([
-            request.url.path.startswith('/static/'),
-            request.url.path.startswith('/api/'),
-            request.url.path.startswith('/docs'),
-            request.url.path.startswith('/redoc'),
-        ]):
-            return response
-
-        # Build a strict policy (adjust as you add features)
-        policy = "; ".join([
-            "default-src 'self'",
-            "base-uri 'self'",
-            "object-src 'none'",
-            "frame-ancestors 'self'",
-            "form-action 'self'",
-            "img-src 'self' data:",
-            "font-src 'self'",
-            "style-src 'self'",
-            f"script-src 'self' 'nonce-{nonce}'",
-        ])
-        if CONFIG.use_https or request.url.scheme == 'https':
-            policy += "; upgrade-insecure-requests"
-
-        response.headers['Content-Security-Policy'] = policy
-        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['X-Frame-Options'] = 'DENY'
-        response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
-
-        return response
+    app.middleware('http')(csp_headers)
 
     app.add_middleware(
         SessionMiddleware,
@@ -265,20 +397,7 @@ def create_app() -> FastAPI:
         ),
     )
 
-    @app.middleware('http')
-    async def disable_cors_for_api(request, call_next):
-        if request.url.path.startswith('/api') or \
-            request.url.path.startswith('/mcp') or \
-            request.url.path.startswith('/fhir'):
-            request.scope['cors_exempt'] = True
-
-        response = await call_next(request)
-
-        if request.url.path.startswith('/api') or \
-            request.url.path.startswith('/fhir'):
-            response.headers['Access-Control-Allow-Origin'] = '*'
-
-        return response
+    app.middleware('http')(disable_cors_for_api)
 
     graphql_service = ReloadableASGIApp(create_graphql_app)
 
@@ -299,90 +418,8 @@ def create_app() -> FastAPI:
 
     app.state.graphql_service = graphql_service
 
-    @app.exception_handler(BtsError)
-    async def bioterms_exception_handler(request: Request, exc: BtsError):
-        """
-        Custom exception handler for BtsError exceptions.
-        :param request: The request object.
-        :param exc: The exception instance.
-        :return: A JSON response with the error message and status code.
-        """
-        LOGGER.exception('BTS Service Exception occurred: %s', exc.message)
-        LOGGER.debug('Request body: %s', (await request.body()).decode(errors='ignore'))
-
-        report_exception(exc)
-
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                'error': {
-                    'message': exc.message,
-                }
-            }
-        )
-
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request, exc):
-        LOGGER.error('HTTP Exception: %s', exc)
-
-        report_exception(exc)
-
-        if request.url.path.startswith('/api/'):
-            return await fastapi_http_exception_handler(request, exc)
-
-        if request.url.path.startswith('/fhir/'):
-            # FHIR requires returning a specialised error format
-            return JSONResponse(
-                status_code=exc.status_code,
-                content=OperationOutcome(
-                    issue=[
-                        OperationOutcomeIssue(
-                            severity='error',
-                            code='exception',
-                            diagnostics=str(exc),
-                        )
-                    ]
-                ).model_dump(),
-            )
-
-        if exc.status_code == 401:
-            return RedirectResponse(
-                url=f'{request.url_for("get_login_page")}?'
-                    f'next={request.url.path}&'
-                    f'error=Please+login+to+access+this+page.',
-                status_code=status.HTTP_303_SEE_OTHER
-            )
-
-        doc_db = await get_active_doc_db()
-        nav_links = await build_nav_links(request, doc_db)
-
-        context = {
-            'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
-            'detail': getattr(exc, 'detail', None),
-            'nav_links': nav_links,
-            'return_url': '/',
-            'return_label': 'Back to Home',
-        }
-
-        if exc.status_code == 404:
-            return TEMPLATES.TemplateResponse(
-                request=request,
-                name='404.html',
-                context=context,
-                status_code=404
-            )
-
-        return TEMPLATES.TemplateResponse(
-            request=request,
-            name='500.html',
-            context=context,
-            status_code=exc.status_code
-        )
-
-    def skip_paths(scope):
-        return scope['path'].startswith('/api/') \
-            or scope['path'].startswith('/mcp/') \
-            or scope['path'].startswith('/fhir/')
+    app.exception_handler(BtsError)(bioterms_exception_handler)
+    app.exception_handler(HTTPException)(http_exception_handler)
 
     app = asgi_csrf(
         app,

@@ -238,6 +238,94 @@ async def load_vocabulary(prefix: ConceptPrefix,
         await cache.rotate_dataset_version()
 
 
+async def _embed_vocabulary_online(prefix: ConceptPrefix,
+                                   config: dict,
+                                   drop_existing: bool,
+                                   doc_db: DocumentDatabase = None,
+                                   graph_db: GraphDatabase = None,
+                                   vector_db: VectorDatabase = None,
+                                   ):
+    """
+    Embed a vocabulary's concepts directly into the vector database.
+    :param prefix: The prefix of the vocabulary to embed.
+    :param config: The vocabulary configuration dictionary.
+    :param drop_existing: Whether to drop existing embeddings before embedding.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
+    :param vector_db: The vector database instance.
+    """
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+    if vector_db is None:
+        vector_db = get_active_vector_db()
+
+    status = await get_vocabulary_status(
+        prefix=prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+
+    if not status.loaded:
+        raise RuntimeError(f'Vocabulary {prefix} is not loaded. Cannot embed.')
+
+    if drop_existing:
+        await vector_db.delete_vectors_for_prefix(prefix=prefix)
+
+    concept_iter = doc_db.get_terms_iter(
+        prefix=prefix,
+        model_class=config['conceptClass'],
+    )
+
+    id_map = await vector_db.insert_concepts(
+        concepts=concept_iter,
+        prefix=prefix,
+        total_concepts=status.concept_count,
+    )
+
+    await doc_db.update_vector_mapping(
+        prefix=prefix,
+        mapping=id_map,
+    )
+
+
+async def _embed_vocabulary_offline(prefix: ConceptPrefix,
+                                    config: dict,
+                                    ):
+    """
+    Embed a vocabulary's concepts from an offline concept dump into an offline embedding dump.
+    :param prefix: The prefix of the vocabulary to embed.
+    :param config: The vocabulary configuration dictionary.
+    """
+    from bioterms.embedding import ConceptTransformer, EmbeddingContainerV1, EmbeddingContainerFileV1
+
+    offline_concept_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.doc.dump')
+    if not os.path.exists(offline_concept_path):
+        raise ValueError(f'Offline concept file for {prefix} not found at {offline_concept_path}.')
+    offline_embedding_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.embed.dump')
+
+    async def concept_iter():
+        async with aiofiles.open(offline_concept_path) as f:
+            async for line in f:
+                yield config['conceptClass'].model_validate_json(line.strip())
+
+    transformer = ConceptTransformer()
+    async def embed_iter():
+        async for batch in transformer.embed_concepts(
+            concepts=concept_iter(),
+        ):
+            for concept_id, vector in batch:
+                # Convert the vector to np array
+                vector = np.array(vector, dtype=np.float32)
+
+                yield EmbeddingContainerV1(
+                    concept_id=concept_id,
+                    vector=vector,
+                )
+
+    embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
+    await embedding_file.write(embed_iter())
+
+
 async def embed_vocabulary(prefix: ConceptPrefix,
                            drop_existing: bool = True,
                            offline: bool = False,
@@ -258,67 +346,9 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     config = get_vocabulary_config(prefix)
 
     if not offline:
-        if doc_db is None:
-            doc_db = await get_active_doc_db()
-        if vector_db is None:
-            vector_db = get_active_vector_db()
-
-        status = await get_vocabulary_status(
-            prefix=prefix,
-            doc_db=doc_db,
-            graph_db=graph_db,
-        )
-
-        if not status.loaded:
-            raise RuntimeError(f'Vocabulary {prefix} is not loaded. Cannot embed.')
-
-        if drop_existing:
-            await vector_db.delete_vectors_for_prefix(prefix=prefix)
-
-        concept_iter = doc_db.get_terms_iter(
-            prefix=prefix,
-            model_class=config['conceptClass'],
-        )
-
-        id_map = await vector_db.insert_concepts(
-            concepts=concept_iter,
-            prefix=prefix,
-            total_concepts=status.concept_count,
-        )
-
-        await doc_db.update_vector_mapping(
-            prefix=prefix,
-            mapping=id_map,
-        )
+        await _embed_vocabulary_online(prefix, config, drop_existing, doc_db, graph_db, vector_db)
     else:
-        from bioterms.embedding import ConceptTransformer, EmbeddingContainerV1, EmbeddingContainerFileV1
-
-        offline_concept_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.doc.dump')
-        if not os.path.exists(offline_concept_path):
-            raise ValueError(f'Offline concept file for {prefix} not found at {offline_concept_path}.')
-        offline_embedding_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.embed.dump')
-
-        async def concept_iter():
-            async with aiofiles.open(offline_concept_path) as f:
-                async for line in f:
-                    yield config['conceptClass'].model_validate_json(line.strip())
-
-        transformer = ConceptTransformer()
-        async def embed_iter():
-            async for batch in transformer.embed_concepts(
-                concepts=concept_iter(),
-            ):
-                for concept_id, vector in batch:
-                    # Convert the vector to np array
-                    vector = np.array(vector, dtype=np.float32)
-
-                    yield EmbeddingContainerV1(
-                        concept_id=concept_id,
-                        vector=vector,
-                    )
-
-        embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
-        await embedding_file.write(embed_iter())
+        await _embed_vocabulary_offline(prefix, config)
 
     if not offline:
         # Offline embedding writes files only, so cache invalidation is unnecessary.

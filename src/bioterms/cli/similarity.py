@@ -12,6 +12,44 @@ from .utils import CONSOLE, run_async
 app = typer.Typer(help='Manage similarity computations between biomedical terms.')
 
 
+async def _run_one_similarity_calculation(target: ConceptPrefix,
+                                          corp: ConceptPrefix,
+                                          method: SimilarityMethod,
+                                          threshold: Optional[float],
+                                          offline: bool,
+                                          annotation_file: Optional[Path],
+                                          ):
+    """
+    Calculate similarity for one (target, corpus, method) combination, printing
+    success/failure to the console.
+    :param target: The target vocabulary prefix.
+    :param corp: The corpus vocabulary prefix.
+    :param method: The similarity calculation method to use.
+    :param threshold: The similarity threshold to apply, or None to use the method's default.
+    :param offline: Whether to run the calculation in offline mode.
+    :param annotation_file: Optional annotation dump override for offline calculation.
+    """
+    try:
+        await calculate_similarity(
+            method=method,
+            target_prefix=target,
+            corpus_prefix=corp,
+            similarity_threshold=threshold,
+            offline=offline,
+            annotation_file_path=annotation_file,
+        )
+        CONSOLE.print(
+            f'[green]Successfully calculated similarity between '
+            f'{target.value} and {corp.value} using {method.value} method.[/green]'
+        )
+    except Exception as e:
+        CONSOLE.print(
+            f'[red]Failed to calculate similarity between '
+            f'{target.value} and {corp.value} using {method.value} method: {e}[/red]'
+        )
+        traceback.print_exc()
+
+
 @app.command(name='calculate', help='Calculate similarity between two vocabularies and store the results.')
 @run_async
 async def calculate_command(target_prefix: Annotated[
@@ -69,42 +107,13 @@ async def calculate_command(target_prefix: Annotated[
     if annotation_file is not None and not offline:
         raise typer.BadParameter('--annotation-file requires --offline.')
 
-    if target_prefix:
-        targets = [target_prefix]
-    else:
-        targets = list(ConceptPrefix)
+    targets = [target_prefix] if target_prefix else list(ConceptPrefix)
 
     for target in targets:
         target_config = get_vocabulary_config(target)
-
-        if corpus_prefix:
-            corpus = [corpus_prefix]
-        else:
-            corpus = target_config['annotations']
+        corpus = [corpus_prefix] if corpus_prefix else target_config['annotations']
+        methods = [method] if method else target_config['similarityMethods']
 
         for corp in corpus:
-            if method:
-                methods = [method]
-            else:
-                methods = target_config['similarityMethods']
-
             for m in methods:
-                try:
-                    await calculate_similarity(
-                        method=m,
-                        target_prefix=target,
-                        corpus_prefix=corp,
-                        similarity_threshold=threshold,
-                        offline=offline,
-                        annotation_file_path=annotation_file,
-                    )
-                    CONSOLE.print(
-                        f'[green]Successfully calculated similarity between '
-                        f'{target.value} and {corp.value} using {m.value} method.[/green]'
-                    )
-                except Exception as e:
-                    CONSOLE.print(
-                        f'[red]Failed to calculate similarity between '
-                        f'{target.value} and {corp.value} using {m.value} method: {e}[/red]'
-                    )
-                    traceback.print_exc()
+                await _run_one_similarity_calculation(target, corp, m, threshold, offline, annotation_file)

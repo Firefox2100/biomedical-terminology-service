@@ -2,7 +2,7 @@
 Router for similarity and translation endpoints.
 """
 
-from typing import List, Optional, Union
+from typing import List, Optional
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -67,7 +67,7 @@ class TranslateRequestV1(JsonModel):
         description='List of constraint term IDs to filter the translations.',
         alias='constraintIds',
     )
-    threshold: Union[float, List[float]] = Field(
+    threshold: float | List[float] = Field(
         ...,
         description='The similarity score threshold(s) for the translations. '
                     'If a single float is provided, it will be applied to all constraint IDs. '

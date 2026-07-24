@@ -209,6 +209,22 @@ async def delete_annotation(prefix_1: ConceptPrefix,
     await cache.rotate_dataset_version()
 
 
+def _offline_dump_already_exists(annotation_module,
+                                 ) -> bool:
+    """
+    Check whether an offline annotation dump already exists for the given annotation module.
+    Used to tolerate a NotImplementedError from an annotation's live loader when running
+    offline, since the annotation may have already been dumped by an earlier offline run.
+    :param annotation_module: The annotation module being loaded.
+    :return: True if the offline dump file exists, False otherwise.
+    """
+    dump_path = _offline_annotation_dump_path(
+        annotation_module.VOCABULARY_PREFIX_1,
+        annotation_module.VOCABULARY_PREFIX_2,
+    )
+    return os.path.exists(dump_path)
+
+
 async def load_annotation(prefix_1: ConceptPrefix,
                           prefix_2: ConceptPrefix,
                           overwrite: bool = True,
@@ -255,14 +271,7 @@ async def load_annotation(prefix_1: ConceptPrefix,
             graph_db=active_graph_db,
         )
     except NotImplementedError:
-        if not offline:
-            raise
-
-        dump_path = _offline_annotation_dump_path(
-            annotation_module.VOCABULARY_PREFIX_1,
-            annotation_module.VOCABULARY_PREFIX_2,
-        )
-        if not os.path.exists(dump_path):
+        if not offline or not _offline_dump_already_exists(annotation_module):
             raise
         return
 
@@ -270,14 +279,7 @@ async def load_annotation(prefix_1: ConceptPrefix,
         try:
             await result
         except NotImplementedError:
-            if not offline:
-                raise
-
-            dump_path = _offline_annotation_dump_path(
-                annotation_module.VOCABULARY_PREFIX_1,
-                annotation_module.VOCABULARY_PREFIX_2,
-            )
-            if not os.path.exists(dump_path):
+            if not offline or not _offline_dump_already_exists(annotation_module):
                 raise
             return
 

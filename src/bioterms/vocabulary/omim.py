@@ -67,6 +67,45 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             pass
 
 
+def _build_omim_concept(row,
+                        omim_graph: nx.DiGraph,
+                        ) -> CONCEPT_CLASS:
+    """
+    Build a Concept for one OMIM row and wire its is-a and replaced-by edges into the graph.
+    :param row: The row from the OMIM CSV dataframe.
+    :param omim_graph: The OMIM graph to add edges to.
+    :return: The built Concept instance.
+    """
+    concept = CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptId=row['Class ID'].split('/')[-1],
+        label=row['Preferred Label'] if not pd.isna(row['Preferred Label']) else None,
+        synonyms=row['Synonyms'].split('|') if not pd.isna(row['Synonyms']) else None,
+        status=ConceptStatus.DEPRECATED
+            if not pd.isna(row['Obsolete']) and bool(row['Obsolete'])
+            else ConceptStatus.ACTIVE,
+    )
+
+    omim_graph.add_node(concept.concept_id)
+
+    if not pd.isna(row['Parents']):
+        for parent in row['Parents'].split('|'):
+            omim_graph.add_edge(
+                concept.concept_id,
+                parent.split('/')[-1],
+                label=ConceptRelationshipType.IS_A
+            )
+
+    if not pd.isna(row['Moved from']):
+        omim_graph.add_edge(
+            row['Moved from'],
+            concept.concept_id,
+            label=ConceptRelationshipType.REPLACED_BY
+        )
+
+    return concept
+
+
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
@@ -96,33 +135,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description='Processing OMIM ontology file',
         total=len(omim_df),
     ):
-        concept = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX,
-            conceptId=row['Class ID'].split('/')[-1],
-            label=row['Preferred Label'] if not pd.isna(row['Preferred Label']) else None,
-            synonyms=row['Synonyms'].split('|') if not pd.isna(row['Synonyms']) else None,
-            status=ConceptStatus.DEPRECATED
-                if not pd.isna(row['Obsolete']) and bool(row['Obsolete'])
-                else ConceptStatus.ACTIVE,
-        )
-
-        concepts.append(concept)
-        omim_graph.add_node(concept.concept_id)
-
-        if not pd.isna(row['Parents']):
-            for parent in row['Parents'].split('|'):
-                omim_graph.add_edge(
-                    concept.concept_id,
-                    parent.split('/')[-1],
-                    label=ConceptRelationshipType.IS_A
-                )
-
-        if not pd.isna(row['Moved from']):
-            omim_graph.add_edge(
-                row['Moved from'],
-                concept.concept_id,
-                label=ConceptRelationshipType.REPLACED_BY
-            )
+        concepts.append(_build_omim_concept(row, omim_graph))
 
     verbose_print('Concept processing complete, saving to databases...')
 

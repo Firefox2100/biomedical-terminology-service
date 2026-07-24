@@ -262,6 +262,76 @@ class MongoDocumentDatabase(DocumentDatabase):
         """
         await self.db[str(prefix.value)].drop_index(f'{field}_index')
 
+    @staticmethod
+    async def _insert_new_terms_batch(collection,
+                                      batch: list[Concept],
+                                      extra_data,
+                                      ):
+        """
+        Insert a batch of concepts as new documents, without checking for existing duplicates.
+        :param collection: The MongoDB collection to insert into.
+        :param batch: The batch of Concept instances to insert.
+        :param extra_data: The (concept_id, ngrams, search_text) tuples generated for this batch.
+        """
+        new_docs = {
+            c.concept_id: c.model_dump(exclude_none=True)
+            for c in batch
+        }
+
+        for concept_id, ngrams, search_text in extra_data:
+            if concept_id in new_docs:
+                new_docs[concept_id]['nGrams'] = ngrams
+                new_docs[concept_id]['searchText'] = search_text
+
+        if new_docs:
+            await collection.insert_many(new_docs.values())
+
+    @staticmethod
+    async def _upsert_terms_batch(collection,
+                                  batch: list[Concept],
+                                  extra_data,
+                                  existing_concept_ids: set[str],
+                                  ):
+        """
+        Insert new concepts and update existing ones in a single batch.
+        :param collection: The MongoDB collection to write to.
+        :param batch: The batch of Concept instances to save.
+        :param extra_data: The (concept_id, ngrams, search_text) tuples generated for this batch.
+        :param existing_concept_ids: The set of concept IDs already present in the collection.
+        """
+        existing_docs: dict[str, dict] = {}
+        new_docs: dict[str, dict] = {}
+
+        for c in batch:
+            c_doc = c.model_dump(exclude_none=True)
+            if c.concept_id in existing_concept_ids:
+                # Remove the immutable fields for faster updates
+                c_doc.pop('conceptId', None)
+                c_doc.pop('prefix', None)
+                existing_docs[c.concept_id] = c_doc
+            else:
+                new_docs[c.concept_id] = c_doc
+
+        for concept_id, ngrams, search_text in extra_data:
+            if concept_id in existing_docs:
+                existing_docs[concept_id]['nGrams'] = ngrams
+                existing_docs[concept_id]['searchText'] = search_text
+            elif concept_id in new_docs:
+                new_docs[concept_id]['nGrams'] = ngrams
+                new_docs[concept_id]['searchText'] = search_text
+
+        if new_docs:
+            await collection.insert_many(new_docs.values())
+
+        if existing_docs:
+            operations = [
+                UpdateOne(
+                    {'conceptId': concept_id},
+                    {'$set': doc}
+                ) for concept_id, doc in existing_docs.items()
+            ]
+            await collection.bulk_write(operations)
+
     async def save_terms(self,
                          terms: list[Concept],
                          no_upsert: bool = False
@@ -291,52 +361,9 @@ class MongoDocumentDatabase(DocumentDatabase):
                     )
 
                     if no_upsert:
-                        new_docs = {
-                            c.concept_id: c.model_dump(exclude_none=True)
-                            for c in batch
-                        }
-
-                        for concept_id, ngrams, search_text in extra_data:
-                            if concept_id in new_docs:
-                                new_docs[concept_id]['nGrams'] = ngrams
-                                new_docs[concept_id]['searchText'] = search_text
-
-                        if new_docs:
-                            await collection.insert_many(new_docs.values())
-                        continue
-
-                    existing_docs: dict[str, dict] = {}
-                    new_docs: dict[str, dict] = {}
-
-                    for c in batch:
-                        c_doc = c.model_dump(exclude_none=True)
-                        if c.concept_id in existing_concept_ids:
-                            # Remove the immutable fields for faster updates
-                            c_doc.pop('conceptId', None)
-                            c_doc.pop('prefix', None)
-                            existing_docs[c.concept_id] = c_doc
-                        else:
-                            new_docs[c.concept_id] = c_doc
-
-                    for concept_id, ngrams, search_text in extra_data:
-                        if concept_id in existing_docs:
-                            existing_docs[concept_id]['nGrams'] = ngrams
-                            existing_docs[concept_id]['searchText'] = search_text
-                        elif concept_id in new_docs:
-                            new_docs[concept_id]['nGrams'] = ngrams
-                            new_docs[concept_id]['searchText'] = search_text
-
-                    if new_docs:
-                        await collection.insert_many(new_docs.values())
-
-                    if existing_docs:
-                        operations = [
-                            UpdateOne(
-                                {'conceptId': concept_id},
-                                {'$set': doc}
-                            ) for concept_id, doc in existing_docs.items()
-                        ]
-                        await collection.bulk_write(operations)
+                        await self._insert_new_terms_batch(collection, batch, extra_data)
+                    else:
+                        await self._upsert_terms_batch(collection, batch, extra_data, existing_concept_ids)
 
     async def count_terms(self,
                           prefix: ConceptPrefix,
@@ -349,6 +376,32 @@ class MongoDocumentDatabase(DocumentDatabase):
         collection = self.db[str(prefix.value)]
         count = await collection.count_documents({})
         return count
+
+    async def _iter_page_docs(self,
+                              collection,
+                              query: dict,
+                              page_size: int,
+                              ) -> AsyncIterator[dict]:
+        """
+        Yield the raw documents for a single page of a paginated collection scan.
+        :param collection: The MongoDB collection to query.
+        :param query: The query filter, already scoped to the current pagination cursor.
+        :param page_size: The maximum number of documents to fetch in this page.
+        :return: An async iterator of raw MongoDB documents.
+        """
+        async with self._client.start_session() as session:
+            cursor = collection.find(
+                query,
+                {'nGrams': 0, 'searchText': 0},
+                session=session,
+                no_cursor_timeout=True,
+            ).sort('_id', 1).limit(page_size)
+
+            try:
+                async for doc in cursor:
+                    yield doc
+            finally:
+                await cursor.close()
 
     async def get_terms_iter(self,
                              prefix: ConceptPrefix,
@@ -373,31 +426,19 @@ class MongoDocumentDatabase(DocumentDatabase):
                 return
 
             this_page = page_size if remaining is None else min(page_size, remaining)
-
             query = {} if last_id is None else {'_id': {'$gt': last_id}}
 
-            async with self._client.start_session() as session:
-                cursor = collection.find(
-                    query,
-                    {'nGrams': 0, 'searchText': 0},
-                    session=session,
-                    no_cursor_timeout=True,
-                ).sort('_id', 1).limit(this_page)
+            yielded_any = False
+            async for doc in self._iter_page_docs(collection, query, this_page):
+                yielded_any = True
+                last_id = doc['_id']
+                doc.pop('_id', None)
+                yield model_class.model_validate(doc)
 
-                yielded_any = False
-                try:
-                    async for doc in cursor:
-                        yielded_any = True
-                        last_id = doc['_id']
-                        doc.pop('_id', None)
-                        yield model_class.model_validate(doc)
-
-                        if remaining is not None:
-                            remaining -= 1
-                            if remaining <= 0:
-                                return
-                finally:
-                    await cursor.close()
+                if remaining is not None:
+                    remaining -= 1
+                    if remaining <= 0:
+                        return
 
             if not yielded_any:
                 return

@@ -35,6 +35,25 @@ T = TypeVar('T')
 R = TypeVar('R')
 
 
+def _progress_columns(total_known: bool = True) -> list:
+    """
+    Build the standard set of rich.progress columns shared by this module's progress bars.
+    :param total_known: Whether the task has a known total, to show a completion fraction
+        and estimated time remaining rather than just a running count.
+    """
+    columns = [
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}") if total_known else TextColumn("{task.completed} batches"),
+        TimeElapsedColumn(),
+    ]
+    if total_known:
+        columns.append(TimeRemainingColumn())
+
+    return columns
+
+
 def check_files_exist(files: list[str]) -> bool:
     """
     Check if all specified files exist in the data directory.
@@ -56,6 +75,70 @@ def ensure_data_directory():
         os.makedirs(CONFIG.data_dir, exist_ok=True)
 
 
+def _batch_mutable_sequence(seq: MutableSequence,
+                            batch_size: int,
+                            consume: bool,
+                            ) -> Iterator[list]:
+    """
+    Batch a MutableSequence (e.g. a list), showing a determinate progress bar since the
+    total length is known upfront.
+    :param seq: The list-like sequence to batch.
+    :param batch_size: Size of each batch.
+    :param consume: Whether to pop items from the sequence instead of slicing it.
+    """
+    if not seq:
+        return
+
+    batch_count = (len(seq) + batch_size - 1) // batch_size
+    if batch_count <= 1:
+        yield seq
+        return
+
+    with Progress(*_progress_columns()) as progress:
+        task = progress.add_task(description="Batching...", total=batch_count)
+
+        if not consume:
+            n = len(seq)
+            for i in range(0, n, batch_size):
+                yield seq[i: i + batch_size]
+                progress.advance(task)
+        else:
+            while seq:
+                k = min(len(seq), batch_size)
+                yield [seq.pop() for _ in range(k)]
+                progress.advance(task)
+
+
+def _batch_general_iterable(seq: Iterable,
+                            batch_size: int,
+                            ) -> Iterator[list]:
+    """
+    Batch a general (possibly single-pass) iterable, showing an indeterminate progress bar
+    since the total length is not known upfront.
+    :param seq: The iterable to batch.
+    :param batch_size: Size of each batch.
+    """
+    it = iter(seq)
+
+    first = next(it, None)
+    if first is None:
+        return
+
+    with Progress(*_progress_columns(total_known=False), transient=False) as progress:
+        task = progress.add_task(description="Batching...", total=None)
+
+        batch = [first]
+        while True:
+            batch.extend(islice(it, batch_size - len(batch)))
+            yield batch
+            progress.advance(task)
+
+            first = next(it, None)
+            if first is None:
+                break
+            batch = [first]
+
+
 def batch_iterable(seq: Iterable[T] | list[T],
                    batch_size: int = 10000,
                    consume: bool = False,
@@ -69,65 +152,13 @@ def batch_iterable(seq: Iterable[T] | list[T],
         raise ValueError('batch_size must be positive')
 
     if isinstance(seq, MutableSequence):
-        if not seq:
-            return
-
-        batch_count = (len(seq) + batch_size - 1) // batch_size
-        if batch_count <= 1:
-            yield seq
-            return
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-        ) as progress:
-            task = progress.add_task(description="Batching...", total=batch_count)
-
-            if not consume:
-                n = len(seq)
-                for i in range(0, n, batch_size):
-                    yield seq[i: i + batch_size]
-                    progress.advance(task)
-            else:
-                while seq:
-                    k = min(len(seq), batch_size)
-                    yield [seq.pop() for _ in range(k)]
-                    progress.advance(task)
+        yield from _batch_mutable_sequence(seq, batch_size, consume)
         return
 
     if not isinstance(seq, Iterable):
         raise TypeError('seq must be an iterable')
 
-    it = iter(seq)
-
-    first = next(it, None)
-    if first is None:
-        return
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed} batches"),
-        TimeElapsedColumn(),
-        transient=False,
-    ) as progress:
-        task = progress.add_task(description="Batching...", total=None)
-
-        batch = [first]
-        while True:
-            batch.extend(islice(it, batch_size - len(batch)))
-            yield batch
-            progress.advance(task)
-
-            first = next(it, None)
-            if first is None:
-                break
-            batch = [first]
+    yield from _batch_general_iterable(seq, batch_size)
 
 
 def edge_iter(graph: nx.DiGraph | nx.MultiDiGraph) -> Iterator[tuple[str, str, Optional[str], Optional[str]]]:
@@ -384,15 +415,7 @@ def iter_progress(iterable: Iterable[T],
         yield from iterable
         return
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        transient=total is None or transient,
-    ) as progress:
+    with Progress(*_progress_columns(), transient=total is None or transient) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         for item in iterable:
             yield item
@@ -418,17 +441,9 @@ async def aiter_progress(async_iterable: AsyncIterable[T],
     if CONFIG.disable_progress_bar:
         async for item in async_iterable:
             yield item
-            return
+        return
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        transient=total is None or transient,
-    ) as progress:
+    with Progress(*_progress_columns(), transient=total is None or transient) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         async for item in async_iterable:
             yield item
@@ -442,6 +457,50 @@ def verbose_print(message: str):
     """
     if CONFIG.verbose_print:
         print(message)
+
+
+def _start_optional_progress(description: str | None,
+                             total: int | None,
+                             transient: bool,
+                             ):
+    """
+    Start a progress bar unless progress bars are globally disabled.
+    :param description: Description for the progress bar.
+    :param total: Total number of items for the progress bar.
+    :param transient: Whether the progress bar should be transient.
+    :return: A tuple of (progress, task_id), both None if progress bars are disabled.
+    """
+    if CONFIG.disable_progress_bar:
+        return None, None
+
+    progress = Progress(*_progress_columns(), transient=total is None or transient)
+    task = progress.add_task(description=description or "Processing...", total=total)
+    progress.start()
+
+    return progress, task
+
+
+def _refill_pending(it: Iterator[T],
+                    loop: asyncio.AbstractEventLoop,
+                    executor: Executor,
+                    func: Callable[[T], R],
+                    pending: set[asyncio.Future],
+                    ):
+    """
+    Submit the next item from the iterator to the executor, if any remain, keeping the
+    pending set full so worker processes are not left idle while the caller consumes a result.
+    :param it: The iterator of remaining items.
+    :param loop: The asyncio event loop.
+    :param executor: The executor to run tasks in.
+    :param func: The function to execute for each item.
+    :param pending: The set of pending futures to add the new submission to.
+    """
+    try:
+        next_arg = next(it)
+    except StopIteration:
+        return
+
+    pending.add(loop.run_in_executor(executor, func, next_arg))
 
 
 async def schedule_tasks(executor: Executor,
@@ -480,21 +539,7 @@ async def schedule_tasks(executor: Executor,
         fut = loop.run_in_executor(executor, func, arg)
         pending.add(fut)
 
-    if not CONFIG.disable_progress_bar:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            transient=total is None or transient,
-        )
-        task = progress.add_task(description=description or "Processing...", total=total)
-        progress.start()
-    else:
-        progress = None
-        task = None
+    progress, task = _start_optional_progress(description, total, transient)
 
     while pending:
         done, pending = await asyncio.wait(
@@ -503,16 +548,11 @@ async def schedule_tasks(executor: Executor,
         )
 
         for fut in done:
-            try:
-                next_arg = next(it)
-            except StopIteration:
-                pass
-            else:
-                # Refill the executor before handing the result to the caller.
-                # An async-generator consumer may take an arbitrary amount of
-                # time before requesting the next result; refilling afterwards
-                # can therefore leave worker processes idle.
-                pending.add(loop.run_in_executor(executor, func, next_arg))
+            # Refill the executor before handing the result to the caller.
+            # An async-generator consumer may take an arbitrary amount of
+            # time before requesting the next result; refilling afterwards
+            # can therefore leave worker processes idle.
+            _refill_pending(it, loop, executor, func, pending)
 
             yield fut.result()
             if progress is not None:

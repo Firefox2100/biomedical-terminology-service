@@ -315,6 +315,38 @@ def _process_synonyms(concepts: dict[int, CONCEPT_CLASS]):
                 concept.synonyms.append(str(synonym))
 
 
+def _apply_drug_strength_row(row,
+                             concepts: dict[int, CONCEPT_CLASS],
+                             ):
+    """
+    Build a drug strength entry from one DRUG_STRENGTH.csv row and attach it to its drug concept.
+    :param row: The row from the OHDSI DRUG_STRENGTH.csv file.
+    :param concepts: A dictionary mapping concept IDs to Concept instances.
+    """
+    drug_strength = OhdsiDrugStrength(
+        ingredientId=str(row['ingredient_concept_id']),
+        amountValue=row['amount_value'] if not pd.isna(row['amount_value']) else None,
+        numeratorValue=row['numerator_value'] if not pd.isna(row['numerator_value']) else None,
+        denominatorValue=row['denominator_value'] if not pd.isna(row['denominator_value']) else None,
+    )
+
+    if not pd.isna(row['amount_unit_concept_id']):
+        amount_unit = concepts[row['amount_unit_concept_id']].label
+        drug_strength.amount_unit = amount_unit
+    if not pd.isna(row['numerator_unit_concept_id']):
+        numerator_unit = concepts[row['numerator_unit_concept_id']].label
+        drug_strength.numerator_unit = numerator_unit
+    if not pd.isna(row['denominator_unit_concept_id']):
+        denominator_unit = concepts[row['denominator_unit_concept_id']].label
+        drug_strength.denominator_unit = denominator_unit
+
+    drug_concept = concepts.get(row['drug_concept_id'])
+    if drug_concept:
+        if drug_concept.drug_strengths is None:
+            drug_concept.drug_strengths = []
+        drug_concept.drug_strengths.append(drug_strength)
+
+
 def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
     """
     Process the OHDSI DRUG_STRENGTH.csv file to extract drug strength information.
@@ -357,28 +389,7 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
                                     total=len(chunk),
                                     transient=True,
                                     ):
-            drug_strength = OhdsiDrugStrength(
-                ingredientId=str(row['ingredient_concept_id']),
-                amountValue=row['amount_value'] if not pd.isna(row['amount_value']) else None,
-                numeratorValue=row['numerator_value'] if not pd.isna(row['numerator_value']) else None,
-                denominatorValue=row['denominator_value'] if not pd.isna(row['denominator_value']) else None,
-            )
-
-            if not pd.isna(row['amount_unit_concept_id']):
-                amount_unit = concepts[row['amount_unit_concept_id']].label
-                drug_strength.amount_unit = amount_unit
-            if not pd.isna(row['numerator_unit_concept_id']):
-                numerator_unit = concepts[row['numerator_unit_concept_id']].label
-                drug_strength.numerator_unit = numerator_unit
-            if not pd.isna(row['denominator_unit_concept_id']):
-                denominator_unit = concepts[row['denominator_unit_concept_id']].label
-                drug_strength.denominator_unit = denominator_unit
-
-            drug_concept = concepts.get(row['drug_concept_id'])
-            if drug_concept:
-                if drug_concept.drug_strengths is None:
-                    drug_concept.drug_strengths = []
-                drug_concept.drug_strengths.append(drug_strength)
+            _apply_drug_strength_row(row, concepts)
 
 
 def _process_relationships(ohdsi_graph: nx.MultiDiGraph):

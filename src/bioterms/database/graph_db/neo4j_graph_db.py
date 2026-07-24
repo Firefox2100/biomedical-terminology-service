@@ -1662,6 +1662,65 @@ class Neo4jGraphDatabase(GraphDatabase):
                     similarConcepts=similar_concepts,
                 )
 
+    @staticmethod
+    def _build_similar_term_record(record,
+                                   ) -> tuple[str, SimilarTermByPrefix, int]:
+        """
+        Parse one query result record into a (concept_id, group, group_size) tuple.
+        :param record: The raw Neo4j result record.
+        :return: A tuple of the concept ID, the SimilarTermByPrefix group for this record, and
+            the number of similar concepts in the group.
+        """
+        concept_id: str = record['concept_id']
+        similar_prefix = ConceptPrefix(record['similar_prefix'])
+        similar_concepts_data: list[dict] = record['similar_concepts'] or []
+
+        similar_concepts: list[SimilarTermWithScores] = [
+            SimilarTermWithScores(
+                conceptId=sim['id'],
+                similarity_scores=sim['similarity_scores'],
+            )
+            for sim in similar_concepts_data
+        ]
+
+        group = SimilarTermByPrefix(
+            prefix=similar_prefix,
+            similarConcepts=similar_concepts,
+        )
+
+        return concept_id, group, len(similar_concepts_data)
+
+    @staticmethod
+    def _observe_and_build_similar_term(prefix: ConceptPrefix,
+                                        variant: str,
+                                        concept_id: str,
+                                        groups: list[SimilarTermByPrefix],
+                                        total: int,
+                                        ) -> SimilarTerm:
+        """
+        Record grouping metrics for a completed concept's similar-term groups and build the
+        SimilarTerm result to yield.
+        :param prefix: The prefix of the concepts the similar terms were found for.
+        :param variant: The 'same_prefix'/'cross_prefix' metric label variant.
+        :param concept_id: The concept ID the groups belong to.
+        :param groups: The completed list of SimilarTermByPrefix groups for this concept.
+        :param total: The total number of similar concepts across all groups.
+        :return: The built SimilarTerm instance.
+        """
+        SIM_GROUPS.labels(
+            prefix=prefix.value,
+            variant=variant,
+        ).observe(len(groups))
+        SIM_TOTAL.labels(
+            prefix=prefix.value,
+            variant=variant,
+        ).observe(total)
+
+        return SimilarTerm(
+            conceptId=concept_id,
+            similarGroups=groups,
+        )
+
     async def get_similar_terms_iter(self,
                                      prefix: ConceptPrefix,
                                      concept_ids: list[str],
@@ -1774,29 +1833,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                     if first is None:
                         first = time.perf_counter()
 
-                    concept_id: str = record['concept_id']
-                    similar_prefix = ConceptPrefix(record['similar_prefix'])
-                    similar_concepts_data: list[dict] = record['similar_concepts'] or []
+                    concept_id, group, group_size = self._build_similar_term_record(record)
 
                     SIM_PER_GROUP.labels(
                         prefix=prefix.value,
                         variant=variant,
-                    ).observe(len(similar_concepts_data))
+                    ).observe(group_size)
 
-                    similar_concepts: list[SimilarTermWithScores] = [
-                        SimilarTermWithScores(
-                            conceptId=sim['id'],
-                            similarity_scores=sim['similarity_scores'],
-                        )
-                        for sim in similar_concepts_data
-                    ]
-
-                    group = SimilarTermByPrefix(
-                        prefix=similar_prefix,
-                        similarConcepts=similar_concepts,
-                    )
-
-                    current_total += len(similar_concepts)
+                    current_total += group_size
 
                     if current_concept_id is None:
                         current_concept_id = concept_id
@@ -1804,36 +1848,16 @@ class Neo4jGraphDatabase(GraphDatabase):
                     elif current_concept_id == concept_id:
                         current_groups.append(group)
                     else:
-                        SIM_GROUPS.labels(
-                            prefix=prefix.value,
-                            variant=variant,
-                        ).observe(len(current_groups))
-                        SIM_TOTAL.labels(
-                            prefix=prefix.value,
-                            variant=variant,
-                        ).observe(current_total)
-
-                        yield SimilarTerm(
-                            conceptId=current_concept_id,
-                            similarGroups=current_groups,
+                        yield self._observe_and_build_similar_term(
+                            prefix, variant, current_concept_id, current_groups, current_total,
                         )
                         current_concept_id = concept_id
                         current_groups = [group]
-                        current_total = len(similar_concepts_data)
+                        current_total = group_size
 
                 if current_concept_id is not None:
-                    SIM_GROUPS.labels(
-                        prefix=prefix.value,
-                        variant=variant,
-                    ).observe(len(current_groups))
-                    SIM_TOTAL.labels(
-                        prefix=prefix.value,
-                        variant=variant,
-                    ).observe(current_total)
-
-                    yield SimilarTerm(
-                        conceptId=current_concept_id,
-                        similarGroups=current_groups,
+                    yield self._observe_and_build_similar_term(
+                        prefix, variant, current_concept_id, current_groups, current_total,
                     )
         except asyncio.CancelledError:
             result_label = 'cancelled'

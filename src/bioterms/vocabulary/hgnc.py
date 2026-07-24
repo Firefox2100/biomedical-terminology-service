@@ -54,6 +54,98 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     )
 
 
+def _build_hgnc_symbol_concept(row) -> tuple[CONCEPT_CLASS, list[Annotation]]:
+    """
+    Build a Concept and its annotations for one HGNC gene symbol row.
+    :param row: The row from the HGNC symbol dataframe.
+    :return: A tuple of the built Concept and its list of Annotation instances.
+    """
+    synonyms = []
+    annotations = []
+
+    if row['alias_symbol'] and pd.notna(row['alias_symbol']):
+        alias_symbols = row['alias_symbol'].split('|')
+
+        synonyms.extend(alias_symbols)
+
+        for alias_symbol in alias_symbols:
+            annotations.append(Annotation(
+                prefixFrom=VOCABULARY_PREFIX,
+                prefixTo=ConceptPrefix.HGNC_SYMBOL,
+                conceptIdFrom=row['hgnc_id'],
+                conceptIdTo=alias_symbol,
+                annotationType=AnnotationType.ALIAS_SYMBOL,
+            ))
+
+    if row['alias_name'] and pd.notna(row['alias_name']):
+        synonyms.extend(row['alias_name'].split('|'))
+
+    if not pd.isna(row['location_sortable']):
+        location = row['location_sortable']
+    elif not pd.isna(row['location']):
+        location = row['location']
+    else:
+        location = None
+
+    concept = CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptId=row['hgnc_id'].split(':')[1],
+        label=row['symbol'] if pd.notna(row['symbol']) else None,
+        synonyms=synonyms if synonyms else None,
+        definition=row['name'] if pd.notna(row['name']) else None,
+        location=location,
+        status=ConceptStatus.ACTIVE if row['status'] == 'Approved' else ConceptStatus.DEPRECATED,
+    )
+
+    annotations.append(Annotation(
+        prefixFrom=VOCABULARY_PREFIX,
+        prefixTo=ConceptPrefix.HGNC_SYMBOL,
+        conceptIdFrom=row['hgnc_id'],
+        conceptIdTo=row['symbol'],
+        annotationType=AnnotationType.HAS_SYMBOL,
+    ))
+
+    return concept, annotations
+
+
+def _build_hgnc_withdrawn_concept(row,
+                                  hgnc_graph: nx.DiGraph,
+                                  ) -> tuple[CONCEPT_CLASS, Annotation]:
+    """
+    Build a Concept for a withdrawn HGNC entry, wiring its replaced-by edges into the graph.
+    :param row: The row from the HGNC withdrawn dataframe.
+    :param hgnc_graph: The HGNC graph to add replaced-by edges to.
+    :return: A tuple of the built Concept and its single Annotation.
+    """
+    replacing_symbols = row['MERGED_INTO_REPORT(S) (i.e HGNC_ID|SYMBOL|STATUS)'].split(', ')
+    concept = CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptId=row['HGNC_ID'].split(':')[1],
+        label=row['WITHDRAWN_SYMBOL'],
+        status=ConceptStatus.DEPRECATED,
+    )
+
+    for symbol in replacing_symbols:
+        hgnc_graph.add_edge(
+            concept.concept_id,
+            symbol.split('|')[0].split(':')[1],
+            label=ConceptRelationshipType.REPLACED_BY,
+        )
+
+    # The withdrawn ID's own former symbol is a HGNC_SYMBOL-space value, not another
+    # HGNC identifier -- prefixTo must be HGNC_SYMBOL, not VOCABULARY_PREFIX (HGNC).
+    # Only one such annotation per row, independent of how many replacing symbols exist.
+    annotation = Annotation(
+        prefixFrom=VOCABULARY_PREFIX,
+        prefixTo=ConceptPrefix.HGNC_SYMBOL,
+        conceptIdFrom=row['HGNC_ID'],
+        conceptIdTo=row['WITHDRAWN_SYMBOL'],
+        annotationType=AnnotationType.PREVIOUS_SYMBOL,
+    )
+
+    return concept, annotation
+
+
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
@@ -101,82 +193,20 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description='Processing HGNC entries',
         total=len(symbol_df)
     ):
-        synonyms = []
-        if row['alias_symbol'] and pd.notna(row['alias_symbol']):
-            alias_symbols = row['alias_symbol'].split('|')
-
-            synonyms.extend(alias_symbols)
-
-            for alias_symbol in alias_symbols:
-                annotations.append(Annotation(
-                    prefixFrom=VOCABULARY_PREFIX,
-                    prefixTo=ConceptPrefix.HGNC_SYMBOL,
-                    conceptIdFrom=row['hgnc_id'],
-                    conceptIdTo=alias_symbol,
-                    annotationType=AnnotationType.ALIAS_SYMBOL,
-                ))
-
-        if row['alias_name'] and pd.notna(row['alias_name']):
-            synonyms.extend(row['alias_name'].split('|'))
-
-        if not pd.isna(row['location_sortable']):
-            location = row['location_sortable']
-        elif not pd.isna(row['location']):
-            location = row['location']
-        else:
-            location = None
-
-        concept = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX,
-            conceptId=row['hgnc_id'].split(':')[1],
-            label=row['symbol'] if pd.notna(row['symbol']) else None,
-            synonyms=synonyms if synonyms else None,
-            definition=row['name'] if pd.notna(row['name']) else None,
-            location=location,
-            status=ConceptStatus.ACTIVE if row['status'] == 'Approved' else ConceptStatus.DEPRECATED,
-        )
+        concept, row_annotations = _build_hgnc_symbol_concept(row)
 
         concepts.append(concept)
         hgnc_graph.add_node(concept.concept_id)
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=ConceptPrefix.HGNC_SYMBOL,
-            conceptIdFrom=row['hgnc_id'],
-            conceptIdTo=row['symbol'],
-            annotationType=AnnotationType.HAS_SYMBOL,
-        ))
+        annotations.extend(row_annotations)
 
     for _, row in iter_progress(
         withdrawn_df.iterrows(),
         description='Processing HGNC withdrawn entries',
         total=len(withdrawn_df)
     ):
-        replacing_symbols = row['MERGED_INTO_REPORT(S) (i.e HGNC_ID|SYMBOL|STATUS)'].split(', ')
-        concept = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX,
-            conceptId=row['HGNC_ID'].split(':')[1],
-            label=row['WITHDRAWN_SYMBOL'],
-            status=ConceptStatus.DEPRECATED,
-        )
+        concept, annotation = _build_hgnc_withdrawn_concept(row, hgnc_graph)
 
-        for symbol in replacing_symbols:
-            hgnc_graph.add_edge(
-                concept.concept_id,
-                symbol.split('|')[0].split(':')[1],
-                label=ConceptRelationshipType.REPLACED_BY,
-            )
-
-        # The withdrawn ID's own former symbol is a HGNC_SYMBOL-space value, not another
-        # HGNC identifier -- prefixTo must be HGNC_SYMBOL, not VOCABULARY_PREFIX (HGNC).
-        # Only one such annotation per row, independent of how many replacing symbols exist.
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=ConceptPrefix.HGNC_SYMBOL,
-            conceptIdFrom=row['HGNC_ID'],
-            conceptIdTo=row['WITHDRAWN_SYMBOL'],
-            annotationType=AnnotationType.PREVIOUS_SYMBOL,
-        ))
-
+        annotations.append(annotation)
         concepts.append(concept)
         hgnc_graph.add_node(concept.concept_id)
 

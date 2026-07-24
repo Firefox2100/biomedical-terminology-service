@@ -5,6 +5,7 @@ vocabulary status information.
 """
 
 import zlib
+from typing import AsyncIterator
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
@@ -194,6 +195,43 @@ async def get_documents(prefix: ConceptPrefix,
     )
 
 
+async def _iter_request_lines(request: Request,
+                              is_gz: bool,
+                              ) -> AsyncIterator[bytes]:
+    """
+    Decode a streamed request body (optionally gzip-compressed) into newline-delimited lines.
+    :param request: The FastAPI request object to stream from.
+    :param is_gz: Whether the request body is gzip-compressed.
+    :return: An async iterator yielding non-empty line bytes.
+    """
+    decomp = zlib.decompressobj(16 + zlib.MAX_WBITS) if is_gz else None
+    buffer: bytes = b''
+
+    async for chunk in request.stream():
+        if is_gz:
+            chunk = decomp.decompress(chunk)
+
+        buffer += chunk
+
+        while True:
+            nl = buffer.find(b'\n')
+            if nl < 0:
+                # No complete line yet
+                break
+
+            line, buffer = buffer[:nl], buffer[nl + 1:]
+            if line.strip():
+                yield line
+
+    if is_gz:
+        tail = decomp.flush()
+        if tail:
+            buffer += tail
+
+    if buffer.strip():
+        yield buffer
+
+
 @data_router.post('/{prefix}/documents', response_model=IngestResponse)
 async def ingest_documents(prefix: ConceptPrefix,
                            request: Request,
@@ -214,16 +252,13 @@ async def ingest_documents(prefix: ConceptPrefix,
     :return: An IngestResponse containing the total number of concepts after ingestion.
     """
     is_gz = request.headers.get('Content-Encoding', '') == 'gzip'
-    decomp = zlib.decompressobj(16 + zlib.MAX_WBITS) if is_gz else None
 
-    buffer: bytes = b''
     batch: list[ConceptUnion] = []
     batch_size = 1000
     vocabulary_config = get_vocabulary_config(prefix)
     concept_class: ConceptUnion = vocabulary_config['conceptClass']
 
     async def flush_batch():
-        nonlocal buffer
         if not batch:
             return
 
@@ -231,39 +266,12 @@ async def ingest_documents(prefix: ConceptPrefix,
         batch.clear()
 
     try:
-        async for chunk in request.stream():
-            if is_gz:
-                chunk = decomp.decompress(chunk)
-
-            buffer += chunk
-
-            while True:
-                nl = buffer.find(b'\n')
-                if nl < 0:
-                    # No complete line yet
-                    break
-
-                line, buffer = buffer[:nl], buffer[nl + 1:]
-                if not line.strip():
-                    # Empty line
-                    continue
-
-                obj = concept_class.model_validate_json(line)
-                batch.append(obj)
-
-                if len(batch) >= batch_size:
-                    await flush_batch()
-
-        # Flush remaining buffer
-        if is_gz:
-            tail = decomp.flush()
-
-            if tail:
-                buffer += tail
-
-        if buffer.strip():
-            obj = concept_class.model_validate_json(buffer)
+        async for line in _iter_request_lines(request, is_gz):
+            obj = concept_class.model_validate_json(line)
             batch.append(obj)
+
+            if len(batch) >= batch_size:
+                await flush_batch()
 
         await flush_batch()
     except Exception as e:

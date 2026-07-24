@@ -25,6 +25,67 @@ _PAIR_BATCH_SIZE = 256
 _T = TypeVar('_T')
 
 
+def _direct_annotation_sum(node: str,
+                           target_prefix: ConceptPrefix,
+                           corpus_prefix: ConceptPrefix,
+                           annotation_graph: nx.Graph,
+                           corpus_graph: nx.DiGraph,
+                           is_first_iteration: bool,
+                           ) -> float:
+    """
+    Sum the annotation contribution weights directly annotated on a node.
+    :param node: The target graph node to sum direct annotations for.
+    :param target_prefix: The prefix of the target vocabulary.
+    :param corpus_prefix: The prefix of the corpus vocabulary.
+    :param annotation_graph: The directed graph of the annotation between target and corpus.
+    :param corpus_graph: The directed graph of the corpus vocabulary.
+    :param is_first_iteration: Whether this is the first iteration of calculation.
+    :return: The summed direct annotation contribution weight.
+    """
+    annotation_name = f'{target_prefix.value}:{node}'
+    direct_annotation_nodes = annotation_graph.neighbors(annotation_name) \
+        if annotation_name in annotation_graph else []
+
+    direct_annotation_sum = 0
+    for annotation_node in direct_annotation_nodes:
+        if not annotation_node.startswith(f'{corpus_prefix.value}:'):
+            continue
+
+        corpus_node = annotation_node.split(':', 1)[1]
+        if 'ic' in corpus_graph.nodes[corpus_node]:
+            direct_annotation_sum += math.exp(_tune_factor * corpus_graph.nodes[corpus_node]['ic'])
+        elif is_first_iteration:
+            # In the first iteration, we assign a default contribution weight
+            direct_annotation_sum += 0.5
+        else:
+            # A directly annotated corpus node must have an IC
+            raise ValueError(f'Corpus node {corpus_node} does not have IC value.')
+
+    return direct_annotation_sum
+
+
+def _child_annotation_sum(node: str,
+                          target_graph: nx.DiGraph,
+                          ) -> float:
+    """
+    Sum the already-computed annotation sums of a node's children (topological predecessors).
+
+    The IS_A relationship is from child to parent, so the predecessors are the children.
+    :param node: The target graph node to sum child annotation sums for.
+    :param target_graph: The directed graph of the target vocabulary.
+    :return: The summed child annotation contribution weight.
+    """
+    child_annotation_sum = 0
+    for child in target_graph.predecessors(node):
+        if 'annotation_sum' not in target_graph.nodes[child]:
+            # A child should have been processed before the parent in topological order
+            raise ValueError(f'Child node {child} has not been processed yet.')
+
+        child_annotation_sum += target_graph.nodes[child]['annotation_sum']
+
+    return child_annotation_sum
+
+
 def _sum_annotation_for_graph(target_graph: nx.DiGraph,
                               corpus_graph: nx.DiGraph,
                               annotation_graph: nx.Graph,
@@ -48,36 +109,12 @@ def _sum_annotation_for_graph(target_graph: nx.DiGraph,
         description='Calculating annotation sums for target graph',
         total=len(order),
     ):
-        annotation_name = f'{target_prefix.value}:{node}'
+        direct_annotation_sum = _direct_annotation_sum(
+            node, target_prefix, corpus_prefix, annotation_graph, corpus_graph, is_first_iteration,
+        )
+        child_annotation_sum = _child_annotation_sum(node, target_graph)
 
-        direct_annotation_nodes = annotation_graph.neighbors(annotation_name) \
-            if annotation_name in annotation_graph else []
-        direct_annotation_sum = 0
-        for annotation_node in direct_annotation_nodes:
-            if annotation_node.startswith(f'{corpus_prefix.value}:'):
-                corpus_node = annotation_node.split(':', 1)[1]
-                if 'ic' in corpus_graph.nodes[corpus_node]:
-                    direct_annotation_sum += math.exp(_tune_factor * corpus_graph.nodes[corpus_node]['ic'])
-                else:
-                    # Corpus node does not have a sum
-                    if is_first_iteration:
-                        # In the first iteration, we assign a default contribution weight
-                        direct_annotation_sum += 0.5
-                    else:
-                        # A directly annotated corpus node must have an IC
-                        raise ValueError(f'Corpus node {corpus_node} does not have IC value.')
-
-        # The IS_A relationship is from child to parent, so the predecessors are the children
-        child_annotation_sum = 0
-        for child in target_graph.predecessors(node):
-            if 'annotation_sum' in target_graph.nodes[child]:
-                child_annotation_sum += target_graph.nodes[child]['annotation_sum']
-            else:
-                # A child should have been processed before the parent in topological order
-                raise ValueError(f'Child node {child} has not been processed yet.')
-
-        total_annotation_sum = direct_annotation_sum + child_annotation_sum
-        target_graph.nodes[node]['annotation_sum'] = total_annotation_sum
+        target_graph.nodes[node]['annotation_sum'] = direct_annotation_sum + child_annotation_sum
 
 
 def _calculate_ic(target_graph: nx.DiGraph) -> float:

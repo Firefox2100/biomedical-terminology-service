@@ -36,12 +36,58 @@ _allowed_redirect_regex = [
 ]
 BEARER_SECURITY = HTTPBearer()
 
+HTTP_DATE_FORMAT = '%a, %d %b %Y %H:%M:%S GMT'
+VOCABULARY_CACHE_CONTROL = 'public, max-age=86400, stale-while-revalidate=172800'
+
 
 class CacheControlMiddleware(BaseHTTPMiddleware):
     def __init__(self,
                  app: FastAPI,
                  ):
         super().__init__(app)
+
+    @staticmethod
+    def _is_cacheable_vocabulary_path(path: str) -> bool:
+        return path.startswith('/api/vocabularies') and not path.endswith('/random')
+
+    @staticmethod
+    def _not_modified_response(etag: str,
+                               last_modified: datetime,
+                               ) -> Response:
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED,
+            headers={
+                'ETag': etag,
+                'Last-Modified': last_modified.strftime(HTTP_DATE_FORMAT),
+                'Cache-Control': VOCABULARY_CACHE_CONTROL,
+            }
+        )
+
+    def _check_not_modified(self,
+                            request: Request,
+                            last_modified: datetime,
+                            etag: str,
+                            ) -> Optional[Response]:
+        """
+        Check the conditional request headers against the dataset's last-modified time and
+        etag, returning a 304 response if the client's cached copy is still fresh.
+        """
+        if_not_match = request.headers.get('If-None-Match')
+        if if_not_match is not None:
+            etag_values = [v.strip() for v in if_not_match.split(',')]
+            if etag in etag_values or '*' in etag_values:
+                return self._not_modified_response(etag, last_modified)
+
+        if_modified_since = request.headers.get('If-Modified-Since')
+        if if_modified_since is not None:
+            try:
+                ims_date = datetime.strptime(if_modified_since, HTTP_DATE_FORMAT)
+                if last_modified <= ims_date:
+                    return self._not_modified_response(etag, last_modified)
+            except Exception:
+                pass
+
+        return None
 
     async def dispatch(self,
                        request: Request,
@@ -54,49 +100,24 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
         cache = get_active_cache()
         last_modified = None
         etag = None
+        cacheable = self._is_cacheable_vocabulary_path(request.url.path)
 
-        if request.url.path.startswith('/api/vocabularies') and not request.url.path.endswith('/random'):
+        if cacheable:
             last_modified = await cache.get_dataset_last_modified()
             etag = hashlib.sha1(last_modified.isoformat().encode()).hexdigest()
 
-            if_not_match = request.headers.get('If-None-Match')
-            if if_not_match is not None:
-                etag_values = [v.strip() for v in if_not_match.split(',')]
-                if etag in etag_values or '*' in etag_values:
-                    return Response(
-                        status_code=status.HTTP_304_NOT_MODIFIED,
-                        headers={
-                            'ETag': etag,
-                            'Last-Modified': last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT'),
-                            'Cache-Control': f'public, max-age=86400, stale-while-revalidate=172800',
-                        }
-                    )
-
-            if_modified_since = request.headers.get('If-Modified-Since')
-            if if_modified_since is not None:
-                try:
-                    ims_date = datetime.strptime(if_modified_since, '%a, %d %b %Y %H:%M:%S GMT')
-                    if last_modified <= ims_date:
-                        return Response(
-                            status_code=status.HTTP_304_NOT_MODIFIED,
-                            headers={
-                                'ETag': etag,
-                                'Last-Modified': last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT'),
-                                'Cache-Control': f'public, max-age=86400, stale-while-revalidate=172800',
-                            }
-                        )
-                except Exception:
-                    pass
+            not_modified = self._check_not_modified(request, last_modified, etag)
+            if not_modified is not None:
+                return not_modified
 
         response = await call_next(request)
 
-        if response.status_code != 200:
+        if response.status_code != 200 or not cacheable:
             return response
 
-        if request.url.path.startswith('/api/vocabularies') and not request.url.path.endswith('/random'):
-            response.headers['Cache-Control'] = f'public, max-age=86400, stale-while-revalidate=172800'
-            response.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
-            response.headers['ETag'] = etag
+        response.headers['Cache-Control'] = VOCABULARY_CACHE_CONTROL
+        response.headers['Last-Modified'] = last_modified.strftime(HTTP_DATE_FORMAT)
+        response.headers['ETag'] = etag
 
         return response
 

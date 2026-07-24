@@ -60,6 +60,135 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             pass
 
 
+def _handle_gene_feature(attributes: dict,
+                         row,
+                         genes: dict[str, CONCEPT_CLASS],
+                         ensembl_graph: nx.DiGraph,
+                         annotations: list[Annotation],
+                         ):
+    """
+    Process a GTF 'gene' feature row into a gene Concept and its HGNC symbol annotation.
+    """
+    if attributes['gene_id'] in genes:
+        return
+
+    if 'gene_name' in attributes:
+        label = attributes['gene_name']
+        annotations.append(Annotation(
+            prefixFrom=VOCABULARY_PREFIX,
+            prefixTo=ConceptPrefix.HGNC_SYMBOL,
+            conceptIdFrom=attributes['gene_id'],
+            conceptIdTo=attributes['gene_name'],
+            annotationType=AnnotationType.HAS_SYMBOL
+        ))
+    else:
+        label = None
+
+    gene_concept = CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptId=attributes['gene_id'],
+        label=label,
+        conceptTypes=[ConceptType.GENE],
+        bioType=attributes['gene_biotype'],
+        start=int(row['start']),
+        end=int(row['end']),
+        sequence=row['seqname'],
+        status=ConceptStatus.ACTIVE,
+    )
+
+    genes[attributes['gene_id']] = gene_concept
+    ensembl_graph.add_node(gene_concept.concept_id)
+
+
+def _handle_transcript_feature(attributes: dict,
+                               row,
+                               transcripts: dict[str, CONCEPT_CLASS],
+                               ensembl_graph: nx.DiGraph,
+                               ):
+    """
+    Process a GTF 'transcript' feature row into a transcript Concept, part-of its gene.
+    """
+    if attributes['transcript_id'] not in transcripts:
+        transcript_concept = CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX,
+            conceptId=attributes['transcript_id'],
+            label=attributes.get('transcript_name'),
+            conceptTypes=[ConceptType.TRANSCRIPT],
+            bioType=attributes.get('transcript_biotype'),
+            start=int(row['start']),
+            end=int(row['end']),
+            sequence=row['seqname'],
+            status=ConceptStatus.ACTIVE,
+        )
+
+        transcripts[attributes['transcript_id']] = transcript_concept
+        ensembl_graph.add_node(transcript_concept.concept_id)
+
+    ensembl_graph.add_edge(
+        attributes['transcript_id'],
+        attributes['gene_id'],
+        label=ConceptRelationshipType.PART_OF,
+    )
+
+
+def _handle_exon_feature(attributes: dict,
+                         row,
+                         exons: dict[str, CONCEPT_CLASS],
+                         ensembl_graph: nx.DiGraph,
+                         ):
+    """
+    Process a GTF 'exon' feature row into an exon Concept, part-of its transcript.
+    """
+    if attributes['exon_id'] not in exons:
+        exon_concept = CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX,
+            conceptId=attributes['exon_id'],
+            conceptTypes=[ConceptType.EXON],
+            start=int(row['start']),
+            end=int(row['end']),
+            sequence=row['seqname'],
+            status=ConceptStatus.ACTIVE,
+        )
+
+        exons[attributes['exon_id']] = exon_concept
+        ensembl_graph.add_node(exon_concept.concept_id)
+
+    ensembl_graph.add_edge(
+        attributes['exon_id'],
+        attributes['transcript_id'],
+        label=ConceptRelationshipType.PART_OF,
+    )
+
+
+def _handle_cds_feature(attributes: dict,
+                        row,
+                        proteins: dict[str, CONCEPT_CLASS],
+                        ensembl_graph: nx.DiGraph,
+                        ):
+    """
+    Process a GTF 'CDS' feature row into a protein Concept, part-of its transcript.
+    """
+    if attributes['protein_id'] not in proteins:
+        protein_concept = CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX,
+            conceptId=attributes['protein_id'],
+            conceptTypes=[ConceptType.PROTEIN],
+            start=int(row['start']),
+            end=int(row['end']),
+            sequence=row['seqname'],
+            status=ConceptStatus.ACTIVE,
+        )
+
+        proteins[attributes['protein_id']] = protein_concept
+        ensembl_graph.add_node(protein_concept.concept_id)
+
+    ensembl_graph.add_edge(
+        attributes['protein_id'],
+        attributes['transcript_id'],
+        label=ConceptRelationshipType.PART_OF,
+    )
+
+
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
@@ -117,98 +246,15 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             re.findall(r'([^\s"]+)\s"([^"]+)"', row['attribute'])
         )
 
-        if row['feature'] == 'gene':
-            if attributes['gene_id'] in genes:
-                continue
-
-            if 'gene_name' in attributes:
-                label = attributes['gene_name']
-                annotations.append(Annotation(
-                    prefixFrom=VOCABULARY_PREFIX,
-                    prefixTo=ConceptPrefix.HGNC_SYMBOL,
-                    conceptIdFrom=attributes['gene_id'],
-                    conceptIdTo=attributes['gene_name'],
-                    annotationType=AnnotationType.HAS_SYMBOL
-                ))
-            else:
-                label = None
-
-            gene_concept = CONCEPT_CLASS(
-                prefix=VOCABULARY_PREFIX,
-                conceptId=attributes['gene_id'],
-                label=label,
-                conceptTypes=[ConceptType.GENE],
-                bioType=attributes['gene_biotype'],
-                start=int(row['start']),
-                end=int(row['end']),
-                sequence=row['seqname'],
-                status=ConceptStatus.ACTIVE,
-            )
-
-            genes[attributes['gene_id']] = gene_concept
-            ensembl_graph.add_node(gene_concept.concept_id)
-        elif row['feature'] == 'transcript':
-            if attributes['transcript_id'] not in transcripts:
-                transcript_concept = CONCEPT_CLASS(
-                    prefix=VOCABULARY_PREFIX,
-                    conceptId=attributes['transcript_id'],
-                    label=attributes.get('transcript_name'),
-                    conceptTypes=[ConceptType.TRANSCRIPT],
-                    bioType=attributes.get('transcript_biotype'),
-                    start=int(row['start']),
-                    end=int(row['end']),
-                    sequence=row['seqname'],
-                    status=ConceptStatus.ACTIVE,
-                )
-
-                transcripts[attributes['transcript_id']] = transcript_concept
-                ensembl_graph.add_node(transcript_concept.concept_id)
-
-            ensembl_graph.add_edge(
-                attributes['transcript_id'],
-                attributes['gene_id'],
-                label=ConceptRelationshipType.PART_OF,
-            )
-        elif row['feature'] == 'exon':
-            if attributes['exon_id'] not in exons:
-                exon_concept = CONCEPT_CLASS(
-                    prefix=VOCABULARY_PREFIX,
-                    conceptId=attributes['exon_id'],
-                    conceptTypes=[ConceptType.EXON],
-                    start=int(row['start']),
-                    end=int(row['end']),
-                    sequence=row['seqname'],
-                    status=ConceptStatus.ACTIVE,
-                )
-
-                exons[attributes['exon_id']] = exon_concept
-                ensembl_graph.add_node(exon_concept.concept_id)
-
-            ensembl_graph.add_edge(
-                attributes['exon_id'],
-                attributes['transcript_id'],
-                label=ConceptRelationshipType.PART_OF,
-            )
-        elif row['feature'] == 'CDS':
-            if attributes['protein_id'] not in proteins:
-                protein_concept = CONCEPT_CLASS(
-                    prefix=VOCABULARY_PREFIX,
-                    conceptId=attributes['protein_id'],
-                    conceptTypes=[ConceptType.PROTEIN],
-                    start=int(row['start']),
-                    end=int(row['end']),
-                    sequence=row['seqname'],
-                    status=ConceptStatus.ACTIVE,
-                )
-
-                proteins[attributes['protein_id']] = protein_concept
-                ensembl_graph.add_node(protein_concept.concept_id)
-
-            ensembl_graph.add_edge(
-                attributes['protein_id'],
-                attributes['transcript_id'],
-                label=ConceptRelationshipType.PART_OF,
-            )
+        feature = row['feature']
+        if feature == 'gene':
+            _handle_gene_feature(attributes, row, genes, ensembl_graph, annotations)
+        elif feature == 'transcript':
+            _handle_transcript_feature(attributes, row, transcripts, ensembl_graph)
+        elif feature == 'exon':
+            _handle_exon_feature(attributes, row, exons, ensembl_graph)
+        elif feature == 'CDS':
+            _handle_cds_feature(attributes, row, proteins, ensembl_graph)
 
     del gene_df
 

@@ -119,6 +119,49 @@ async def get_login_page(request: Request,
     )
 
 
+def _login_redirect(request: Request,
+                    next_url: str | None,
+                    error: str | None = None,
+                    ) -> RedirectResponse:
+    """
+    Build a redirect back to the login page, preserving the next_url and an optional error.
+    :param request: The current request.
+    :param next_url: The URL to redirect to after a subsequent successful login, if any.
+    :param error: An optional error message to display on the login page.
+    :return: A redirect response to the login page.
+    """
+    params = {}
+    if error:
+        params['error'] = error
+
+    if next_url:
+        params['next'] = next_url
+
+    url = request.url_for('get_login_page')
+
+    if params:
+        url = f'{url}?{urlencode(params)}'
+
+    return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _is_safe_relative_path(url: str,
+                           request: Request,
+                           ) -> bool:
+    """
+    Check whether a URL is a safe same-origin relative redirect target, distinct from the
+    current request path (to avoid redirecting a user back to the page they just posted to).
+    :param url: The URL to check.
+    :param request: The current request, used to compare against the current path.
+    :return: True if the URL is a safe relative redirect target.
+    """
+    try:
+        p = urlparse(url)
+        return (not p.scheme and not p.netloc and url.startswith('/')) and (url != request.url.path)
+    except Exception:
+        return False
+
+
 @ui_router.post('/login', response_class=RedirectResponse)
 async def post_login_credentials(request: Request,
                                  next_url: str | None = Query(None, alias='next'),
@@ -140,40 +183,17 @@ async def post_login_credentials(request: Request,
     sanitised_next_url = sanitise_next_url(next_url) if next_url \
         else str(request.url_for('get_home_page'))
 
-    def login_redirect(error: str | None = None):
-        params = {}
-        if error:
-            params['error'] = error
-
-        if next_url:
-            params['next'] = next_url
-
-        url = request.url_for('get_login_page')
-
-        if params:
-            url = f'{url}?{urlencode(params)}'
-
-        return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
-
     if not username or not password:
-        return login_redirect('Please enter username or password correctly')
+        return _login_redirect(request, next_url, 'Please enter username or password correctly')
 
     user = await doc_db.users.get(username)
 
     if not user or not user.validate_password(password):
-        return login_redirect('Invalid username or password')
+        return _login_redirect(request, next_url, 'Invalid username or password')
 
     request.session['username'] = username
 
-    def is_safe_relative_path(u: str) -> bool:
-        try:
-            p = urlparse(u)
-
-            return (not p.scheme and not p.netloc and u.startswith('/')) and (u != request.url.path)
-        except Exception:
-            return False
-
-    if is_safe_relative_path(sanitised_next_url):
+    if _is_safe_relative_path(sanitised_next_url, request):
         dest = sanitised_next_url
     else:
         dest = str(request.url_for('get_home_page'))

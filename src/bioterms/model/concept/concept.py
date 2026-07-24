@@ -6,6 +6,9 @@ from bioterms.etc.enums import ConceptType, ConceptPrefix, ConceptStatus
 from ..base import JsonModel
 
 
+_UNWANTED_CHARS_PATTERN = re.compile(r'[()"\'\s]')
+
+
 class Concept(JsonModel):
     """
     A base model for a concept in any vocabulary.
@@ -75,7 +78,7 @@ class Concept(JsonModel):
             :return: List of cleaned, lowercased words.
             """
             # Remove parentheses, double quotes, and other unwanted characters
-            cleaned_text = re.sub(r'[()"\'\s]', ' ', text)
+            cleaned_text = _UNWANTED_CHARS_PATTERN.sub(' ', text)
             # Split into words, filter by length, and convert to lowercase
             return [word.lower() for word in cleaned_text.split() if len(word) > 2]
 
@@ -110,13 +113,13 @@ class Concept(JsonModel):
         search_text = self.concept_id
 
         if self.label:
-            label = re.sub(r'[()"\'\s]', '', self.label)
+            label = _UNWANTED_CHARS_PATTERN.sub('', self.label)
             search_text += ' ' + label
 
         if self.synonyms:
             for synonym in self.synonyms:
                 if isinstance(synonym, str):
-                    synonym = re.sub(r'[()"\'\s]', '', synonym)
+                    synonym = _UNWANTED_CHARS_PATTERN.sub('', synonym)
                     search_text += ' ' + synonym
 
         return search_text

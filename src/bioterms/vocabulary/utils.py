@@ -477,27 +477,32 @@ async def load_graph_from_file(prefix: ConceptPrefix,
     return graph
 
 
-async def load_annotation_from_file(prefix_from: ConceptPrefix,
-                                    prefix_to: ConceptPrefix | None = None,
-                                    annotation_file_path: str | os.PathLike | None = None,
-                                    ) -> nx.DiGraph:
+def _resolve_annotation_file_path(prefix_from: ConceptPrefix,
+                                  prefix_to: ConceptPrefix | None,
+                                  annotation_file_path: str | os.PathLike | None,
+                                  ) -> str:
     """
-    Load the annotation graph from an offline file for the specified vocabulary prefix.
+    Resolve the offline annotation dump file path for a prefix pair. When no explicit path is
+    given, tries the '{from}-{to}' name first and falls back to the '{to}-{from}' name, since
+    the dump file is written using the prefix order at load time rather than the query order.
     :param prefix_from: The vocabulary prefix of the source concepts.
     :param prefix_to: The vocabulary prefix of the target concepts.
-    :return: The annotation graph.
+    :param annotation_file_path: An explicit file path to use instead of the default location.
+    :return: The resolved, existing offline annotation file path.
     """
     if annotation_file_path is not None:
         offline_file_path = os.fspath(annotation_file_path)
         if not os.path.exists(offline_file_path):
             raise FileNotFoundError(f'Offline annotation file not found: {offline_file_path}')
-    else:
-        offline_file_path = os.path.join(
-            CONFIG.data_dir,
-            'offline',
-            f'{prefix_from.value}{("-" + prefix_to.value if prefix_to is not None else "")}.annotation.dump'
-        )
-    if annotation_file_path is None and not os.path.exists(offline_file_path):
+        return offline_file_path
+
+    offline_file_path = os.path.join(
+        CONFIG.data_dir,
+        'offline',
+        f'{prefix_from.value}{("-" + prefix_to.value if prefix_to is not None else "")}.annotation.dump'
+    )
+
+    if not os.path.exists(offline_file_path):
         if prefix_to is not None:
             offline_file_path = os.path.join(
                 CONFIG.data_dir,
@@ -513,6 +518,21 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
                 f'Offline annotation file for {prefix_from.value} '
                 f'{("-" + prefix_to.value if prefix_to is not None else "")} not found.'
             )
+
+    return offline_file_path
+
+
+async def load_annotation_from_file(prefix_from: ConceptPrefix,
+                                    prefix_to: ConceptPrefix | None = None,
+                                    annotation_file_path: str | os.PathLike | None = None,
+                                    ) -> nx.DiGraph:
+    """
+    Load the annotation graph from an offline file for the specified vocabulary prefix.
+    :param prefix_from: The vocabulary prefix of the source concepts.
+    :param prefix_to: The vocabulary prefix of the target concepts.
+    :return: The annotation graph.
+    """
+    offline_file_path = _resolve_annotation_file_path(prefix_from, prefix_to, annotation_file_path)
 
     graph = nx.DiGraph()
     requested_prefixes = (

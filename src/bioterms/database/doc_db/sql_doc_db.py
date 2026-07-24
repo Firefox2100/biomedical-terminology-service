@@ -518,6 +518,46 @@ class SqlDocumentDatabase(DocumentDatabase):
         )
         return tables
 
+    def _index_column_expr(self,
+                           table_name: str,
+                           field: str,
+                           ) -> str:
+        """
+        Build the dialect-specific SQL expression for indexing a JSON payload field.
+        :param table_name: The name of the concept table.
+        :param field: The JSON field to index.
+        :return: The SQL column expression for the index.
+        """
+        if self._is_postgres:
+            return f"(({table_name}.payload->>'{field}'))"
+        if self._is_mysql:
+            return f"(JSON_UNQUOTE(JSON_EXTRACT({table_name}.payload, '$.{field}')))"
+        if self._is_sqlite:
+            return f"(json_extract({table_name}.payload, '$.{field}'))"
+
+        raise ValueError(f'Unsupported SQL dialect for create_index: {self._engine.dialect.name}')
+
+    @staticmethod
+    async def _drop_index_if_exists(conn,
+                                    idx_name: str,
+                                    table_name: str,
+                                    ):
+        """
+        Best-effort drop of an index, trying both the standalone and table-qualified DROP INDEX
+        syntax since dialects differ on which is required.
+        :param conn: The database connection to execute on.
+        :param idx_name: The name of the index to drop.
+        :param table_name: The name of the table the index belongs to.
+        """
+        try:
+            await conn.execute(text(f'DROP INDEX {idx_name}'))
+        except Exception:
+            # Some DBs need "DROP INDEX idx ON table"
+            try:
+                await conn.execute(text(f'DROP INDEX {idx_name} ON {table_name}'))
+            except Exception:
+                pass
+
     async def create_index(self,
                            prefix: ConceptPrefix,
                            field: str,
@@ -537,45 +577,22 @@ class SqlDocumentDatabase(DocumentDatabase):
             concept = tables.concept
 
             idx_name = f'{concept.name}_{field}_index'
-            col_expr_sql: str
-
-            if self._is_postgres:
-                col_expr_sql = f"(({concept.name}.payload->>'{field}'))"
-            elif self._is_mysql:
-                col_expr_sql = f"(JSON_UNQUOTE(JSON_EXTRACT({concept.name}.payload, '$.{field}')))"
-            elif self._is_sqlite:
-                col_expr_sql = f"(json_extract({concept.name}.payload, '$.{field}'))"
-            else:
-                raise ValueError(f'Unsupported SQL dialect for create_index: {self._engine.dialect.name}')
+            col_expr_sql = self._index_column_expr(concept.name, field)
 
             if overwrite:
-                # Drop if exists
-                try:
-                    await conn.execute(text(f'DROP INDEX {idx_name}'))
-                except Exception:
-                    # Some DBs need "DROP INDEX idx ON table"
-                    try:
-                        await conn.execute(text(f'DROP INDEX {idx_name} ON {concept.name}'))
-                    except Exception:
-                        pass
+                await self._drop_index_if_exists(conn, idx_name, concept.name)
 
             unique_sql = 'UNIQUE ' if unique else ''
             # Some DBs do not support IF NOT EXISTS for indexes uniformly.
             try:
                 await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} {col_expr_sql}'))
             except Exception as e:
-                if overwrite:
-                    # Last attempt: drop then create
-                    try:
-                        await conn.execute(text(f'DROP INDEX {idx_name}'))
-                    except Exception:
-                        try:
-                            await conn.execute(text(f'DROP INDEX {idx_name} ON {concept.name}'))
-                        except Exception:
-                            pass
-                    await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} {col_expr_sql}'))
-                else:
+                if not overwrite:
                     raise IndexCreationError(f'Failed to create index {idx_name}: {e}') from e
+
+                # Last attempt: drop then create
+                await self._drop_index_if_exists(conn, idx_name, concept.name)
+                await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} {col_expr_sql}'))
 
     async def delete_index(self,
                            prefix: ConceptPrefix,

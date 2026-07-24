@@ -97,6 +97,65 @@ def _parse_term_label(term_30: str,
     return term_30
 
 
+def _status_from_ctv3_code(status_code: str) -> ConceptStatus:
+    """
+    Map a raw CTV3 status code to a ConceptStatus.
+    :param status_code: The raw status code from the concept file.
+    :return: The mapped ConceptStatus.
+    """
+    return ConceptStatus.DEPRECATED if status_code not in ('C', 'O') else ConceptStatus.ACTIVE
+
+
+def _make_ctv3_stub_concept(concept_row) -> CONCEPT_CLASS:
+    """
+    Build a Concept for a CTV3 concept ID that has no matching term/description entry.
+    :param concept_row: The row from the concept dataframe.
+    :return: The built stub Concept instance.
+    """
+    return CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptId=concept_row['concept_id'],
+        status=_status_from_ctv3_code(concept_row['status']),
+    )
+
+
+def _extract_ctv3_label_and_synonyms(group) -> tuple[str | None, list[str]] | None:
+    """
+    Extract the preferred label and synonym labels from a group of term rows for one concept.
+    :param group: The group of term rows for a single concept ID.
+    :return: A tuple of (label, synonyms), or None if the concept has no usable label or synonym.
+    """
+    label_row = group[group['type'] == 'P']
+    synonym_rows = group[group['type'] == 'S']
+
+    if not label_row.empty:
+        label = _parse_term_label(
+            term_30=label_row.iloc[0]['term_30'],
+            term_60=label_row.iloc[0]['term_60'],
+            term_198=label_row.iloc[0]['term_198'],
+        )
+    elif not synonym_rows.empty:
+        label = _parse_term_label(
+            term_30=synonym_rows.iloc[0]['term_30'],
+            term_60=synonym_rows.iloc[0]['term_60'],
+            term_198=synonym_rows.iloc[0]['term_198'],
+        )
+    else:
+        # No label or synonym at all, however, the concept ID appeared in the file
+        return None
+
+    synonyms = [
+        _parse_term_label(
+            term_30=row['term_30'],
+            term_60=row['term_60'],
+            term_198=row['term_198']
+        )
+        for _, row in synonym_rows.iterrows()
+    ]
+
+    return label, synonyms
+
+
 def _load_concepts() -> list[CONCEPT_CLASS]:
     """
     Load concepts from the CTV3 vocabulary files.
@@ -149,69 +208,29 @@ def _load_concepts() -> list[CONCEPT_CLASS]:
         total=len(merged_term_df),
     ):
         while concept_index < concept_count and concept_df.iloc[concept_index]['concept_id'] != concept_id:
-            concept = CONCEPT_CLASS(
-                prefix=VOCABULARY_PREFIX,
-                conceptId=concept_df.iloc[concept_index]['concept_id'],
-                status=ConceptStatus.DEPRECATED
-                    if concept_df.iloc[concept_index]['status'] not in ['C', 'O']
-                    else ConceptStatus.ACTIVE,
-            )
-
-            concepts.append(concept)
+            concepts.append(_make_ctv3_stub_concept(concept_df.iloc[concept_index]))
             concept_index += 1
 
         if concept_index < concept_count and concept_df.iloc[concept_index]['concept_id'] == concept_id:
-            label_row = group[group['type'] == 'P']
-            synonym_rows = group[group['type'] == 'S']
-
-            if not label_row.empty:
-                label = _parse_term_label(
-                    term_30=label_row.iloc[0]['term_30'],
-                    term_60=label_row.iloc[0]['term_60'],
-                    term_198=label_row.iloc[0]['term_198'],
-                )
-            elif not synonym_rows.empty:
-                label = _parse_term_label(
-                    term_30=synonym_rows.iloc[0]['term_30'],
-                    term_60=synonym_rows.iloc[0]['term_60'],
-                    term_198=synonym_rows.iloc[0]['term_198'],
-                )
-            else:
-                # No label or synonym at all, however, the concept ID appeared in the file
+            label_and_synonyms = _extract_ctv3_label_and_synonyms(group)
+            if label_and_synonyms is None:
                 continue
 
-            synonyms = [
-                _parse_term_label(
-                    term_30=row['term_30'],
-                    term_60=row['term_60'],
-                    term_198=row['term_198']
-                )
-                for _, row in synonym_rows.iterrows()
-            ]
+            label, synonyms = label_and_synonyms
 
             concept = CONCEPT_CLASS(
                 prefix=VOCABULARY_PREFIX,
                 conceptId=concept_id,
                 label=label if not pd.isna(label) and label else None,
                 synonyms=synonyms if synonyms else None,
-                status=ConceptStatus.DEPRECATED
-                    if concept_df.iloc[concept_index]['status'] not in ['C', 'O']
-                    else ConceptStatus.ACTIVE,
+                status=_status_from_ctv3_code(concept_df.iloc[concept_index]['status']),
             )
 
             concepts.append(concept)
             concept_index += 1
 
     while concept_index < concept_count:
-        concept = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX,
-            conceptId=concept_df.iloc[concept_index]['concept_id'],
-            status=ConceptStatus.DEPRECATED
-                if concept_df.iloc[concept_index]['status'] not in ['C', 'O']
-                else ConceptStatus.ACTIVE,
-        )
-
-        concepts.append(concept)
+        concepts.append(_make_ctv3_stub_concept(concept_df.iloc[concept_index]))
         concept_index += 1
 
     return concepts

@@ -92,6 +92,117 @@ def map_xref_url(url: str) -> str | None:
     return None
 
 
+_XREF_MATCH_ATTRIBUTES = (
+    ('exactMatch', AnnotationType.EXACT),
+    ('broadMatch', AnnotationType.BROAD),
+    ('narrowMatch', AnnotationType.NARROW),
+    ('relatedMatch', AnnotationType.RELATED),
+)
+
+
+def _build_mondo_concept(mondo_class: ThingClass) -> Concept:
+    """
+    Build a Concept instance from a Mondo ontology class.
+    :param mondo_class: The owlready2 class representing the Mondo concept.
+    :return: The built Concept instance.
+    """
+    return CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptTypes=[],
+        conceptId=mondo_class.name.split('_')[-1],
+        label=mondo_class.label[0]
+            if hasattr(mondo_class, 'label') and mondo_class.label
+            else None,
+        definition=mondo_class.IAO_0000115[0]
+            if hasattr(mondo_class, 'IAO_0000115') and mondo_class.IAO_0000115
+            else None,
+        comment=mondo_class.comment[0]
+            if hasattr(mondo_class, 'comment') and mondo_class.comment
+            else None,
+        status=ConceptStatus.DEPRECATED
+            if hasattr(mondo_class, 'deprecated') and bool(mondo_class.deprecated)
+            else ConceptStatus.ACTIVE,
+        synonyms=mondo_class.hasExactSynonym
+            if hasattr(mondo_class, 'hasExactSynonym') and mondo_class.hasExactSynonym
+            else None
+    )
+
+
+def _add_mondo_is_a_edges(mondo_graph: nx.DiGraph,
+                          mondo_class: ThingClass,
+                          concept_id: str,
+                          ):
+    """
+    Add is-a edges to the Mondo graph for the parents of a given Mondo class.
+    :param mondo_graph: The Mondo graph to add edges to.
+    :param mondo_class: The owlready2 class to read parents from.
+    :param concept_id: The concept ID of the Mondo class.
+    """
+    if not hasattr(mondo_class, 'is_a'):
+        return
+
+    for parent in mondo_class.is_a:
+        if isinstance(parent, ThingClass) and parent.name.startswith('MONDO_'):
+            mondo_graph.add_edge(
+                concept_id,
+                parent.name.split('_')[-1],
+                label=ConceptRelationshipType.IS_A
+            )
+
+
+def _build_mondo_xref_annotations(mondo_class: ThingClass,
+                                  concept_id: str,
+                                  ) -> list[Annotation]:
+    """
+    Build the cross-vocabulary annotations for a Mondo class from its exact/broad/narrow/related
+    match xrefs, falling back to hasDbXref entries not already covered by those matches.
+    :param mondo_class: The owlready2 class to extract xrefs from.
+    :param concept_id: The Mondo concept ID the annotations originate from.
+    :return: The list of built Annotation instances.
+    """
+    annotations = []
+    cross_references = set()
+
+    for attribute_name, annotation_type in _XREF_MATCH_ATTRIBUTES:
+        for m in getattr(mondo_class, attribute_name, []):
+            curie_id = map_xref_url(m)
+            if not curie_id:
+                # Unknown mapping, skip it
+                continue
+
+            cross_references.add(curie_id)
+
+            vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
+            target_id = curie_id.split(':', 1)[1]
+            annotations.append(Annotation(
+                prefixFrom=VOCABULARY_PREFIX,
+                prefixTo=vocabulary_prefix,
+                conceptIdFrom=concept_id,
+                conceptIdTo=target_id,
+                annotationType=annotation_type,
+            ))
+
+    for xref in getattr(mondo_class, 'hasDbXref', []):
+        if xref in cross_references:
+            continue
+
+        # Other type of matches, default to ANNOTATED_WITH
+        if ':' not in xref:
+            continue
+
+        xref_prefix, target_id = xref.split(':', 1)
+        vocabulary_prefix = map_vocabulary_prefix(xref_prefix)
+        annotations.append(Annotation(
+            prefixFrom=VOCABULARY_PREFIX,
+            prefixTo=vocabulary_prefix,
+            conceptIdFrom=concept_id,
+            conceptIdTo=target_id,
+            annotationType=AnnotationType.ANNOTATED_WITH,
+        ))
+
+    return annotations
+
+
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
     """
     Download the Mondo vocabulary files.
@@ -141,123 +252,13 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         if not mondo_class.name.startswith('MONDO_'):
             continue
 
-        concept = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX,
-            conceptTypes=[],
-            conceptId=mondo_class.name.split('_')[-1],
-            label=mondo_class.label[0]
-                if hasattr(mondo_class, 'label') and mondo_class.label
-                else None,
-            definition=mondo_class.IAO_0000115[0]
-                if hasattr(mondo_class, 'IAO_0000115') and mondo_class.IAO_0000115
-                else None,
-            comment=mondo_class.comment[0]
-                if hasattr(mondo_class, 'comment') and mondo_class.comment
-                else None,
-            status=ConceptStatus.DEPRECATED
-                if hasattr(mondo_class, 'deprecated') and bool(mondo_class.deprecated)
-                else ConceptStatus.ACTIVE,
-            synonyms=mondo_class.hasExactSynonym
-                if hasattr(mondo_class, 'hasExactSynonym') and mondo_class.hasExactSynonym
-                else None
-        )
+        concept = _build_mondo_concept(mondo_class)
 
         concepts.append(concept)
         mondo_graph.add_node(concept.concept_id)
 
-        if hasattr(mondo_class, 'is_a'):
-            for parent in mondo_class.is_a:
-                if isinstance(parent, ThingClass) and parent.name.startswith('MONDO_'):
-                    mondo_graph.add_edge(
-                        concept.concept_id,
-                        parent.name.split('_')[-1],
-                        label=ConceptRelationshipType.IS_A
-                    )
-
-        cross_references = set()
-        for m in getattr(mondo_class, 'exactMatch', []):
-            curie_id = map_xref_url(m)
-            if not curie_id:
-                # Unknown mapping, skip it
-                continue
-
-            cross_references.add(curie_id)
-
-            vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
-            target_id = curie_id.split(':', 1)[1]
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=concept.concept_id,
-                conceptIdTo=target_id,
-                annotationType=AnnotationType.EXACT,
-            ))
-        for m in getattr(mondo_class, 'broadMatch', []):
-            curie_id = map_xref_url(m)
-            if not curie_id:
-                # Unknown mapping, skip it
-                continue
-
-            cross_references.add(curie_id)
-
-            vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
-            target_id = curie_id.split(':', 1)[1]
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=concept.concept_id,
-                conceptIdTo=target_id,
-                annotationType=AnnotationType.BROAD,
-            ))
-        for m in getattr(mondo_class, 'narrowMatch', []):
-            curie_id = map_xref_url(m)
-            if not curie_id:
-                # Unknown mapping, skip it
-                continue
-
-            cross_references.add(curie_id)
-
-            vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
-            target_id = curie_id.split(':', 1)[1]
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=concept.concept_id,
-                conceptIdTo=target_id,
-                annotationType=AnnotationType.NARROW,
-            ))
-        for m in getattr(mondo_class, 'relatedMatch', []):
-            curie_id = map_xref_url(m)
-            if not curie_id:
-                # Unknown mapping, skip it
-                continue
-
-            cross_references.add(curie_id)
-
-            vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
-            target_id = curie_id.split(':', 1)[1]
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=concept.concept_id,
-                conceptIdTo=target_id,
-                annotationType=AnnotationType.RELATED,
-            ))
-
-        for xref in getattr(mondo_class, 'hasDbXref', []):
-            if xref not in cross_references:
-                # Other type of matches, default to ANNOTATED_WITH
-                if ':' not in xref:
-                    continue
-                xref_prefix, target_id = xref.split(':', 1)
-                vocabulary_prefix = map_vocabulary_prefix(xref_prefix)
-                annotations.append(Annotation(
-                    prefixFrom=VOCABULARY_PREFIX,
-                    prefixTo=vocabulary_prefix,
-                    conceptIdFrom=concept.concept_id,
-                    conceptIdTo=target_id,
-                    annotationType=AnnotationType.ANNOTATED_WITH,
-                ))
+        _add_mondo_is_a_edges(mondo_graph, mondo_class, concept.concept_id)
+        annotations.extend(_build_mondo_xref_annotations(mondo_class, concept.concept_id))
 
     if not offline:
         if doc_db is None:

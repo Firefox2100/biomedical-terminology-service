@@ -69,12 +69,52 @@ def _construct_ordo_concept(ordo_class: ThingClass) -> Concept:
         definition=str(ordo_class.definition[0])
         if hasattr(ordo_class, 'definition') and ordo_class.definition
         else None,
-        synonyms=[synonym for synonym in ordo_class.alternative_term]
+        synonyms=list(ordo_class.alternative_term)
         if hasattr(ordo_class, 'alternative_term') and ordo_class.alternative_term
         else None,
     )
 
     return concept
+
+
+def _ordo_is_a_relationships(concept_id: str,
+                             ordo_class: ThingClass,
+                             ) -> tuple[list[tuple[str, str, ConceptRelationshipType]], bool]:
+    """
+    Build the is_a/replaced_by relationships from an ORDO class's is_a axioms.
+    :param concept_id: The concept ID of the class being processed.
+    :param ordo_class: The ORDO class to process.
+    :return: A tuple of (relationships, is_deprecated), where is_deprecated indicates the
+        class was moved to a replacing term and its concept status should reflect that.
+    """
+    relationships: list[tuple[str, str, ConceptRelationshipType]] = []
+    is_deprecated = False
+
+    if not hasattr(ordo_class, 'is_a'):
+        return relationships, is_deprecated
+
+    for parent in ordo_class.is_a:
+        if isinstance(parent, ThingClass):
+            # Regular parent class, excluding the root node
+            if parent.name != 'Thing' and parent.name.startswith('Orphanet_'):
+                relationships.append((
+                    concept_id,
+                    parent.name.split('_')[-1],
+                    ConceptRelationshipType.IS_A
+                ))
+
+        elif isinstance(parent, Restriction) and parent.property.name == 'Orphanet_C056':
+            # moved_to, points to replacing term
+            replacing_term = parent.value
+            is_deprecated = True
+            if isinstance(replacing_term, ThingClass) and replacing_term.name.startswith('Orphanet_'):
+                relationships.append((
+                    concept_id,
+                    replacing_term.name.split('_')[-1],
+                    ConceptRelationshipType.REPLACED_BY
+                ))
+
+    return relationships, is_deprecated
 
 
 def _process_ordo_class(ordo_class: ThingClass,
@@ -87,34 +127,10 @@ def _process_ordo_class(ordo_class: ThingClass,
     :return: A tuple of Concept and list of relationships.
     """
     concept = _construct_ordo_concept(ordo_class)
-    relationships: list[tuple[str, str, ConceptRelationshipType]] = []
 
-    if hasattr(ordo_class, 'is_a'):
-        for parent in ordo_class.is_a:
-            if isinstance(parent, ThingClass):
-                # Regular parent class
-                if parent.name == 'Thing':
-                    # Root node
-                    pass
-                elif parent.name.startswith('Orphanet_'):
-                    relationships.append((
-                        concept.concept_id,
-                        parent.name.split('_')[-1],
-                        ConceptRelationshipType.IS_A
-                    ))
-
-            elif isinstance(parent, Restriction):
-                # Constrains model
-                if parent.property.name == 'Orphanet_C056':
-                    # moved_to, points to replacing term
-                    replacing_term = parent.value
-                    concept.status = ConceptStatus.DEPRECATED
-                    if isinstance(replacing_term, ThingClass) and replacing_term.name.startswith('Orphanet_'):
-                        relationships.append((
-                            concept.concept_id,
-                            replacing_term.name.split('_')[-1],
-                            ConceptRelationshipType.REPLACED_BY
-                        ))
+    relationships, is_deprecated = _ordo_is_a_relationships(concept.concept_id, ordo_class)
+    if is_deprecated:
+        concept.status = ConceptStatus.DEPRECATED
 
     if part_of_prop[ordo_class]:
         # Has part_of property, link as is_a

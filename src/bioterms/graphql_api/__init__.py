@@ -2,6 +2,7 @@
 Module containing the GraphQL API implementation using Ariadne.
 """
 
+import importlib
 from typing import Any
 from ariadne import ObjectType, make_executable_schema
 from ariadne.asgi import GraphQL
@@ -70,6 +71,97 @@ async def get_context_value(request: Request,
     return context_value
 
 
+# Maps a vocabulary prefix to its (schema constant name, resolver module name, concept object
+# constant name(s), query object constant name) in bioterms.graphql_api.schemas / .resolver.
+_VOCABULARY_GRAPHQL_MODULES: dict[ConceptPrefix, tuple[str, str, list[str], str]] = {
+    ConceptPrefix.CTV3: ('CTV3_SCHEMA', 'ctv3', ['CTV3_CONCEPT'], 'CTV3_QUERY'),
+    ConceptPrefix.ENSEMBL: ('ENSEMBL_SCHEMA', 'ensembl', ['ENSEMBL_CONCEPT'], 'ENSEMBL_QUERY'),
+    ConceptPrefix.HGNC: ('HGNC_SCHEMA', 'hgnc', ['HGNC_CONCEPT'], 'HGNC_QUERY'),
+    ConceptPrefix.HGNC_SYMBOL: ('GENE_SCHEMA', 'gene', ['GENE_CONCEPT'], 'GENE_QUERY'),
+    ConceptPrefix.HPO: ('HPO_SCHEMA', 'hpo', ['HPO_CONCEPT'], 'HPO_QUERY'),
+    ConceptPrefix.MONDO: ('MONDO_SCHEMA', 'mondo', ['MONDO_CONCEPT'], 'MONDO_QUERY'),
+    ConceptPrefix.NCIT: ('NCIT_SCHEMA', 'ncit', ['NCIT_CONCEPT'], 'NCIT_QUERY'),
+    ConceptPrefix.OHDSI: ('OHDSI_SCHEMA', 'ohdsi', ['OHDSI_CONCEPT'], 'OHDSI_QUERY'),
+    ConceptPrefix.OMIM: ('OMIM_SCHEMA', 'omim', ['OMIM_CONCEPT'], 'OMIM_QUERY'),
+    ConceptPrefix.ORDO: ('ORDO_SCHEMA', 'ordo', ['ORDO_CONCEPT'], 'ORDO_QUERY'),
+    ConceptPrefix.REACTOME: (
+        'REACTOME_SCHEMA', 'reactome',
+        ['REACTOME_CONCEPT', 'REACTOME_PATHWAY', 'REACTOME_REACTION', 'REACTOME_GENE'],
+        'REACTOME_QUERY',
+    ),
+    ConceptPrefix.SNOMED: ('SNOMED_SCHEMA', 'snomed', ['SNOMED_CONCEPT'], 'SNOMED_QUERY'),
+}
+
+# Maps an annotation prefix pair to its (schema constant name, resolver module name). The
+# resolver module is imported only for its side effect of registering field resolvers.
+_ANNOTATION_GRAPHQL_SCHEMAS: dict[tuple[ConceptPrefix, ConceptPrefix], tuple[str, str]] = {
+    (ConceptPrefix.HPO, ConceptPrefix.ORDO): ('HPO_ORDO_SCHEMA', 'hpo_ordo'),
+    (ConceptPrefix.CTV3, ConceptPrefix.SNOMED): ('CTV3_SNOMED_SCHEMA', 'ctv3_snomed'),
+    (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO): ('GENE_HPO_SCHEMA', 'gene_hpo'),
+    (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT): ('GENE_NCIT_SCHEMA', 'gene_ncit'),
+    (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM): ('GENE_OMIM_SCHEMA', 'gene_omim'),
+    (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO): ('GENE_ORDO_SCHEMA', 'gene_ordo'),
+    (ConceptPrefix.HGNC, ConceptPrefix.MONDO): ('HGNC_MONDO_SCHEMA', 'hgnc_mondo'),
+    (ConceptPrefix.HPO, ConceptPrefix.MONDO): ('HPO_MONDO_SCHEMA', 'hpo_mondo'),
+    (ConceptPrefix.MONDO, ConceptPrefix.NCIT): ('MONDO_NCIT_SCHEMA', 'mondo_ncit'),
+    (ConceptPrefix.MONDO, ConceptPrefix.OMIM): ('MONDO_OMIM_SCHEMA', 'mondo_omim'),
+    (ConceptPrefix.MONDO, ConceptPrefix.ORDO): ('MONDO_ORDO_SCHEMA', 'mondo_ordo'),
+    (ConceptPrefix.MONDO, ConceptPrefix.SNOMED): ('MONDO_SNOMED_SCHEMA', 'mondo_snomed'),
+    (ConceptPrefix.NCIT, ConceptPrefix.OHDSI): ('NCIT_OHDSI_SCHEMA', 'ncit_ohdsi'),
+    (ConceptPrefix.OHDSI, ConceptPrefix.SNOMED): ('OHDSI_SNOMED_SCHEMA', 'ohdsi_snomed'),
+    (ConceptPrefix.OMIM, ConceptPrefix.ORDO): ('OMIM_ORDO_SCHEMA', 'omim_ordo'),
+    (ConceptPrefix.ORDO, ConceptPrefix.SNOMED): ('ORDO_SNOMED_SCHEMA', 'ordo_snomed'),
+}
+
+
+def _load_vocabulary_graphql_module(prefix: ConceptPrefix,
+                                    graphql_schemas: list,
+                                    graphql_objects: list,
+                                    graphql_queries: list,
+                                    ):
+    """
+    Load and register the schema, resolvers, and query type for one vocabulary's GraphQL
+    module, if it has one.
+    :param prefix: The vocabulary prefix to load the GraphQL module for.
+    :param graphql_schemas: The list of schemas to append the vocabulary's schema to.
+    :param graphql_objects: The list of objects to append the vocabulary's concept object(s) to.
+    :param graphql_queries: The list of query types to append the vocabulary's query type to.
+    """
+    module_config = _VOCABULARY_GRAPHQL_MODULES.get(prefix)
+    if module_config is None:
+        return
+
+    schema_name, resolver_module_name, object_names, query_name = module_config
+
+    schemas_module = importlib.import_module('bioterms.graphql_api.schemas')
+    resolver_module = importlib.import_module(f'bioterms.graphql_api.resolver.{resolver_module_name}')
+
+    graphql_schemas.append(getattr(schemas_module, schema_name))
+    graphql_objects.extend(getattr(resolver_module, name) for name in object_names)
+    graphql_queries.append(getattr(resolver_module, query_name))
+
+
+def _load_annotation_graphql_module(pair: tuple[ConceptPrefix, ConceptPrefix],
+                                    graphql_schemas: list,
+                                    ):
+    """
+    Load and register the schema for one annotation pair's GraphQL module, if it has one.
+    The resolver module is imported only for its side effect of registering field resolvers.
+    :param pair: The annotation prefix pair to load the GraphQL module for.
+    :param graphql_schemas: The list of schemas to append the annotation's schema to.
+    """
+    module_config = _ANNOTATION_GRAPHQL_SCHEMAS.get(pair)
+    if module_config is None:
+        return
+
+    schema_name, resolver_module_name = module_config
+
+    schemas_module = importlib.import_module('bioterms.graphql_api.schemas')
+    importlib.import_module(f'bioterms.graphql_api.resolver.{resolver_module_name}')
+
+    graphql_schemas.append(getattr(schemas_module, schema_name))
+
+
 async def create_graphql_app() -> ASGIApp:
     """
     Create a GraphQL application using Ariadne.
@@ -115,178 +207,14 @@ async def create_graphql_app() -> ASGIApp:
         for prefix_1, prefix_2 in supported_annotations
     }
 
-    if vocabulary_statuses[ConceptPrefix.CTV3].loaded:
-        from .schemas import CTV3_SCHEMA
-        from .resolver.ctv3 import CTV3_CONCEPT, CTV3_QUERY
-
-        graphql_schemas.append(CTV3_SCHEMA)
-        graphql_objects.append(CTV3_CONCEPT)
-        graphql_queries.append(CTV3_QUERY)
-    if vocabulary_statuses[ConceptPrefix.ENSEMBL].loaded:
-        from .schemas import ENSEMBL_SCHEMA
-        from .resolver.ensembl import ENSEMBL_CONCEPT, ENSEMBL_QUERY
-
-        graphql_schemas.append(ENSEMBL_SCHEMA)
-        graphql_objects.append(ENSEMBL_CONCEPT)
-        graphql_queries.append(ENSEMBL_QUERY)
-    if vocabulary_statuses[ConceptPrefix.HGNC].loaded:
-        from .schemas import HGNC_SCHEMA
-        from .resolver.hgnc import HGNC_CONCEPT, HGNC_QUERY
-
-        graphql_schemas.append(HGNC_SCHEMA)
-        graphql_objects.append(HGNC_CONCEPT)
-        graphql_queries.append(HGNC_QUERY)
-    if vocabulary_statuses[ConceptPrefix.HGNC_SYMBOL].loaded:
-        from .schemas import GENE_SCHEMA
-        from .resolver.gene import GENE_CONCEPT, GENE_QUERY
-
-        graphql_schemas.append(GENE_SCHEMA)
-        graphql_objects.append(GENE_CONCEPT)
-        graphql_queries.append(GENE_QUERY)
-    if vocabulary_statuses[ConceptPrefix.HPO].loaded:
-        from .schemas import HPO_SCHEMA
-        from .resolver.hpo import HPO_CONCEPT, HPO_QUERY
-
-        graphql_schemas.append(HPO_SCHEMA)
-        graphql_objects.append(HPO_CONCEPT)
-        graphql_queries.append(HPO_QUERY)
-    if vocabulary_statuses[ConceptPrefix.MONDO].loaded:
-        from .schemas import MONDO_SCHEMA
-        from .resolver.mondo import MONDO_CONCEPT, MONDO_QUERY
-
-        graphql_schemas.append(MONDO_SCHEMA)
-        graphql_objects.append(MONDO_CONCEPT)
-        graphql_queries.append(MONDO_QUERY)
-    if vocabulary_statuses[ConceptPrefix.NCIT].loaded:
-        from .schemas import NCIT_SCHEMA
-        from .resolver.ncit import NCIT_CONCEPT, NCIT_QUERY
-
-        graphql_schemas.append(NCIT_SCHEMA)
-        graphql_objects.append(NCIT_CONCEPT)
-        graphql_queries.append(NCIT_QUERY)
-    if vocabulary_statuses[ConceptPrefix.OHDSI].loaded:
-        from .schemas import OHDSI_SCHEMA
-        from .resolver.ohdsi import OHDSI_CONCEPT, OHDSI_QUERY
-
-        graphql_schemas.append(OHDSI_SCHEMA)
-        graphql_objects.append(OHDSI_CONCEPT)
-        graphql_queries.append(OHDSI_QUERY)
-    if vocabulary_statuses[ConceptPrefix.OMIM].loaded:
-        from .schemas import OMIM_SCHEMA
-        from .resolver.omim import OMIM_CONCEPT, OMIM_QUERY
-
-        graphql_schemas.append(OMIM_SCHEMA)
-        graphql_objects.append(OMIM_CONCEPT)
-        graphql_queries.append(OMIM_QUERY)
-    if vocabulary_statuses[ConceptPrefix.ORDO].loaded:
-        from .schemas import ORDO_SCHEMA
-        from .resolver.ordo import ORDO_CONCEPT, ORDO_QUERY
-
-        graphql_schemas.append(ORDO_SCHEMA)
-        graphql_objects.append(ORDO_CONCEPT)
-        graphql_queries.append(ORDO_QUERY)
-    if vocabulary_statuses[ConceptPrefix.REACTOME].loaded:
-        from .schemas import REACTOME_SCHEMA
-        from .resolver.reactome import REACTOME_PATHWAY, REACTOME_REACTION, REACTOME_GENE, \
-            REACTOME_QUERY, REACTOME_CONCEPT
-
-        graphql_schemas.append(REACTOME_SCHEMA)
-        graphql_objects.extend([
-            REACTOME_CONCEPT,
-            REACTOME_PATHWAY,
-            REACTOME_REACTION,
-            REACTOME_GENE,
-        ])
-        graphql_queries.append(REACTOME_QUERY)
-    if vocabulary_statuses[ConceptPrefix.SNOMED].loaded:
-        from .schemas import SNOMED_SCHEMA
-        from .resolver.snomed import SNOMED_CONCEPT, SNOMED_QUERY
-
-        graphql_schemas.append(SNOMED_SCHEMA)
-        graphql_objects.append(SNOMED_CONCEPT)
-        graphql_queries.append(SNOMED_QUERY)
+    for prefix in _VOCABULARY_GRAPHQL_MODULES:
+        if vocabulary_statuses[prefix].loaded:
+            _load_vocabulary_graphql_module(prefix, graphql_schemas, graphql_objects, graphql_queries)
 
     # Replace the graphql objects if the annotation data is also loaded
-    if annotation_statuses[(ConceptPrefix.HPO, ConceptPrefix.ORDO)].loaded:
-        from .schemas import HPO_ORDO_SCHEMA
-        import bioterms.graphql_api.resolver.hpo_ordo
-
-        graphql_schemas.append(HPO_ORDO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.CTV3, ConceptPrefix.SNOMED)].loaded:
-        from .schemas import CTV3_SNOMED_SCHEMA
-        import bioterms.graphql_api.resolver.ctv3_snomed
-
-        graphql_schemas.append(CTV3_SNOMED_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO)].loaded:
-        from .schemas import GENE_HPO_SCHEMA
-        import bioterms.graphql_api.resolver.gene_hpo
-
-        graphql_schemas.append(GENE_HPO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT)].loaded:
-        from .schemas import GENE_NCIT_SCHEMA
-        import bioterms.graphql_api.resolver.gene_ncit
-
-        graphql_schemas.append(GENE_NCIT_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM)].loaded:
-        from .schemas import GENE_OMIM_SCHEMA
-        import bioterms.graphql_api.resolver.gene_omim
-
-        graphql_schemas.append(GENE_OMIM_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO)].loaded:
-        from .schemas import GENE_ORDO_SCHEMA
-        import bioterms.graphql_api.resolver.gene_ordo
-
-        graphql_schemas.append(GENE_ORDO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.HGNC, ConceptPrefix.MONDO)].loaded:
-        from .schemas import HGNC_MONDO_SCHEMA
-        import bioterms.graphql_api.resolver.hgnc_mondo
-
-        graphql_schemas.append(HGNC_MONDO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.HPO, ConceptPrefix.MONDO)].loaded:
-        from .schemas import HPO_MONDO_SCHEMA
-        import bioterms.graphql_api.resolver.hpo_mondo
-
-        graphql_schemas.append(HPO_MONDO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.NCIT)].loaded:
-        from .schemas import MONDO_NCIT_SCHEMA
-        import bioterms.graphql_api.resolver.mondo_ncit
-
-        graphql_schemas.append(MONDO_NCIT_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.OMIM)].loaded:
-        from .schemas import MONDO_OMIM_SCHEMA
-        import bioterms.graphql_api.resolver.mondo_omim
-
-        graphql_schemas.append(MONDO_OMIM_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.ORDO)].loaded:
-        from .schemas import MONDO_ORDO_SCHEMA
-        import bioterms.graphql_api.resolver.mondo_ordo
-
-        graphql_schemas.append(MONDO_ORDO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.MONDO, ConceptPrefix.SNOMED)].loaded:
-        from .schemas import MONDO_SNOMED_SCHEMA
-        import bioterms.graphql_api.resolver.mondo_snomed
-
-        graphql_schemas.append(MONDO_SNOMED_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.NCIT, ConceptPrefix.OHDSI)].loaded:
-        from .schemas import NCIT_OHDSI_SCHEMA
-        import bioterms.graphql_api.resolver.ncit_ohdsi
-
-        graphql_schemas.append(NCIT_OHDSI_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.OHDSI, ConceptPrefix.SNOMED)].loaded:
-        from .schemas import OHDSI_SNOMED_SCHEMA
-        import bioterms.graphql_api.resolver.ohdsi_snomed
-
-        graphql_schemas.append(OHDSI_SNOMED_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.OMIM, ConceptPrefix.ORDO)].loaded:
-        from .schemas import OMIM_ORDO_SCHEMA
-        import bioterms.graphql_api.resolver.omim_ordo
-
-        graphql_schemas.append(OMIM_ORDO_SCHEMA)
-    if annotation_statuses[(ConceptPrefix.ORDO, ConceptPrefix.SNOMED)].loaded:
-        from .schemas import ORDO_SNOMED_SCHEMA
-        import bioterms.graphql_api.resolver.ordo_snomed
-
-        graphql_schemas.append(ORDO_SNOMED_SCHEMA)
+    for pair in _ANNOTATION_GRAPHQL_SCHEMAS:
+        if annotation_statuses[pair].loaded:
+            _load_annotation_graphql_module(pair, graphql_schemas)
 
     if graphql_schemas:
         from .schemas import CONCEPT_SCHEMA
