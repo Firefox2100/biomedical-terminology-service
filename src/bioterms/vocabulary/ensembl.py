@@ -114,7 +114,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     for _, row in iter_progress(gene_df.iterrows(), description='Processing GTF entries', total=len(gene_df)):
         # Parse the attribute into a dictionary
         attributes = dict(
-            re.findall(r'(\S+)\s"([^"]+)"', row['attribute'])
+            re.findall(r'([^\s"]+)\s"([^"]+)"', row['attribute'])
         )
 
         if row['feature'] == 'gene':

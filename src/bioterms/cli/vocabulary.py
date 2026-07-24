@@ -5,7 +5,7 @@ import typer
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, embed_vocabulary, \
-    get_vocabulary_status
+    restore_vocabulary_embeddings, get_vocabulary_status
 from .utils import CONSOLE, run_async
 
 

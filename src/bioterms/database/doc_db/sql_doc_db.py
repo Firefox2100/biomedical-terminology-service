@@ -596,10 +596,13 @@ class SqlDocumentDatabase(DocumentDatabase):
 
     async def save_terms(self,
                          terms: list[Concept],
+                         no_upsert: bool = False,
                          ):
         """
         Save a list of terms into the document database.
         :param terms: A list of Concept instances to save.
+        :param no_upsert: Force direct insert. The caller must ensure that there is no existing data that
+            may be a duplicate, or it will fail from the unique index
         """
         if not terms:
             return
@@ -639,7 +642,9 @@ class SqlDocumentDatabase(DocumentDatabase):
 
                 stmt = insert(concept_t).values(rows)
 
-                if self._is_postgres:
+                if no_upsert:
+                    pass
+                elif self._is_postgres:
                     stmt = stmt.on_conflict_do_update(
                         index_elements=[concept_t.c.concept_id],
                         set_={

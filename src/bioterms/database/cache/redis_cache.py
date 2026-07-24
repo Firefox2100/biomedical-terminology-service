@@ -117,7 +117,8 @@ class RedisCache(Cache):
             return raw_value, True
 
         value = payload.get('value')
-        stale_at = float(payload.get('stale_at'))
+        raw_stale_at = payload.get('stale_at')
+        stale_at = float(raw_stale_at) if raw_stale_at is not None else None
 
         if not isinstance(value, str):
             await self.db.delete(key)

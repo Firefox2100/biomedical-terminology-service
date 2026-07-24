@@ -109,3 +109,6 @@ version = {attr = "bioterms.__version__"}
 
 [tool.locust]
 locustfile = "tests/load_test/users/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
