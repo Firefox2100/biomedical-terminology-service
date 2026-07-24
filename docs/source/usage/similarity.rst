@@ -2,7 +2,7 @@
 Similarity
 ==========
 
-Similarity retrieves concepts that are semantically related to a given concept, based on the similarity scores computed with ``bioterms-cli similarity calculate`` (see :doc:`../build-database`). Unlike :doc:`mapping`, which follows explicit cross-vocabulary annotations, similarity reflects a computed score and is only available for concepts that have been through the similarity calculation step.
+Similarity retrieves concepts that are semantically related to a given concept, based on the similarity scores computed with ``bioterms-cli similarity calculate`` (see :doc:`../build-database`). Unlike :doc:`mapping`, which follows explicit cross-vocabulary annotations, similarity reflects a computed score and is only available for concepts that have been through the similarity calculation step. For the mathematical background of each method and how its score is derived, see :doc:`../similarity-methods/index`.
 
 Retrieving similar terms
 =========================

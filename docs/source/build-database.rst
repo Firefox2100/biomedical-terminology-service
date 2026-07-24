@@ -126,8 +126,8 @@ The target is the vocabulary for which the similarities are calculated, and the 
 
 The supported similarity methods are:
 
-* Co-annotation vectors: calculates similarity based on shared annotations between concepts.
-* Relevance method: calculates similarity based on relevance scores using Information Content (IC) metrics.
+* Co-annotation vectors: calculates similarity based on shared annotations between concepts. See :doc:`similarity-methods/co-annotation`.
+* Relevance method: calculates similarity based on relevance scores using Information Content (IC) metrics. See :doc:`similarity-methods/relevance`.
 * Weighed relevance method: similar to relevance method, assign weights to corpus annotation contribution.
 
 Because the similarity scores are calculated pair-wise, and for some methods it's not possible to estimate the score without actually calculating it, the workload will grow exponentially with the size of the vocabulary. For example, SNOMED CT has over 1 million concepts with the extensions loaded. Even for just 1 million concepts, there will be almost 500 billion pairs to calculate. For OHDSI which has over 9 million concepts, it's over 40 trillion. This is not practical even for HPC systems. We recommend NOT to calculate similarity for these large vocabularies, and rely on mappings to smaller vocabularies instead.
