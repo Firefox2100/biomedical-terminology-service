@@ -2,6 +2,7 @@
 Module containing the GraphQL API implementation using Ariadne.
 """
 
+import asyncio
 import importlib
 from typing import Any
 from ariadne import ObjectType, make_executable_schema
@@ -175,10 +176,15 @@ async def create_graphql_app() -> ASGIApp:
     graphql_objects = []
     graphql_queries = []
 
-    vocabulary_statuses: dict[ConceptPrefix, VocabularyStatus] = {
-        prefix: await get_vocabulary_status(prefix, cache, doc_db, graph_db)
+    # Independent per-prefix/per-pair cache/DB lookups -- fetch them concurrently instead of
+    # one round-trip at a time.
+    vocabulary_status_list = await asyncio.gather(*(
+        get_vocabulary_status(prefix, cache, doc_db, graph_db)
         for prefix in ConceptPrefix
-    }
+    ))
+    vocabulary_statuses: dict[ConceptPrefix, VocabularyStatus] = dict(
+        zip(ConceptPrefix, vocabulary_status_list)
+    )
     supported_annotations = [
         (ConceptPrefix.CTV3, ConceptPrefix.SNOMED),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO),
@@ -197,15 +203,18 @@ async def create_graphql_app() -> ASGIApp:
         (ConceptPrefix.OMIM, ConceptPrefix.ORDO),
         (ConceptPrefix.ORDO, ConceptPrefix.SNOMED),
     ]
-    annotation_statuses: dict[tuple[ConceptPrefix, ConceptPrefix], AnnotationStatus] = {
-        (prefix_1, prefix_2): await get_annotation_status(
+    annotation_status_list = await asyncio.gather(*(
+        get_annotation_status(
             prefix_1=prefix_1,
             prefix_2=prefix_2,
             cache=cache,
             graph_db=graph_db,
         )
         for prefix_1, prefix_2 in supported_annotations
-    }
+    ))
+    annotation_statuses: dict[tuple[ConceptPrefix, ConceptPrefix], AnnotationStatus] = dict(
+        zip(supported_annotations, annotation_status_list)
+    )
 
     for prefix in _VOCABULARY_GRAPHQL_MODULES:
         if vocabulary_statuses[prefix].loaded:

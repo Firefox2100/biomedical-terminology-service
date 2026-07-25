@@ -68,6 +68,7 @@ test = [
     "redis~=8.0.1",
     "sentry-sdk[fastapi]~=2.66.0",
     "sqlalchemy~=2.0.51",
+    "testcontainers~=4.10.0",
 ]
 pymongo = [
     "pymongo~=4.17.0",
