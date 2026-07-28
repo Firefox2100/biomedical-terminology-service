@@ -225,15 +225,17 @@ async def create_graphql_app() -> ASGIApp:
         if annotation_statuses[pair].loaded:
             _load_annotation_graphql_module(pair, graphql_schemas)
 
-    if graphql_schemas:
-        from .schemas import CONCEPT_SCHEMA
+    # CONCEPT_SCHEMA defines the root `Query` type (and the shared Concept/OntologyConcept
+    # interfaces every vocabulary schema extends), so it -- and the resolver backing its
+    # `loadedPrefixes` field -- must always be present, not just when a vocabulary happens
+    # to be loaded. Gating these behind `if graphql_schemas`/`if graphql_queries` left a
+    # fresh, empty install with a fully empty type_defs list, which ariadne/graphql-core
+    # can't parse ("Unexpected <EOF>") since a GraphQL schema requires at least a Query type.
+    from .schemas import CONCEPT_SCHEMA
+    from .resolver.utils import GRAPHQL_QUERY_TYPE
 
-        graphql_schemas.insert(0, CONCEPT_SCHEMA)
-
-    if graphql_queries:
-        from .resolver.utils import GRAPHQL_QUERY_TYPE
-
-        graphql_queries.insert(0, GRAPHQL_QUERY_TYPE)
+    graphql_schemas.insert(0, CONCEPT_SCHEMA)
+    graphql_queries.insert(0, GRAPHQL_QUERY_TYPE)
 
     graphql_object_list = []
     for obj in graphql_objects:

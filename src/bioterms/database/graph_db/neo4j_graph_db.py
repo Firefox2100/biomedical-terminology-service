@@ -609,35 +609,31 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         batch_size = CONFIG.neo4j_delete_batch_size
 
+        # Neither a single CALL {} IN TRANSACTIONS OF N ROWS nor apoc.periodic.commit
+        # kept this bounded on constrained instances -- both still hold the *entire*
+        # driving MATCH's state open (directly or via APOC's own iteration) across the
+        # whole delete. Looping client-side instead, re-issuing a small bounded query
+        # as its own fresh auto-commit transaction every round trip, means no state at
+        # all is carried between iterations -- peak transaction memory is bounded by
+        # one batch of nodes (and their relationships) no matter how large the
+        # vocabulary is. DETACH DELETE removes a node's relationships together with it,
+        # so this replaces the old two-pass (relationships, then nodes) query, and with
+        # it the need to special-case internal (same-prefix-on-both-ends) relationships
+        # being matched twice by an undirected pattern.
         async with self._client.session() as session:
-            # Separate batched delete to handle similarity connections
-            await _execute_query_with_retry(
-                query="""
-                 CALL apoc.periodic.commit(
-                     'MATCH (:Concept {prefix: $prefix})-[r]-()
-                     WITH r LIMIT $limit
-                     DELETE r
-                     RETURN count(r)',
-                     {limit: $batch_size, prefix: $prefix}
-                 );
-                 """,
-                session=session,
-                parameters={'prefix': prefix.value, 'batch_size': batch_size},
-            )
-
-            await _execute_query_with_retry(
-                query="""
-                 CALL apoc.periodic.commit(
-                     'MATCH (n:Concept {prefix: $prefix})
-                     WITH n LIMIT $limit
-                     DELETE n
-                     RETURN count(n)',
-                     {limit: $batch_size, prefix: $prefix}
-                 );
-                 """,
-                session=session,
-                parameters={'prefix': prefix.value, 'batch_size': batch_size},
-            )
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WITH n LIMIT $batch_size
+                    DETACH DELETE n
+                    RETURN count(n) AS deleted
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value, 'batch_size': batch_size},
+                )
+                if (await result.single())['deleted'] == 0:
+                    break
 
     async def count_terms(self,
                           prefix: ConceptPrefix,
@@ -822,21 +818,29 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param prefix_1: The first vocabulary prefix.
         :param prefix_2: The second vocabulary prefix.
         """
+        batch_size = CONFIG.neo4j_delete_batch_size
+
+        # See delete_vocabulary_graph: looping a small bounded query client-side, each
+        # iteration its own fresh auto-commit transaction, rather than a single
+        # CALL {} IN TRANSACTIONS, keeps peak transaction memory bounded to one batch.
         async with self._client.session() as session:
-            await _execute_query_with_retry(
-                query="""
-                MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
-                CALL (r) {
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (:Concept {prefix: $prefix_1})-[r]->(:Concept {prefix: $prefix_2})
+                    WITH r LIMIT $batch_size
                     DELETE r
-                } IN TRANSACTIONS OF $batch_size ROWS
-                """,
-                session=session,
-                parameters={
-                    'prefix_1': prefix_1.value,
-                    'prefix_2': prefix_2.value,
-                    'batch_size': CONFIG.neo4j_delete_batch_size,
-                },
-            )
+                    RETURN count(r) AS deleted
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix_1': prefix_1.value,
+                        'prefix_2': prefix_2.value,
+                        'batch_size': batch_size,
+                    },
+                )
+                if (await result.single())['deleted'] == 0:
+                    break
 
     async def count_annotations(self,
                                 prefix_1: ConceptPrefix,
