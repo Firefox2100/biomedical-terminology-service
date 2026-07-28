@@ -173,6 +173,13 @@ class Settings(BaseSettings):
         'password',
         description='Password for the Neo4j database',
     )
+    neo4j_delete_batch_size: int = Field(
+        2000,
+        description='Number of rows (relationships/nodes) committed per transaction when '
+                    'batch-deleting from Neo4j. Lower values reduce peak transaction memory '
+                    'usage at the cost of speed, which matters for large vocabularies on '
+                    'memory-constrained Neo4j instances.',
+    )
 
     cache_driver: CacheDriverType = Field(
         CacheDriverType.REDIS,

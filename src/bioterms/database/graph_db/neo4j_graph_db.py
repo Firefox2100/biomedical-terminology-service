@@ -5,6 +5,7 @@ import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
 from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress, edge_iter
 from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
@@ -606,28 +607,36 @@ class Neo4jGraphDatabase(GraphDatabase):
         Delete the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to delete.
         """
+        batch_size = CONFIG.neo4j_delete_batch_size
+
         async with self._client.session() as session:
             # Separate batched delete to handle similarity connections
             await _execute_query_with_retry(
                 query="""
-                MATCH (:Concept {prefix: $prefix})-[r]-()
-                CALL (r) {
-                    DELETE r
-                } IN TRANSACTIONS OF 50000 ROWS
-                """,
+                 CALL apoc.periodic.commit(
+                     'MATCH (:Concept {prefix: $prefix})-[r]-()
+                     WITH r LIMIT $limit
+                     DELETE r
+                     RETURN count(r)',
+                     {limit: $batch_size, prefix: $prefix}
+                 );
+                 """,
                 session=session,
-                parameters={'prefix': prefix.value},
+                parameters={'prefix': prefix.value, 'batch_size': batch_size},
             )
 
             await _execute_query_with_retry(
                 query="""
-                MATCH (n:Concept {prefix: $prefix})
-                CALL (n) {
-                    DELETE n
-                } IN TRANSACTIONS OF 50000 ROWS
-                """,
+                 CALL apoc.periodic.commit(
+                     'MATCH (n:Concept {prefix: $prefix})
+                     WITH n LIMIT $limit
+                     DELETE n
+                     RETURN count(n)',
+                     {limit: $batch_size, prefix: $prefix}
+                 );
+                 """,
                 session=session,
-                parameters={'prefix': prefix.value},
+                parameters={'prefix': prefix.value, 'batch_size': batch_size},
             )
 
     async def count_terms(self,
@@ -817,12 +826,15 @@ class Neo4jGraphDatabase(GraphDatabase):
             await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
-                DELETE r
+                CALL (r) {
+                    DELETE r
+                } IN TRANSACTIONS OF $batch_size ROWS
                 """,
                 session=session,
                 parameters={
                     'prefix_1': prefix_1.value,
                     'prefix_2': prefix_2.value,
+                    'batch_size': CONFIG.neo4j_delete_batch_size,
                 },
             )
 
