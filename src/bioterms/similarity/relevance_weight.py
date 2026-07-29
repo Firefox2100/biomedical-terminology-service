@@ -52,6 +52,12 @@ def _direct_annotation_sum(node: str,
             continue
 
         corpus_node = annotation_node.split(':', 1)[1]
+        if corpus_node not in corpus_graph:
+            # The annotation references a corpus concept that isn't part of the loaded
+            # corpus graph (e.g. a retired/merged concept) - it can never gain an IC
+            # value, so it cannot contribute to the annotation sum.
+            continue
+
         if 'ic' in corpus_graph.nodes[corpus_node]:
             direct_annotation_sum += math.exp(_tune_factor * corpus_graph.nodes[corpus_node]['ic'])
         elif is_first_iteration:

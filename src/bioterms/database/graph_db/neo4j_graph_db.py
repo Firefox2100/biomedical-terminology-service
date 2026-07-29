@@ -668,6 +668,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                WHERE type(r) <> 'similar_to'
                 RETURN count(r) AS relationship_count
                 """,
                 session=session,

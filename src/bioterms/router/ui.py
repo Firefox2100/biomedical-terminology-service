@@ -700,7 +700,7 @@ async def reload_graphql_endpoint(request: Request,
     graphql_service = request.app.state.graphql_service
 
     try:
-        await graphql_service.reload
+        await graphql_service.reload()
     except Exception as e:
         raise HTTPException(
             status_code=500,

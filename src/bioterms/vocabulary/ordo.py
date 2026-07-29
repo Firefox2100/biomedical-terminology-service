@@ -16,6 +16,7 @@ from .utils import write_concepts_to_file, write_graph_to_file
 VOCABULARY_NAME = 'Orphanet Rare Disease Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.ORDO
 ANNOTATIONS = [
+    ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.HPO,
     ConceptPrefix.MONDO,
     ConceptPrefix.OMIM,
