@@ -27,6 +27,9 @@ ANNOTATIONS = [
     ConceptPrefix.SNOMED,
 ]
 SIMILARITY_METHODS = [
+    SimilarityMethod.CO_ANNOTATION,
+    SimilarityMethod.RELEVANCE,
+    SimilarityMethod.WEIGHED_RELEVANCE,
 ]
 FILE_PATHS = ['mondo/mondo.owl']
 TIMESTAMP_FILE = 'mondo/.timestamp'

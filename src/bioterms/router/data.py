@@ -17,7 +17,7 @@ from bioterms.model.base import JsonModel
 from bioterms.model.concept import ConceptUnion
 from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license, \
-    get_vocabulary_status
+    get_vocabulary_status, ALL_VOCABULARIES
 from .utils import response_generator, api_key_required
 
 
@@ -66,6 +66,43 @@ class ConceptInfoResponse(JsonModel):
         ...,
         description='List of parent concepts.',
     )
+
+
+class VocabularyAvailability(JsonModel):
+    """Summary of whether a supported vocabulary is loaded."""
+
+    model_config = ConfigDict(
+        serialize_by_alias=True,
+        extra='forbid',
+    )
+
+    prefix: ConceptPrefix = Field(
+        ...,
+        description='The prefix of the vocabulary.',
+    )
+    loaded: bool = Field(
+        ...,
+        description='Indicates whether the vocabulary is loaded in the system.',
+    )
+
+
+@data_router.get('', response_model=list[VocabularyAvailability])
+async def get_vocabularies(
+    doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+):
+    """
+    Report which supported vocabularies are loaded.
+    \f
+    :param doc_db: The document database instance.
+    :return: A minimal availability summary for every supported vocabulary.
+    """
+    return [
+        VocabularyAvailability(
+            prefix=prefix,
+            loaded=await doc_db.count_terms(prefix) > 0,
+        )
+        for prefix in ALL_VOCABULARIES
+    ]
 
 
 @data_router.get('/{prefix}', response_model=VocabularyStatus)
