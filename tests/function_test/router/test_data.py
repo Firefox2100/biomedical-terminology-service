@@ -9,7 +9,8 @@ import pytest
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus
 from bioterms.model.concept import Concept
 from bioterms.model.related_term import RelatedTerm
-from bioterms.router.data import ingest_documents, get_concept
+from bioterms.router.data import ingest_documents, get_concept, get_vocabularies
+from bioterms.vocabulary import ALL_VOCABULARIES
 
 
 class FakeRequest:
@@ -54,6 +55,11 @@ class FakeGraphDatabase:
         return [RelatedTerm(conceptId=concept_ids[0], relatedConcepts=['0000003'])]
 
 
+class FakeVocabularyDocumentDatabase:
+    async def count_terms(self, prefix):
+        return 1 if prefix == ConceptPrefix.MONDO else 0
+
+
 def make_concept(concept_id, label):
     return Concept(
         conceptTypes=[],
@@ -66,6 +72,14 @@ def make_concept(concept_id, label):
 
 def as_json_line(concept):
     return concept.model_dump_json(by_alias=True).encode() + b'\n'
+
+
+@pytest.mark.asyncio
+async def test_get_vocabularies_reports_loaded_and_unloaded_vocabularies():
+    response = await get_vocabularies(doc_db=FakeVocabularyDocumentDatabase())
+
+    assert [item.prefix for item in response] == list(ALL_VOCABULARIES)
+    assert all(item.loaded is (item.prefix == ConceptPrefix.MONDO) for item in response)
 
 
 @pytest.mark.asyncio
