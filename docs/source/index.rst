@@ -16,3 +16,4 @@ The BioMedical Terminology Service (BTS) is a comprehensive platform designed to
     similarity-methods/index
     graphql
     fhir
+    mcp-api

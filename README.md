@@ -27,6 +27,7 @@ Full documentation, including installation, database build instructions, per-voc
 * [Usage guide](https://biomedical-terminology-service.readthedocs.io/en/latest/usage/index.html)
 * [GraphQL API](https://biomedical-terminology-service.readthedocs.io/en/latest/graphql.html)
 * [FHIR API](https://biomedical-terminology-service.readthedocs.io/en/latest/fhir.html)
+* [MCP API](https://biomedical-terminology-service.readthedocs.io/en/latest/mcp-api.html)
 * [Similarity methods](https://biomedical-terminology-service.readthedocs.io/en/latest/similarity-methods/index.html)
 
 ## Licence, Acknowledgements, and Disclaimer

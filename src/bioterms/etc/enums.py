@@ -118,3 +118,4 @@ class VectorDatabaseDriverType(Enum):
     The type of vector database driver.
     """
     QDRANT = 'qdrant'
+    MONGODB = 'mongodb'

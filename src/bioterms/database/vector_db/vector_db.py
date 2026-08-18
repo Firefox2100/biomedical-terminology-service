@@ -159,4 +159,22 @@ def get_active_vector_db() -> VectorDatabase:
 
         return _active_vector_db
 
+    if CONFIG.vector_database_driver == VectorDatabaseDriverType.MONGODB:
+        from pymongo import AsyncMongoClient
+        from .mongo_vector_db import MongoVectorDatabase
+
+        mongo_client = AsyncMongoClient(
+            host=CONFIG.mongodb_host,
+            port=CONFIG.mongodb_port,
+            username=CONFIG.mongodb_username,
+            password=CONFIG.mongodb_password,
+            authSource=CONFIG.mongodb_auth_source,
+        )
+
+        MongoVectorDatabase.set_client(mongo_client)
+
+        _active_vector_db = MongoVectorDatabase()
+
+        return _active_vector_db
+
     raise ValueError(f'Unsupported vector database driver: {CONFIG.vector_database_driver}')

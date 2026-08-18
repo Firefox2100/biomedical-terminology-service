@@ -26,3 +26,4 @@ Not every version is available for every feature below; each topic lists the ver
     similarity
     trace
     data-management
+    monitoring

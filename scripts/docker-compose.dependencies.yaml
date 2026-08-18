@@ -35,7 +35,7 @@ services:
       timeout: 10s
       retries: 5
     ports:
-      - "8903:27017"
+      - "8311:27017"
     volumes:
       - ${BTS_DATABASE_PATH:-../data/database}/mongodb/data/db:/data/db
 
@@ -72,10 +72,161 @@ services:
     volumes:
       - ${BTS_DATABASE_PATH:-../data/database}/qdrant/storage:/qdrant/storage
 
+  # MongoDB Community Search (mongot), an optional alternative to Qdrant for
+  # BTS_VECTOR_DATABASE_DRIVER=mongodb. Opt-in only: these four services are gated behind the
+  # "mongodb-search" compose profile and are not started by a plain `docker compose up`. Bring
+  # them up with `docker compose -f scripts/docker-compose.dependencies.yaml --profile
+  # mongodb-search up`, and point BTS_MONGODB_* at "localhost:8907" (see
+  # docs/source/build-database.rst) instead of the plain "mongodb" service above, since vectors
+  # are stored directly on the document store's concept documents. mongot is licensed under the
+  # SSPL - the same source-available license as MongoDB Community Server itself - unlike the
+  # mongodb/mongodb-atlas-local image, which is only licensed for local Atlas emulation/evaluation.
+  mongodb-search-keyfile-init:
+    image: mongodb/mongodb-community-server:8.3.8-ubi8
+    container_name: bts-mongodb-search-keyfile-init
+    profiles: ["mongodb-search"]
+    user: "0:0"
+    volumes:
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb-search/shared:/shared
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ ! -f /shared/keyfile ]; then
+          head -c 756 /dev/urandom | base64 -w 0 > /shared/keyfile
+        fi
+        chmod 400 /shared/keyfile
+        chown 1000:1000 /shared/keyfile
+        printf "mongotpassword" > /shared/passwordFile
+        chmod 400 /shared/passwordFile
+        chown 1000:1000 /shared/passwordFile
+
+  mongodb-search:
+    image: mongodb/mongodb-community-server:8.3.8-ubi8
+    restart: unless-stopped
+    container_name: bts-mongodb-search
+    hostname: mongodb-search
+    profiles: ["mongodb-search"]
+    depends_on:
+      mongodb-search-keyfile-init:
+        condition: service_completed_successfully
+    environment:
+      - MONGODB_INITDB_ROOT_USERNAME=root
+      - MONGODB_INITDB_ROOT_PASSWORD=rootpass
+    command: ["--config", "/etc/mongod.conf"]
+    healthcheck:
+      test: ["CMD", "mongosh", "-u", "root", "-p", "rootpass", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    ports:
+      - "8907:27017"
+    configs:
+      - source: mongodb_search_config
+        target: /etc/mongod.conf
+    volumes:
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb-search/data/db:/data/db
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb-search/shared:/shared
+
+  # One-shot job: initiates the replica set mongot requires and creates the searchCoordinator
+  # user mongot authenticates as. Exits once done.
+  mongodb-search-init-rs:
+    image: mongodb/mongodb-community-server:8.3.8-ubi8
+    container_name: bts-mongodb-search-init-rs
+    profiles: ["mongodb-search"]
+    depends_on:
+      mongodb-search:
+        condition: service_healthy
+    volumes:
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb-search/shared:/shared
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mongosh --host mongodb-search -u root -p rootpass --eval '
+          try { rs.status() } catch (e) {
+            rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-search:27017" }] });
+          }
+        '
+        mongosh --host mongodb-search -u root -p rootpass --eval '
+          while (!db.hello().isWritablePrimary) { sleep(500); }
+        '
+        mongosh --host mongodb-search -u root -p rootpass --eval '
+          const admin = db.getSiblingDB("admin");
+          if (!admin.getUser("mongot")) {
+            admin.createUser({ user: "mongot", pwd: "mongotpassword", roles: ["searchCoordinator"] });
+          }
+        '
+
+  mongot:
+    image: mongodb/mongodb-community-search:1.70.3
+    restart: unless-stopped
+    container_name: bts-mongot
+    hostname: mongot
+    profiles: ["mongodb-search"]
+    depends_on:
+      mongodb-search-init-rs:
+        condition: service_completed_successfully
+    ports:
+      - "8908:8080"   # Health check
+      - "8909:9946"   # Metrics
+      - "8910:27028"  # gRPC
+    configs:
+      - source: mongot_config
+        target: /mongot-community/config.default.yml
+    volumes:
+      - ${BTS_DATABASE_PATH:-../data/database}/mongot/data:/data/mongot
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb-search/shared:/shared
+
 configs:
   qdrant_config:
     content: |
       log_level: INFO
+  mongodb_search_config:
+    content: |
+      net:
+        port: 27017
+        bindIpAll: true
+      replication:
+        replSetName: rs0
+      setParameter:
+        mongotHost: mongot:27028
+        searchIndexManagementHostAndPort: mongot:27028
+        skipAuthenticationToSearchIndexManagementServer: false
+        useGrpcForSearch: true
+        searchTLSMode: disabled
+      security:
+        authorization: enabled
+        keyFile: /shared/keyfile
+  mongot_config:
+    content: |
+      syncSource:
+        replicaSet:
+          hostAndPort: "mongodb-search:27017"
+          scramAuth:
+            username: "mongot"
+            authSource: "admin"
+            passwordFile: "/shared/passwordFile"
+            tls:
+              enabled: false
+        replicationReader:
+          readPreference: primaryPreferred
+      storage:
+        dataPath: "/data/mongot"
+      server:
+        grpc:
+          address: "mongot:27028"
+          tls:
+            mode: "disabled"
+      metrics:
+        enabled: true
+        address: "mongot:9946"
+      healthCheck:
+        address: "mongot:8080"
+      logging:
+        verbosity: INFO
 
 volumes:
   neo4j_data:

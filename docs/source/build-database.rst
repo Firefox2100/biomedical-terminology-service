@@ -31,6 +31,21 @@ Qdrant
 
 Qdrant only provides a docker image officially. However, it's also possible to compile the source code directly, allowing it to be run on machines without docker support. If compiling from source, the main repository does not come with the web UI, and it must be downloaded separately and placed next to the compiled binary, if you want to use the web UI for management.
 
+MongoDB (alternative to Qdrant)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As an alternative to Qdrant, the vector database can be backed by MongoDB instead, using its ``$vectorSearch`` aggregation stage (powered by ``mongot``, MongoDB's Lucene-based search engine). Set ``BTS_VECTOR_DATABASE_DRIVER=mongodb`` to enable it. Unlike Qdrant, this driver does not keep a separate point store: it writes the embedding vector directly onto the "vector" field of each concept's document, in the same MongoDB database configured via ``BTS_MONGODB_*`` for the document store. Because of this, it requires a MongoDB deployment with Search support - a plain ``mongod`` without ``mongot`` cannot serve ``$vectorSearch`` queries. The vector search index name and query candidate pool size can be tuned with ``BTS_MONGODB_VECTOR_INDEX_NAME`` and ``BTS_MONGODB_VECTOR_NUM_CANDIDATES_MULTIPLIER``. This driver still works if the document database itself is backed by SQL rather than MongoDB; in that case it maintains its own lightweight ``conceptId``/``vector`` shadow documents in MongoDB instead of updating existing ones.
+
+Recommended: **MongoDB Community Server + MongoDB Community Search**, both licensed under the source-available `Server Side Public License (SSPL) <https://www.mongodb.com/legal/licensing/server-side-public-license>`_ - free to self-host, with no Atlas subscription or per-node licensing involved. ``mongot`` requires a replica set (even a single-member one) and authenticates to ``mongod`` as a dedicated user with the ``searchCoordinator`` role; see the `self-managed MongoDB Search docs <https://www.mongodb.com/docs/search/self-managed/current/>`_ for the full deployment guide. The bundled compose files wire this up for local development behind an opt-in ``mongodb-search`` `Compose profile <https://docs.docker.com/compose/how-tos/profiles/>`_, since it is not needed unless you choose the MongoDB vector driver:
+
+.. code-block:: bash
+
+    docker compose -f scripts/docker-compose.dependencies.yaml --profile mongodb-search up
+
+This starts ``mongodb-search`` (mongod, replica set ``rs0``) and ``mongot`` alongside the usual dependencies, exposing MongoDB on ``localhost:8907``. Point ``BTS_MONGODB_HOST``/``BTS_MONGODB_PORT`` at it (``localhost``/``8907``) and set ``BTS_MONGODB_USERNAME=root``, ``BTS_MONGODB_PASSWORD=rootpass``, ``BTS_MONGODB_AUTH_SOURCE=admin`` (or edit the compose file's placeholder credentials first) - using it as both the document and vector store is recommended, since that is what lets the vector live directly on the concept document. The equivalent profile also exists in the top-level ``docker-compose.yaml`` for full-stack deployments.
+
+Alternatively, MongoDB Atlas (fully managed) or a self-managed Enterprise Server deployment also support ``$vectorSearch`` and work as drop-in replacements - only the connection settings differ, not the driver code. The ``mongodb/mongodb-atlas-local`` docker image is another option for quick local evaluation, but it is licensed only for local Atlas emulation/testing rather than as a general self-hosted deployment, so it is not used by the bundled compose files.
+
 Redis
 ^^^^^
 

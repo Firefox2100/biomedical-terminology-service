@@ -144,6 +144,11 @@ class Settings(BaseSettings):
         'admin',
         description='Authentication source database for MongoDB',
     )
+    mongodb_direct_connection: bool = Field(
+        False,
+        description='Directly connect to the specified domain, ignoring the replica set discovery. '
+                    'This may be necessary if using a docker internal domain for the set.'
+    )
     sql_db_url: str = Field(
         'sqlite+aiosqlite:///./bts.sqlite3',
         description='Database URL for the SQL database',
@@ -261,6 +266,18 @@ class Settings(BaseSettings):
     qdrant_location: str = Field(
         'http://localhost:6333',
         description='Location of the Qdrant vector database',
+    )
+    mongodb_vector_index_name: str = Field(
+        'vector_index',
+        description='Name of the MongoDB Atlas/mongot vector search index created on the '
+                    '"vector" field of each vocabulary collection, when '
+                    'BTS_VECTOR_DATABASE_DRIVER=mongodb.',
+    )
+    mongodb_vector_num_candidates_multiplier: int = Field(
+        10,
+        description='Multiplier applied to the requested result limit to determine the '
+                    'numCandidates parameter of $vectorSearch queries, when '
+                    'BTS_VECTOR_DATABASE_DRIVER=mongodb.',
     )
 
     verbose_print: bool = Field(

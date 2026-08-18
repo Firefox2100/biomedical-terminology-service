@@ -265,6 +265,7 @@ async def get_active_doc_db() -> DocumentDatabase:
             username=CONFIG.mongodb_username,
             password=CONFIG.mongodb_password,
             authSource=CONFIG.mongodb_auth_source,
+            directConnection=CONFIG.mongodb_direct_connection,
         )
         await mongo_client.admin.command('ping')
 

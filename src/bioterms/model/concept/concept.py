@@ -57,6 +57,13 @@ class Concept(JsonModel):
         description='The identifier of the vector representation of the concept in the vector database.',
         alias='vectorId',
     )
+    vector: Optional[list[float]] = Field(
+        None,
+        description='The embedding vector of the concept, stored directly on the concept document. '
+                    'Only populated when using a vector database driver (e.g. MongoDB) that embeds '
+                    'vectors alongside the rest of the concept data instead of in a separate store.',
+        exclude=True,
+    )
 
     def n_grams(self,
                 min_length: int = 3,
