@@ -1,20 +1,101 @@
+import asyncio
 import re
+import time
 from uuid import UUID
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
-from sqlalchemy import Column, ForeignKey, Index, MetaData, String, DateTime, Table, Text, bindparam, case, \
-    delete, func, insert, update, literal, select, text
+from sqlalchemy import Column, ForeignKey, Index, MetaData, String, DateTime, Table, Text, and_, \
+    bindparam, case, delete, func, insert, update, literal, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection
+from sqlalchemy.sql.dml import Insert
 from sqlalchemy.types import JSON
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
+from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, \
+    AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase
+
+
+def _build_upsert_stmt(dialect_name: str,
+                       table: Table,
+                       rows: list[dict],
+                       conflict_columns: list[Column],
+                       update_columns: list[str],
+                       ) -> Insert | None:
+    """
+    Build a native insert-or-update (upsert) statement for dialects with one recognised here.
+    :param dialect_name: The SQLAlchemy engine dialect name (e.g. "postgresql", "mysql", "sqlite").
+    :param table: The target table.
+    :param rows: The rows to insert or update.
+    :param conflict_columns: The columns identifying an existing row (e.g. the primary key).
+    :param update_columns: The names of the columns to update when a row already exists.
+    :return: The upsert statement, or None if the dialect has no native upsert construct
+        recognised here, in which case the caller should fall back to `_manual_upsert_rows`.
+    """
+    if dialect_name == 'postgresql':
+        stmt = pg_insert(table).values(rows)
+        return stmt.on_conflict_do_update(
+            index_elements=conflict_columns,
+            set_={col: getattr(stmt.excluded, col) for col in update_columns},
+        )
+
+    if dialect_name in ('mysql', 'mariadb'):
+        stmt = mysql_insert(table).values(rows)
+        return stmt.on_duplicate_key_update(
+            **{col: getattr(stmt.inserted, col) for col in update_columns}
+        )
+
+    if dialect_name == 'sqlite':
+        stmt = sqlite_insert(table).values(rows)
+        return stmt.on_conflict_do_update(
+            index_elements=conflict_columns,
+            set_={col: getattr(stmt.excluded, col) for col in update_columns},
+        )
+
+    return None
+
+
+async def _manual_upsert_rows(conn: AsyncConnection,
+                              table: Table,
+                              rows: list[dict],
+                              conflict_columns: list[Column],
+                              update_columns: list[str],
+                              ):
+    """
+    Portable insert-or-update fallback for SQL dialects without a native upsert construct
+    recognised by `_build_upsert_stmt` (i.e. anything other than PostgreSQL, MySQL/MariaDB, or
+    SQLite). Each row is attempted as a plain insert inside a savepoint; a primary/unique key
+    violation rolls back just that savepoint and falls back to an UPDATE of the existing row
+    instead. This is slower than the native bulk upsert used for the three dialects above, but
+    works with any SQLAlchemy-supported async dialect and keeps the surrounding transaction
+    usable even after a conflict.
+    :param conn: The connection to execute on, inside an existing transaction.
+    :param table: The target table.
+    :param rows: The rows to insert or update.
+    :param conflict_columns: The columns identifying an existing row (e.g. the primary key).
+    :param update_columns: The names of the columns to update when a row already exists.
+    """
+    conflict_names = [c.name for c in conflict_columns]
+
+    for row in rows:
+        try:
+            async with conn.begin_nested():
+                await conn.execute(insert(table).values(**row))
+        except IntegrityError:
+            where_clause = and_(*(table.c[name] == row[name] for name in conflict_names))
+            await conn.execute(
+                table.update().where(where_clause).values(
+                    **{col: row[col] for col in update_columns}
+                )
+            )
 
 
 @dataclass(frozen=True)
@@ -105,7 +186,7 @@ def _build_user_tables(metadata: MetaData,
     return _UserTables(users=users, api_keys=api_keys)
 
 
-def _safe_table_suffix(prefix_value: str) -> str:
+def safe_table_suffix(prefix_value: str) -> str:
     """
     Generate a safe table suffix from the given prefix value.
 
@@ -117,6 +198,30 @@ def _safe_table_suffix(prefix_value: str) -> str:
     if not s:
         raise ValueError('Invalid prefix for table naming.')
     return s.lower()
+
+
+_FIELD_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+# JSON payload fields that also have a dedicated physical column on the concept table. Indexing
+# these should target the real column (portable, and usable by the query planner for the
+# save_terms/auto_complete_iter queries that already filter/sort on it) rather than a
+# dialect-specific JSON path expression.
+_DEDICATED_INDEX_COLUMNS = {
+    'conceptId': 'concept_id',
+    'label': 'label',
+}
+
+
+def _validate_field_name(field: str) -> str:
+    """
+    Validate that a field name is safe to interpolate into raw index-management SQL.
+    :param field: The JSON payload field name to validate.
+    :return: The field name, unchanged, if valid.
+    :raises IndexCreationError: If the field name is not a plain identifier.
+    """
+    if not _FIELD_NAME_PATTERN.fullmatch(field):
+        raise IndexCreationError(f'Invalid field name for index: {field!r}')
+    return field
 
 
 class SqlUserRepository(UserRepository):
@@ -258,30 +363,25 @@ class SqlUserRepository(UserRepository):
         :param user: An instance of User to be saved.
         """
         async with self._engine.begin() as conn:
-            stmt = insert(self._t.users).values(
-                username=user.username,
-                password=user.password
+            row = {'username': user.username, 'password': user.password}
+            upsert_stmt = _build_upsert_stmt(
+                self._engine.dialect.name,
+                self._t.users,
+                [row],
+                conflict_columns=[self._t.users.c.username],
+                update_columns=['password'],
             )
 
-            if self._engine.dialect.name == 'postgresql':
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[self._t.users.c.username],
-                    set_={'password': stmt.excluded.password},
-                )
-            elif self._engine.dialect.name in ('mysql', 'mariadb'):
-                stmt = stmt.on_duplicate_key_update(password=stmt.inserted.password)
+            if upsert_stmt is not None:
+                await conn.execute(upsert_stmt)
             else:
-                # SQLite fallback: try insert then update
-                try:
-                    await conn.execute(stmt)
-                except IntegrityError:
-                    await conn.execute(
-                        update(self._t.users)
-                        .where(self._t.users.c.username == user.username)
-                        .values(password=user.password)
-                    )
-            if self._engine.dialect.name in ('postgresql', 'mysql', 'mariadb'):
-                await conn.execute(stmt)
+                await _manual_upsert_rows(
+                    conn,
+                    self._t.users,
+                    [row],
+                    conflict_columns=[self._t.users.c.username],
+                    update_columns=['password'],
+                )
 
             if user.api_keys is not None:
                 await conn.execute(delete(self._t.api_keys).where(
@@ -458,7 +558,7 @@ class SqlDocumentDatabase(DocumentDatabase):
         :param prefix: The concept prefix (ConceptPrefix or str).
         :return: _PrefixTables containing concept and ngram tables.
         """
-        p = _safe_table_suffix(prefix.value if hasattr(prefix, 'value') else str(prefix))
+        p = safe_table_suffix(prefix.value if hasattr(prefix, 'value') else str(prefix))
         if p in self._tables_cache:
             return self._tables_cache[p]
 
@@ -518,24 +618,51 @@ class SqlDocumentDatabase(DocumentDatabase):
         )
         return tables
 
-    def _index_column_expr(self,
-                           table_name: str,
-                           field: str,
-                           ) -> str:
+    def _index_target_sql(self,
+                          field: str,
+                          ) -> str:
         """
-        Build the dialect-specific SQL expression for indexing a JSON payload field.
-        :param table_name: The name of the concept table.
-        :param field: The JSON field to index.
-        :return: The SQL column expression for the index.
-        """
-        if self._is_postgres:
-            return f"(({table_name}.payload->>'{field}'))"
-        if self._is_mysql:
-            return f"(JSON_UNQUOTE(JSON_EXTRACT({table_name}.payload, '$.{field}')))"
-        if self._is_sqlite:
-            return f"(json_extract({table_name}.payload, '$.{field}'))"
+        Build the SQL index target for a JSON payload field: either the dedicated physical
+        column backing it (see `_DEDICATED_INDEX_COLUMNS`), or a dialect-specific JSON path
+        expression as a fallback. The returned string is the content of the index's column
+        list, i.e. it still needs to be wrapped in `(...)` by the caller.
 
-        raise ValueError(f'Unsupported SQL dialect for create_index: {self._engine.dialect.name}')
+        The "payload" column reference below is deliberately NOT table-qualified: expression
+        indexes are implicitly scoped to the single table in the surrounding `CREATE INDEX ...
+        ON table (<expr>)`, and PostgreSQL/MySQL/SQLite all reject (or, for SQLite, error
+        outright on) a table-qualified column reference inside an index expression.
+        :param field: The JSON field to index.
+        :return: The SQL expression to place inside `CREATE INDEX ... (<expr>)`.
+        """
+        dedicated_column = _DEDICATED_INDEX_COLUMNS.get(field)
+        if dedicated_column is not None:
+            return dedicated_column
+
+        if self._is_postgres:
+            return f"(payload->>'{field}')"
+        if self._is_mysql:
+            # MySQL requires functional key parts to be doubly parenthesised, i.e.
+            # `CREATE INDEX ix ON t ((JSON_EXTRACT(...)))`; the caller adds the outer layer.
+            return f"(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.{field}')))"
+        if self._is_sqlite:
+            return f"(json_extract(payload, '$.{field}'))"
+
+        raise IndexCreationError(f'Unsupported SQL dialect for create_index: {self._engine.dialect.name}')
+
+    @staticmethod
+    def _row_to_payload(row) -> dict:
+        """
+        Reconstruct a concept payload dict from a result row selecting `payload` and
+        `vector_id`. The `vector_id` column, not the JSON payload's own "vectorId" key, is the
+        authoritative source: `update_vector_mapping` only updates the dedicated column (a
+        single-column update is portable across dialects without JSON-patching functions), so
+        reads must merge it back in here rather than trusting a possibly-stale copy in `payload`.
+        :param row: A result row with `payload` and `vector_id` columns.
+        :return: The payload dict, with "vectorId" reflecting the dedicated column.
+        """
+        payload = dict(row.payload)
+        payload['vectorId'] = row.vector_id
+        return payload
 
     @staticmethod
     async def _drop_index_if_exists(conn,
@@ -572,12 +699,18 @@ class SqlDocumentDatabase(DocumentDatabase):
         :param overwrite: Whether to overwrite an existing index.
         :raises IndexCreationError: If index creation fails.
         """
+        _validate_field_name(field)
+
+        if _DEDICATED_INDEX_COLUMNS.get(field) == 'concept_id':
+            # concept_id is the table's primary key; it is already indexed/unique.
+            return
+
         async with self._engine.begin() as conn:
             tables = await self._ensure_tables_exist(conn, prefix)
             concept = tables.concept
 
             idx_name = f'{concept.name}_{field}_index'
-            col_expr_sql = self._index_column_expr(concept.name, field)
+            target_sql = self._index_target_sql(field)
 
             if overwrite:
                 await self._drop_index_if_exists(conn, idx_name, concept.name)
@@ -585,14 +718,19 @@ class SqlDocumentDatabase(DocumentDatabase):
             unique_sql = 'UNIQUE ' if unique else ''
             # Some DBs do not support IF NOT EXISTS for indexes uniformly.
             try:
-                await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} {col_expr_sql}'))
+                await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} ({target_sql})'))
             except Exception as e:
                 if not overwrite:
                     raise IndexCreationError(f'Failed to create index {idx_name}: {e}') from e
 
                 # Last attempt: drop then create
                 await self._drop_index_if_exists(conn, idx_name, concept.name)
-                await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} {col_expr_sql}'))
+                try:
+                    await conn.execute(
+                        text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} ({target_sql})')
+                    )
+                except Exception as e2:
+                    raise IndexCreationError(f'Failed to create index {idx_name}: {e2}') from e2
 
     async def delete_index(self,
                            prefix: ConceptPrefix,
@@ -603,6 +741,12 @@ class SqlDocumentDatabase(DocumentDatabase):
         :param prefix: The vocabulary prefix to delete the index for.
         :param field: The field to delete the index on.
         """
+        _validate_field_name(field)
+
+        if _DEDICATED_INDEX_COLUMNS.get(field) == 'concept_id':
+            # No standalone index was created for concept_id; nothing to delete.
+            return
+
         async with self._engine.begin() as conn:
             tables = await self._ensure_tables_exist(conn, prefix)
             idx_name = f"{tables.concept.name}_{field}_index"
@@ -657,33 +801,28 @@ class SqlDocumentDatabase(DocumentDatabase):
                 if not rows:
                     continue
 
-                stmt = insert(concept_t).values(rows)
-
                 if no_upsert:
-                    pass
-                elif self._is_postgres:
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=[concept_t.c.concept_id],
-                        set_={
-                            'payload': stmt.excluded.payload,
-                            'search_text': stmt.excluded.search_text,
-                            'label': stmt.excluded.label,
-                            'vector_id': stmt.excluded.vector_id,
-                        },
-                    )
-                elif self._is_mysql:
-                    stmt = stmt.on_duplicate_key_update(
-                        payload=stmt.inserted.payload,
-                        search_text=stmt.inserted.search_text,
-                        label=stmt.inserted.label,
-                        vector_id=stmt.inserted.vector_id,
-                    )
+                    await conn.execute(insert(concept_t).values(rows))
                 else:
-                    # SQLite fallback: try insert then update
-                    # TODO: Optimize with upsert if needed
-                    pass
+                    update_columns = ['payload', 'search_text', 'label', 'vector_id']
+                    upsert_stmt = _build_upsert_stmt(
+                        self._engine.dialect.name,
+                        concept_t,
+                        rows,
+                        conflict_columns=[concept_t.c.concept_id],
+                        update_columns=update_columns,
+                    )
 
-                await conn.execute(stmt)
+                    if upsert_stmt is not None:
+                        await conn.execute(upsert_stmt)
+                    else:
+                        await _manual_upsert_rows(
+                            conn,
+                            concept_t,
+                            rows,
+                            conflict_columns=[concept_t.c.concept_id],
+                            update_columns=update_columns,
+                        )
 
                 concept_ids = [c.concept_id for c in batch]
                 await conn.execute(delete(ngram_t).where(ngram_t.c.concept_id.in_(concept_ids)))
@@ -718,14 +857,13 @@ class SqlDocumentDatabase(DocumentDatabase):
         """
         async with self._engine.connect() as conn:
             tables = await self._ensure_tables_exist(conn, prefix)
-            stmt = select(tables.concept.c.payload)
+            stmt = select(tables.concept.c.payload, tables.concept.c.vector_id)
             if limit and limit > 0:
                 stmt = stmt.limit(limit)
 
             stream = await conn.stream(stmt)
             async for row in stream:
-                payload = dict(row[0])
-                yield model_class.model_validate(payload)
+                yield model_class.model_validate(self._row_to_payload(row))
 
     async def get_terms_by_ids_iter(self,
                                     prefix: ConceptPrefix,
@@ -742,13 +880,49 @@ class SqlDocumentDatabase(DocumentDatabase):
         if not concept_ids:
             return
 
-        async with self._engine.connect() as conn:
-            tables = await self._ensure_tables_exist(conn, prefix)
-            stmt = select(tables.concept.c.payload).where(tables.concept.c.concept_id.in_(concept_ids))
-            stream = await conn.stream(stmt)
-            async for row in stream:
-                payload = dict(row[0])
-                yield model_class.model_validate(payload)
+        start = time.perf_counter()
+        first_item_at = None
+        result_label = 'ok'
+
+        try:
+            async with self._engine.connect() as conn:
+                tables = await self._ensure_tables_exist(conn, prefix)
+                stmt = select(
+                    tables.concept.c.payload, tables.concept.c.vector_id
+                ).where(tables.concept.c.concept_id.in_(concept_ids))
+                stream = await conn.stream(stmt)
+                async for row in stream:
+                    if first_item_at is None:
+                        first_item_at = time.perf_counter()
+                    yield model_class.model_validate(self._row_to_payload(row))
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            DOCDB_OP_ERRORS.labels(
+                backend='sql',
+                op='get_terms_by_ids',
+                prefix=prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            DOCDB_OP_DURATION.labels(
+                backend='sql',
+                op='get_terms_by_ids',
+                prefix=prefix.value,
+                result=result_label,
+            ).observe(end - start)
+
+            if first_item_at is not None:
+                DOCDB_OP_TTFI.labels(
+                    backend='sql',
+                    op='get_terms_by_ids',
+                    prefix=prefix.value,
+                    result=result_label,
+                ).observe(first_item_at - start)
 
     async def delete_all_for_label(self,
                                    prefix: ConceptPrefix,
@@ -780,11 +954,14 @@ class SqlDocumentDatabase(DocumentDatabase):
             tables = await self._ensure_tables_exist(conn, prefix)
             concept_t = tables.concept
 
-            # Executemany update is typically fine and portable
-            rows = [{'concept_id': cid, 'vector_id': vid} for cid, vid in mapping.items()]
+            # Executemany update is typically fine and portable. The WHERE-clause bindparam is
+            # deliberately named differently from the "concept_id" column: SQLAlchemy reserves
+            # that name for the implicit VALUES/SET bindparam on update()/insert() statements,
+            # and raises a CompileError if a bindparam() with the same name is used elsewhere.
+            rows = [{'b_concept_id': cid, 'vector_id': vid} for cid, vid in mapping.items()]
             stmt = (
                 concept_t.update()
-                .where(concept_t.c.concept_id == bindparam('concept_id'))
+                .where(concept_t.c.concept_id == bindparam('b_concept_id'))
                 .values(vector_id=bindparam('vector_id'))
             )
             await conn.execute(stmt, rows)
@@ -807,58 +984,96 @@ class SqlDocumentDatabase(DocumentDatabase):
         n_gram_query = [word for word in clean_query.split() if len(word) > 2]
         score_query = re.sub(r'\s', '', clean_query)
 
-        async with self._engine.connect() as conn:
-            tables = await self._ensure_tables_exist(conn, prefix)
-            concept_t = tables.concept
-            ngram_t = tables.ngram
+        if not n_gram_query:
+            return
 
-            if not n_gram_query:
-                return
+        start = time.perf_counter()
+        first_item_at = None
+        items = 0
+        result_label = 'ok'
 
-            subq = (
-                select(ngram_t.c.concept_id)
-                .where(ngram_t.c.ngram.in_(n_gram_query))
-                .group_by(ngram_t.c.concept_id)
-                .having(func.count(func.distinct(ngram_t.c.ngram)) == literal(len(n_gram_query)))
-                .subquery()
-            )
+        try:
+            async with self._engine.connect() as conn:
+                tables = await self._ensure_tables_exist(conn, prefix)
+                concept_t = tables.concept
+                ngram_t = tables.ngram
 
-            if self._is_postgres:
-                pos = func.strpos(concept_t.c.search_text, score_query)
-            elif self._is_mysql:
-                pos = func.locate(score_query, concept_t.c.search_text)
-            else:
-                pos = func.instr(concept_t.c.search_text, score_query)
+                subq = (
+                    select(ngram_t.c.concept_id)
+                    .where(ngram_t.c.ngram.in_(n_gram_query))
+                    .group_by(ngram_t.c.concept_id)
+                    .having(func.count(func.distinct(ngram_t.c.ngram)) == literal(len(n_gram_query)))
+                    .subquery()
+                )
 
-            score = case(
-                (pos == 0, literal(10 ** 9)),
-                else_=pos - 1  # convert to 0-based like Mongo, best-effort
-            )
+                if self._is_postgres:
+                    pos = func.strpos(concept_t.c.search_text, score_query)
+                elif self._is_mysql:
+                    pos = func.locate(score_query, concept_t.c.search_text)
+                else:
+                    pos = func.instr(concept_t.c.search_text, score_query)
 
-            # labelLength: Mongo used 999 if label missing
-            if self._is_postgres:
-                label_len = func.char_length(concept_t.c.label)
-            else:
-                label_len = func.length(concept_t.c.label)
+                score = case(
+                    (pos == 0, literal(10 ** 9)),
+                    else_=pos - 1  # convert to 0-based like Mongo, best-effort
+                )
 
-            label_length = case(
-                (concept_t.c.label.is_(None), literal(999)),
-                else_=label_len
-            )
+                # labelLength: Mongo used 999 if label missing
+                if self._is_postgres:
+                    label_len = func.char_length(concept_t.c.label)
+                else:
+                    label_len = func.length(concept_t.c.label)
 
-            stmt = (
-                select(concept_t.c.payload)
-                .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
-                .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
-            )
+                label_length = case(
+                    (concept_t.c.label.is_(None), literal(999)),
+                    else_=label_len
+                )
 
-            if limit is not None:
-                stmt = stmt.limit(limit)
+                stmt = (
+                    select(concept_t.c.payload, concept_t.c.vector_id)
+                    .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
+                    .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
+                )
 
-            stream = await conn.stream(stmt)
-            async for row in stream:
-                payload = dict(row[0])
-                yield model_class.model_validate(payload)
+                if limit is not None:
+                    stmt = stmt.limit(limit)
+
+                stream = await conn.stream(stmt)
+                async for row in stream:
+                    if first_item_at is None:
+                        first_item_at = time.perf_counter()
+                    items += 1
+                    yield model_class.model_validate(self._row_to_payload(row))
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as e:
+            result_label = 'error'
+            DOCDB_OP_ERRORS.labels(
+                backend='sql',
+                op='auto_complete',
+                prefix=prefix.value,
+                error_type=type(e).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            DOCDB_OP_DURATION.labels(
+                backend='sql',
+                op='auto_complete',
+                prefix=prefix.value,
+                result=result_label,
+            ).observe(end - start)
+
+            if first_item_at is not None:
+                DOCDB_OP_TTFI.labels(
+                    backend='sql',
+                    op='auto_complete',
+                    prefix=prefix.value,
+                    result=result_label,
+                ).observe(first_item_at - start)
+
+            AUTOCOMPLETE_ITEMS.labels(prefix=str(prefix.value)).observe(items)
 
     async def get_random_term_ids(self,
                                   prefix: ConceptPrefix,

@@ -34,6 +34,30 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  # PostgreSQL (with pgvector), an optional alternative to MongoDB/Qdrant/Neo4j for
+  # BTS_DOC_DATABASE_DRIVER=sql, BTS_VECTOR_DATABASE_DRIVER=postgresql, and/or
+  # BTS_GRAPH_DATABASE_DRIVER=postgresql. Opt-in only: gated behind the "postgres" compose
+  # profile, not started by a plain `docker compose up`. Bring it up with
+  # `docker compose --profile postgres up`; see docs/source/build-database.rst. The
+  # pgvector/pgvector image is a normal PostgreSQL image with the pgvector extension bundled, so
+  # it works equally well as a plain document/graph-only Postgres if you don't need vectors.
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    restart: unless-stopped
+    container_name: postgres
+    profiles: ["postgres"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bts"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    environment:
+      - POSTGRES_USER=bts
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=bts
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   # Redis as the caching layer
   redis:
     image: redis:8.8
@@ -256,7 +280,7 @@ services:
   bioterms-worker:
     image: firefox2100/biomedical-terminology-service:latest
     restart: unless-stopped
-    container_name: bioterms
+    container_name: bioterms-worker
     command: >
       worker --loglevel=INFO
     # This section enables GPU support; remove if not needed
@@ -394,3 +418,4 @@ volumes:
   mongodb_search_data:
   mongodb_search_shared:
   mongot_data:
+  postgres_data:

@@ -20,10 +20,15 @@ The following software must be installed on your system before proceeding with t
 * A **document database** for storing and retrieving biomedical terminology text data.
   MongoDB is recommended and used throughout this guide. PostgreSQL, MySQL/MariaDB, or SQLite are also
   supported as alternatives via SQLAlchemy.
-* A **graph database** for storing relationships between terminology concepts. Only Neo4j is supported.
+* A **graph database** for storing relationships between terminology concepts. Neo4j is recommended
+  and used throughout this guide. PostgreSQL is also supported as an alternative (plain relational
+  tables plus recursive CTEs, not a graph extension), and can share the same PostgreSQL instance as
+  the document/vector databases above.
 * A **cache** for hot data and inter-process communication. Only Redis is supported.
 * A **vector database** for storing and searching vector embeddings. Qdrant is recommended and used
-  throughout this guide. MongoDB (with Atlas Search / mongot support) is also supported as an alternative.
+  throughout this guide. MongoDB (with Atlas Search / mongot support) and PostgreSQL (with the
+  pgvector extension) are also supported as alternatives - the latter can share the same
+  PostgreSQL instance as the document database, avoiding a separate vector store entirely.
 
 Resource requirements:
 
@@ -80,11 +85,20 @@ The repository provides two compose files:
 
        docker compose -f docker-compose.yaml -f scripts/docker-compose.dependencies.yaml up
 
-Both compose files also define an opt-in ``mongodb-search`` `profile
-<https://docs.docker.com/compose/how-tos/profiles/>`_, providing MongoDB Community Server plus
-MongoDB Community Search (``mongot``) as a self-hosted, SSPL-licensed alternative to Qdrant for
-``BTS_VECTOR_DATABASE_DRIVER=mongodb``. It is not started by a plain ``docker compose up`` -
-pass ``--profile mongodb-search`` to include it. See :doc:`build-database` for details.
+Both compose files also define two further opt-in `Compose profiles
+<https://docs.docker.com/compose/how-tos/profiles/>`_, neither started by a plain
+``docker compose up``:
+
+* ``mongodb-search`` - MongoDB Community Server plus MongoDB Community Search (``mongot``), a
+  self-hosted, SSPL-licensed alternative to Qdrant for ``BTS_VECTOR_DATABASE_DRIVER=mongodb``.
+* ``postgres`` - a PostgreSQL+pgvector container, usable as the document database
+  (``BTS_DOC_DATABASE_DRIVER=sql``), the vector database (``BTS_VECTOR_DATABASE_DRIVER=postgresql``),
+  the graph database (``BTS_GRAPH_DATABASE_DRIVER=postgresql``), or all three at once - the document
+  and vector stores share the same tables, and the graph store's own ``graph_*``-named tables live
+  alongside them, so one PostgreSQL instance can replace MongoDB/SQL, Qdrant/MongoDB, and Neo4j
+  simultaneously.
+
+Pass ``--profile <name>`` to include one. See :doc:`build-database` for details.
 
 ### Example Compose
 
@@ -334,7 +348,7 @@ Graph Database
    * - ``BTS_GRAPH_DATABASE_DRIVER``
      - ``neo4j``
      - no
-     - Currently only ``neo4j`` is supported
+     - ``neo4j`` or ``postgresql``
    * - ``BTS_NEO4J_URI``
      - ``neo4j://localhost:7687``
      - no
@@ -355,6 +369,14 @@ Graph Database
      - ``2000``
      - no
      - Number of rows (relationships/nodes) committed per transaction when batch-deleting from Neo4j. Lower values reduce peak transaction memory usage at the cost of speed; important for large vocabularies on memory-constrained Neo4j instances.
+   * - ``BTS_POSTGRES_GRAPH_DB_URL``
+     - ``postgresql+asyncpg://localhost:5432/bts``
+     - no
+     - SQLAlchemy async URL for the PostgreSQL graph database. Only used when ``BTS_GRAPH_DATABASE_DRIVER=postgresql``. Graph tables live under their own ``graph_*`` names, so this can safely equal ``BTS_SQL_DB_URL``/``BTS_POSTGRES_VECTOR_DB_URL`` to share one PostgreSQL instance.
+   * - ``BTS_POSTGRES_GRAPH_CLOSURE_MAX_DEPTH``
+     - ``500``
+     - no
+     - Safety bound on recursion depth when (re)building a vocabulary's ancestor/descendant closure table. Guards against runaway recursion on a malformed/cyclic hierarchy; real ontologies are far shallower than this. Only used when ``BTS_GRAPH_DATABASE_DRIVER=postgresql``.
 
 Cache
 -----
@@ -406,7 +428,7 @@ Vector Database
    * - ``BTS_VECTOR_DATABASE_DRIVER``
      - ``qdrant``
      - no
-     - ``qdrant`` or ``mongodb``
+     - ``qdrant``, ``mongodb``, or ``postgresql``
    * - ``BTS_QDRANT_LOCATION``
      - ``http://localhost:6333``
      - no
@@ -421,6 +443,13 @@ Vector Database
      - no
      - Multiplier applied to the requested result limit to compute ``$vectorSearch``'s ``numCandidates``.
        Only used when ``BTS_VECTOR_DATABASE_DRIVER=mongodb``.
+   * - ``BTS_POSTGRES_VECTOR_DB_URL``
+     - ``postgresql+asyncpg://localhost:5432/bts``
+     - no
+     - SQLAlchemy async URL for the PostgreSQL/pgvector vector database. Only used when
+       ``BTS_VECTOR_DATABASE_DRIVER=postgresql``. When equal to ``BTS_SQL_DB_URL`` (and
+       ``BTS_DOC_DATABASE_DRIVER=sql``), vectors share the SQL document database's own tables
+       instead of a separate vector-only set.
 
 External API Keys (Optional)
 ----------------------------

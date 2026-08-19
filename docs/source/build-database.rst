@@ -17,7 +17,9 @@ The recommended database for storing document data is MongoDB. Follow the offici
 SQL (alternative to MongoDB)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-As an alternative to MongoDB, the document database can be backed by a SQL database instead, via SQLAlchemy's async engine. PostgreSQL, MySQL/MariaDB, and SQLite are supported. This requires the ``sql`` extra (``pip install .[sql]``) and, depending on the chosen dialect, an async driver package that this project does not bundle, for example ``asyncpg`` for PostgreSQL, ``aiomysql`` or ``asyncmy`` for MySQL/MariaDB, or ``aiosqlite`` for SQLite. Set ``BTS_DOC_DATABASE_DRIVER=sql`` and ``BTS_SQL_DB_URL`` to a SQLAlchemy async URL to enable it, e.g. ``postgresql+asyncpg://user:password@host:5432/bts``. SQLite is convenient for local development and small deployments but is not recommended for the concurrent write load of a full database build.
+As an alternative to MongoDB, the document database can be backed by a SQL database instead, via SQLAlchemy's async engine. **PostgreSQL is the primary/recommended SQL backend** - it gets a native, tested ``ON CONFLICT DO UPDATE`` upsert path and its own dedicated bundle. MySQL/MariaDB and SQLite are also supported (MySQL via its own native ``ON DUPLICATE KEY UPDATE`` upsert; SQLite via its own native ``ON CONFLICT DO UPDATE``, same as PostgreSQL), and any other SQLAlchemy-async-compatible dialect works too through a portable, slower per-row insert-then-update fallback. Concepts are stored one JSON payload column per row (``JSONB`` on PostgreSQL, ``JSON`` elsewhere), alongside plain indexed columns for ``concept_id``, ``label``, ``search_text`` and ``vector_id`` that back auto-complete scoring and ``update_vector_mapping`` without needing dialect-specific JSON-patching.
+
+Set ``BTS_DOC_DATABASE_DRIVER=sql`` and ``BTS_SQL_DB_URL`` to a SQLAlchemy async URL to enable it, e.g. ``postgresql+asyncpg://user:password@host:5432/bts``. For PostgreSQL, install the ``postgres`` extra (``pip install .[postgres]``), which bundles the ``asyncpg`` driver - no separate driver package to track down. For MySQL/MariaDB or SQLite, install the plain ``sql`` extra (``pip install .[sql]``) plus an async driver package this project does not bundle, e.g. ``aiomysql``/``asyncmy`` for MySQL/MariaDB or ``aiosqlite`` for SQLite. SQLite is convenient for local development and small deployments but is not recommended for the concurrent write load of a full database build.
 
 Neo4j
 ^^^^^
@@ -25,6 +27,18 @@ Neo4j
 The recommended graph database for storing graph data is Neo4j. Follow the official `Neo4j installation guide <https://neo4j.com/docs/operations-manual/current/installation/>`_ to set up Neo4j on your machine. Ensure that the Neo4j server is running before proceeding with the database construction.
 
 This service utilises the ``APOC`` and ``graph-data-science`` plugins for advanced graph operations, both in building and querying the graph database. Make sure to install these plugins in your Neo4j instance. If using docker, this can be configured via environment variables; otherwise you would need to download the matching release of APOC and GDS plugins from their repositories and place them in the ``plugins`` folder of your Neo4j installation.
+
+PostgreSQL (alternative to Neo4j)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As an alternative to Neo4j, the graph database can be backed by PostgreSQL instead. Set ``BTS_GRAPH_DATABASE_DRIVER=postgresql`` and ``BTS_POSTGRES_GRAPH_DB_URL`` to enable it; requires the ``postgres`` extra (``pip install .[postgres]``). This is a plain relational implementation, not PostgreSQL's own native property-graph query feature (SQL/PGQ, the ``GRAPH_TABLE``/``CREATE PROPERTY GRAPH`` syntax from SQL:2023): that only shipped in PostgreSQL 19, which was still in beta when this driver was written, and its first version only supports fixed-depth pattern matching - it cannot express the unbounded ancestor/descendant traversal or shortest-path queries this service needs. No extension (e.g. Apache AGE) is used either; everything is ordinary tables, indexes, and recursive CTEs, which works on any current PostgreSQL.
+
+Schema, briefly (see the driver's module docstring, ``src/bioterms/database/graph_db/postgres_graph_db.py``, for the exact DDL):
+
+* One set of ``graph_node_<prefix>`` / ``graph_edge_<prefix>`` / ``graph_closure_<prefix>`` tables per vocabulary, keeping each vocabulary's own indexes small even at SNOMED/OHDSI scale (~1M and ~10M concepts respectively). ``graph_closure_<prefix>`` is a precomputed transitive closure over each vocabulary's ``is_a``/``part_of`` edges - the two hottest graph operations, ancestor and descendant lookup, become an indexed read against this table instead of a traversal, at the cost of needing a (re)build step. ``create_index()`` (called automatically as part of ``bioterms-cli vocabulary load``) rebuilds the closure table for every vocabulary prefix that currently has nodes; re-run a vocabulary load (or call it directly) again after any change to that vocabulary's hierarchy edges. OHDSI's ~150 source sub-vocabularies are not further segmented here, since the OHDSI vocabulary loader does not currently capture which sub-vocabulary each concept came from - a reasonable follow-up if OHDSI's own tables become a bottleneck.
+* One ``graph_annotation`` table for all cross-vocabulary annotation edges and one ``graph_similarity`` table for all similarity scores, each partitioned by source prefix (`PostgreSQL declarative partitioning <https://www.postgresql.org/docs/current/ddl-partitioning.html>`_) rather than split into one table per prefix pair - both need multi-hop, prefix-crossing traversal (``map_terms``) or cross-prefix lookups (``get_similar_terms`` with ``same_prefix=False``, ``translate_terms``) that are only really expressible as a single recursive CTE/query over one table; partitioning still gives most of the per-prefix segmentation benefit.
+
+Like the MongoDB and PostgreSQL vector store options, ``BTS_POSTGRES_GRAPH_DB_URL`` is independent of ``BTS_SQL_DB_URL``/``BTS_POSTGRES_VECTOR_DB_URL`` but can safely be set to the exact same value - graph tables live under their own ``graph_*`` names, so the document store's ``concept_*`` tables and the vector store's columns/tables never collide with them. Setting all three to the same PostgreSQL instance is how to run the document, vector, and graph stores - everything except Redis - on one PostgreSQL server.
 
 Qdrant
 ^^^^^^
@@ -45,6 +59,24 @@ Recommended: **MongoDB Community Server + MongoDB Community Search**, both licen
 This starts ``mongodb-search`` (mongod, replica set ``rs0``) and ``mongot`` alongside the usual dependencies, exposing MongoDB on ``localhost:8907``. Point ``BTS_MONGODB_HOST``/``BTS_MONGODB_PORT`` at it (``localhost``/``8907``) and set ``BTS_MONGODB_USERNAME=root``, ``BTS_MONGODB_PASSWORD=rootpass``, ``BTS_MONGODB_AUTH_SOURCE=admin`` (or edit the compose file's placeholder credentials first) - using it as both the document and vector store is recommended, since that is what lets the vector live directly on the concept document. The equivalent profile also exists in the top-level ``docker-compose.yaml`` for full-stack deployments.
 
 Alternatively, MongoDB Atlas (fully managed) or a self-managed Enterprise Server deployment also support ``$vectorSearch`` and work as drop-in replacements - only the connection settings differ, not the driver code. The ``mongodb/mongodb-atlas-local`` docker image is another option for quick local evaluation, but it is licensed only for local Atlas emulation/testing rather than as a general self-hosted deployment, so it is not used by the bundled compose files.
+
+PostgreSQL/pgvector (alternative to Qdrant)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As a second alternative to Qdrant, the vector database can be backed by PostgreSQL instead, via the `pgvector <https://github.com/pgvector/pgvector>`_ extension. Set ``BTS_VECTOR_DATABASE_DRIVER=postgresql`` to enable it; requires the ``postgres`` extra (``pip install .[postgres]``), which bundles both ``asyncpg`` and the ``pgvector`` Python package. This is the natural choice if you are **already using PostgreSQL for the document database** (``BTS_DOC_DATABASE_DRIVER=sql`` with a PostgreSQL ``BTS_SQL_DB_URL``, see the SQL section above) and would rather not run a second database system just for vectors.
+
+Connection is configured separately via ``BTS_POSTGRES_VECTOR_DB_URL`` (defaults to ``postgresql+asyncpg://localhost:5432/bts``), so the vector store does not have to be the same PostgreSQL instance as the document store. Whether they end up sharing storage is decided purely by whether the two URLs are equal:
+
+* If ``BTS_SQL_DB_URL`` and ``BTS_POSTGRES_VECTOR_DB_URL`` are the **same** value (and ``BTS_DOC_DATABASE_DRIVER=sql``), vectors are stored as an extra ``vector`` column added directly onto the same ``concept_<prefix>`` tables the SQL document database driver already maintains, matched on the same ``concept_id`` primary key. One PostgreSQL instance, one set of tables - no separate vector-only store, and no second database to provision or back up.
+* Otherwise (a different document database driver, or a deliberately separate PostgreSQL instance/URL for vectors), each vocabulary prefix gets its own dedicated ``concept_<prefix>_vector`` table (``concept_id``, ``vector``) in whatever database ``BTS_POSTGRES_VECTOR_DB_URL`` points at - analogous to the shadow documents the MongoDB vector driver maintains when the document database isn't MongoDB.
+
+In both cases, the extension (``CREATE EXTENSION IF NOT EXISTS vector``) and an HNSW cosine-distance index are created automatically the first time embeddings are written or searched; this requires pgvector **0.5.0 or later** on the server (HNSW support). The bundled compose files provide a ready-to-use PostgreSQL+pgvector image behind an opt-in ``postgres`` `Compose profile <https://docs.docker.com/compose/how-tos/profiles/>`_:
+
+.. code-block:: bash
+
+    docker compose -f scripts/docker-compose.dependencies.yaml --profile postgres up
+
+This exposes PostgreSQL on ``localhost:8911`` with user/password/database all ``bts``/``password``/``bts`` (edit the compose file's placeholder credentials before using it for anything beyond local development). Point both ``BTS_SQL_DB_URL`` and ``BTS_POSTGRES_VECTOR_DB_URL`` at ``postgresql+asyncpg://bts:password@localhost:8911/bts`` to use it as a combined document+vector store, or only one of the two settings to use it for just that role. The image (``pgvector/pgvector``) is a normal PostgreSQL image with the extension pre-installed, so it works equally well as a plain document-database-only PostgreSQL if you only need ``BTS_DOC_DATABASE_DRIVER=sql``. The equivalent profile also exists in the top-level ``docker-compose.yaml`` for full-stack deployments.
 
 Redis
 ^^^^^

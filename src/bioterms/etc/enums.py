@@ -92,6 +92,7 @@ class GraphDatabaseDriverType(Enum):
     The type of graph database driver.
     """
     NEO4J = 'neo4j'
+    POSTGRESQL = 'postgresql'
 
 
 class ServiceEnvironment(Enum):
@@ -119,3 +120,4 @@ class VectorDatabaseDriverType(Enum):
     """
     QDRANT = 'qdrant'
     MONGODB = 'mongodb'
+    POSTGRESQL = 'postgresql'

@@ -185,6 +185,21 @@ class Settings(BaseSettings):
                     'usage at the cost of speed, which matters for large vocabularies on '
                     'memory-constrained Neo4j instances.',
     )
+    postgres_graph_db_url: str = Field(
+        'postgresql+asyncpg://localhost:5432/bts',
+        description='SQLAlchemy async URL for the PostgreSQL graph database, used when '
+                    'BTS_GRAPH_DATABASE_DRIVER=postgresql. Graph tables live under their own '
+                    '"graph_*" names, so this can safely be the same database as BTS_SQL_DB_URL '
+                    'and/or BTS_POSTGRES_VECTOR_DB_URL to run the document, vector, and graph '
+                    'stores on one PostgreSQL instance.',
+    )
+    postgres_graph_closure_max_depth: int = Field(
+        500,
+        description='Safety bound on recursion depth when materialising each vocabulary\'s '
+                    'ancestor/descendant closure table (see build-database.rst). Guards against '
+                    'runaway recursion on a malformed/cyclic hierarchy; real ontologies are far '
+                    'shallower than this.',
+    )
 
     cache_driver: CacheDriverType = Field(
         CacheDriverType.REDIS,
@@ -278,6 +293,15 @@ class Settings(BaseSettings):
         description='Multiplier applied to the requested result limit to determine the '
                     'numCandidates parameter of $vectorSearch queries, when '
                     'BTS_VECTOR_DATABASE_DRIVER=mongodb.',
+    )
+    postgres_vector_db_url: str = Field(
+        'postgresql+asyncpg://localhost:5432/bts',
+        description='SQLAlchemy async URL for the PostgreSQL/pgvector vector database, used '
+                    'when BTS_VECTOR_DATABASE_DRIVER=postgresql. When this is equal to '
+                    'BTS_SQL_DB_URL (i.e. the document database is also PostgreSQL, via '
+                    'BTS_DOC_DATABASE_DRIVER=sql), vectors are stored as an extra column on '
+                    'the same concept tables the SQL document database driver already uses, '
+                    'instead of a separate set of vector-only tables.',
     )
 
     verbose_print: bool = Field(
