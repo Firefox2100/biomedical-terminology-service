@@ -10,7 +10,7 @@ from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelations
 from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress, edge_iter
 from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
     GRAPHDB_OP_RETRYS, EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept_path import NodeInPath, ConceptPath
 from bioterms.model.related_term import RelatedTerm
@@ -444,13 +444,17 @@ class Neo4jGraphDatabase(GraphDatabase):
                     WITH concept, coalesce(concept.conceptTypes, []) AS types
                     MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
 
-                    WITH n, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
+                    WITH n, concept, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
                     SET n:$(labels)
+                    WITH n, concept,
+                        [k IN $extraProperties WHERE concept[k] IS NOT NULL] AS presentKeys
+                    FOREACH (k IN presentKeys | SET n[k] = concept[k])
                     RETURN count(n) AS upserted
                     """,
                     session=session,
                     parameters={
                         'concepts': [concept.model_dump() for concept in concept_batch],
+                        'extraProperties': GRAPH_NODE_EXTRA_PROPERTIES,
                     },
                 )
 
@@ -948,6 +952,19 @@ class Neo4jGraphDatabase(GraphDatabase):
                 """,
                 session=session,
             )
+            # GRAPH_NODE_EXTRA_PROPERTIES fields exist specifically to be filtered on (e.g.
+            # scoping UniProt's full, multi-organism release down to organismTaxId='9606')
+            # -- at UniProt's scale (250M+ nodes) an unindexed equality filter on these is a
+            # full node scan, so each one gets its own index alongside prefix/id above.
+            for property_name in GRAPH_NODE_EXTRA_PROPERTIES:
+                await _execute_query_with_retry(
+                    query=f"""
+                          CREATE INDEX concept_{property_name}_index IF NOT EXISTS
+                              FOR (n:Concept)
+                              ON (n.{property_name})
+                          """,
+                    session=session,
+                )
 
     async def trace_ancestors_iter(self,
                                    prefix: ConceptPrefix,

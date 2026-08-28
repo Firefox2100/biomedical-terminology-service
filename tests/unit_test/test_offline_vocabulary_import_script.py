@@ -44,3 +44,51 @@ def test_only_file_accepts_matching_embedding_dump():
 
     with pytest.raises(ValueError, match='hpo.embed.dump'):
         classify(prefix, Path('mondo.embed.dump'))
+
+
+def test_graph_node_query_sets_extra_properties_dynamically():
+    query = ' '.join(SCRIPT['GRAPH_NODE_UPSERT_QUERY'].split())
+    assert 'node[k] IS NOT NULL' in query
+    assert 'SET n[k] = node[k]' in query
+
+
+def test_graph_node_extra_properties_list_is_reexported():
+    from bioterms.model.concept import GRAPH_NODE_EXTRA_PROPERTIES
+    assert SCRIPT['GRAPH_NODE_EXTRA_PROPERTIES'] == GRAPH_NODE_EXTRA_PROPERTIES
+
+
+def test_node_row_extra_property_columns_are_parsed_positionally():
+    # Mirrors the row-building loop in load_graph(): each GRAPH_NODE_EXTRA_PROPERTIES entry
+    # occupies a fixed column starting at index 2, in list order; a short row (pre-existing
+    # dumps, or a vocabulary that never populates later fields) must default missing columns
+    # to None rather than erroring.
+    extra_properties = SCRIPT['GRAPH_NODE_EXTRA_PROPERTIES']
+
+    def parse(row):
+        node = {}
+        for offset, key in enumerate(extra_properties):
+            column = 2 + offset
+            raw_value = row[column] if len(row) > column else ''
+            if not raw_value:
+                node[key] = None
+            elif key == 'reviewed':
+                node[key] = raw_value == 'True'
+            else:
+                node[key] = raw_value
+        return node
+
+    full_row = ['123', "['Concept']", 'SNOMED', 'True', '9606', 'Homo sapiens']
+    short_row = ['456', "['Concept']", 'SNOMED']
+
+    assert parse(full_row) == {
+        'sourceVocabularyId': 'SNOMED',
+        'reviewed': True,
+        'organismTaxId': '9606',
+        'organismName': 'Homo sapiens',
+    }
+    assert parse(short_row) == {
+        'sourceVocabularyId': 'SNOMED',
+        'reviewed': None,
+        'organismTaxId': None,
+        'organismName': None,
+    }

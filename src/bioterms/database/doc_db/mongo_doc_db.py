@@ -6,12 +6,13 @@ import re
 import time
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 from bson import ObjectId
 import pymongo
 from pymongo import AsyncMongoClient, UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import OperationFailure
+from pymongo.operations import SearchIndexModel
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
@@ -145,7 +146,21 @@ class MongoUserRepository(UserRepository):
 class MongoDocumentDatabase(DocumentDatabase):
     """
     A MongoDB implementation of the DocumentDatabase interface.
+
+    Auto-complete substring search prefers a native Atlas Search/mongot `$search` autocomplete
+    index (an nGram-tokenised index, mirroring `Concept.n_grams()`'s own 3-20 character range,
+    built directly on the "conceptId"/"label"/"synonyms" document fields) over the legacy
+    "nGrams" array field approach, when the connected deployment actually has Atlas
+    Search/mongot support -- this is not guaranteed just because the document database driver
+    is "mongo" (unlike BTS_VECTOR_DATABASE_DRIVER=mongodb, which is an explicit opt-in that
+    implies mongot is present); plain community MongoDB without the `mongodb-search` compose
+    profile does not have it. Support is probed once per instance (see
+    `_supports_native_text_search`) and cached for the instance's lifetime, so a deployment
+    that gains/loses Search support needs a service restart to be picked up.
     """
+
+    _TEXT_INDEX_MIN_GRAMS = 3
+    _TEXT_INDEX_MAX_GRAMS = 20
 
     _client: AsyncMongoClient = None
 
@@ -158,6 +173,8 @@ class MongoDocumentDatabase(DocumentDatabase):
         """
         if client is not None:
             self._client = client
+
+        self._native_search_supported: Optional[bool] = None
 
     @property
     def db(self):
@@ -203,6 +220,71 @@ class MongoDocumentDatabase(DocumentDatabase):
         """
         return MongoUserRepository(self.db)
 
+    async def _supports_native_text_search(self,
+                                           collection,
+                                           ) -> bool:
+        """
+        Detect (once, cached for this instance's lifetime) whether the connected MongoDB
+        deployment has Atlas Search/mongot support, needed for a native `$search` autocomplete
+        index. Falls back to the legacy "nGrams" field approach when it does not.
+        :param collection: Any collection to probe `list_search_indexes` against -- the
+            capability is deployment-wide, not per-collection.
+        :return: True if Atlas Search/mongot is available.
+        """
+        if self._native_search_supported is not None:
+            return self._native_search_supported
+
+        try:
+            cursor = await collection.list_search_indexes()
+            async for _ in cursor:
+                pass
+            self._native_search_supported = True
+        except OperationFailure:
+            self._native_search_supported = False
+
+        return self._native_search_supported
+
+    async def _ensure_text_index(self,
+                                 collection,
+                                 ):
+        """
+        Ensure a `$search` autocomplete index exists on "conceptId"/"label"/"synonyms",
+        creating it if necessary. Newly created indexes are built asynchronously by mongot, so
+        they may not be immediately queryable (mirrors `MongoVectorDatabase._ensure_vector_index`).
+
+        This always checks the server rather than caching the result, since vocabulary reloads
+        drop and recreate the underlying collection (and, with it, any search index), and this
+        instance's lifetime can span multiple such reloads.
+        :param collection: The collection to ensure the index for.
+        """
+        index_name = CONFIG.mongodb_text_index_name
+
+        existing_indexes = await collection.list_search_indexes(name=index_name)
+        if not [idx async for idx in existing_indexes]:
+            field_mapping = {
+                'type': 'autocomplete',
+                'tokenization': 'nGram',
+                'minGrams': self._TEXT_INDEX_MIN_GRAMS,
+                'maxGrams': self._TEXT_INDEX_MAX_GRAMS,
+                'foldDiacritics': False,
+            }
+            await collection.create_search_index(
+                SearchIndexModel(
+                    definition={
+                        'mappings': {
+                            'dynamic': False,
+                            'fields': {
+                                'conceptId': field_mapping,
+                                'label': field_mapping,
+                                'synonyms': field_mapping,
+                            },
+                        },
+                    },
+                    name=index_name,
+                    type='search',
+                )
+            )
+
     async def create_index(self,
                            prefix: ConceptPrefix,
                            field: str,
@@ -227,8 +309,12 @@ class MongoDocumentDatabase(DocumentDatabase):
         if prefix.value not in collections:
             await self.db.create_collection(str(prefix.value))
 
-        # Always create the default nGram index if they don't exist
-        await collection.create_index('nGrams', name='nGrams_index')
+        # Ensure the auto-complete search index exists: a native `$search` autocomplete index
+        # when this deployment supports it, otherwise the legacy "nGrams" field index.
+        if await self._supports_native_text_search(collection):
+            await self._ensure_text_index(collection)
+        else:
+            await collection.create_index('nGrams', name='nGrams_index')
 
         try:
             await collection.create_index(
@@ -265,23 +351,26 @@ class MongoDocumentDatabase(DocumentDatabase):
     @staticmethod
     async def _insert_new_terms_batch(collection,
                                       batch: list[Concept],
-                                      extra_data,
+                                      extra_data: Optional[list] = None,
                                       ):
         """
         Insert a batch of concepts as new documents, without checking for existing duplicates.
         :param collection: The MongoDB collection to insert into.
         :param batch: The batch of Concept instances to insert.
-        :param extra_data: The (concept_id, ngrams, search_text) tuples generated for this batch.
+        :param extra_data: The (concept_id, ngrams, search_text) tuples generated for this
+            batch, or None when a native search index is in use and no nGrams/searchText need
+            to be computed/stored at all.
         """
         new_docs = {
             c.concept_id: c.model_dump(exclude_none=True)
             for c in batch
         }
 
-        for concept_id, ngrams, search_text in extra_data:
-            if concept_id in new_docs:
-                new_docs[concept_id]['nGrams'] = ngrams
-                new_docs[concept_id]['searchText'] = search_text
+        if extra_data:
+            for concept_id, ngrams, search_text in extra_data:
+                if concept_id in new_docs:
+                    new_docs[concept_id]['nGrams'] = ngrams
+                    new_docs[concept_id]['searchText'] = search_text
 
         if new_docs:
             await collection.insert_many(new_docs.values())
@@ -289,14 +378,19 @@ class MongoDocumentDatabase(DocumentDatabase):
     @staticmethod
     async def _upsert_terms_batch(collection,
                                   batch: list[Concept],
-                                  extra_data,
+                                  extra_data: Optional[list],
                                   existing_concept_ids: set[str],
                                   ):
         """
         Insert new concepts and update existing ones in a single batch.
         :param collection: The MongoDB collection to write to.
         :param batch: The batch of Concept instances to save.
-        :param extra_data: The (concept_id, ngrams, search_text) tuples generated for this batch.
+        :param extra_data: The (concept_id, ngrams, search_text) tuples generated for this
+            batch, or None when a native search index is in use and no nGrams/searchText need
+            to be computed/stored at all -- any stale nGrams/searchText field left over on an
+            already-existing document (e.g. from before native search was available) is
+            unset in that case, so documents don't keep the old side data forever between
+            full vocabulary reloads.
         :param existing_concept_ids: The set of concept IDs already present in the collection.
         """
         existing_docs: dict[str, dict] = {}
@@ -312,22 +406,24 @@ class MongoDocumentDatabase(DocumentDatabase):
             else:
                 new_docs[c.concept_id] = c_doc
 
-        for concept_id, ngrams, search_text in extra_data:
-            if concept_id in existing_docs:
-                existing_docs[concept_id]['nGrams'] = ngrams
-                existing_docs[concept_id]['searchText'] = search_text
-            elif concept_id in new_docs:
-                new_docs[concept_id]['nGrams'] = ngrams
-                new_docs[concept_id]['searchText'] = search_text
+        if extra_data:
+            for concept_id, ngrams, search_text in extra_data:
+                if concept_id in existing_docs:
+                    existing_docs[concept_id]['nGrams'] = ngrams
+                    existing_docs[concept_id]['searchText'] = search_text
+                elif concept_id in new_docs:
+                    new_docs[concept_id]['nGrams'] = ngrams
+                    new_docs[concept_id]['searchText'] = search_text
 
         if new_docs:
             await collection.insert_many(new_docs.values())
 
         if existing_docs:
+            update_extra = {} if extra_data else {'$unset': {'nGrams': '', 'searchText': ''}}
             operations = [
                 UpdateOne(
                     {'conceptId': concept_id},
-                    {'$set': doc}
+                    {'$set': doc, **update_extra}
                 ) for concept_id, doc in existing_docs.items()
             ]
             await collection.bulk_write(operations)
@@ -350,20 +446,33 @@ class MongoDocumentDatabase(DocumentDatabase):
             async for doc in result:
                 existing_concept_ids.add(doc['conceptId'])
 
-        with pymongo.timeout(None):
-            with ProcessPoolExecutor(
-                max_workers=CONFIG.process_limit,
-            ) as executor:
-                for batch in batch_iterable(terms):
-                    extra_data = await generate_extra_data(
-                        concepts=batch,
-                        executor=executor,
-                    )
+        native = await self._supports_native_text_search(collection)
 
+        with pymongo.timeout(None):
+            if native:
+                # No nGrams/searchText to compute or store: the native `$search` autocomplete
+                # index is built directly from "conceptId"/"label"/"synonyms", which are
+                # already part of the document. Skipping `generate_extra_data` here also
+                # avoids spinning up a ProcessPoolExecutor for work that is no longer needed.
+                for batch in batch_iterable(terms):
                     if no_upsert:
-                        await self._insert_new_terms_batch(collection, batch, extra_data)
+                        await self._insert_new_terms_batch(collection, batch)
                     else:
-                        await self._upsert_terms_batch(collection, batch, extra_data, existing_concept_ids)
+                        await self._upsert_terms_batch(collection, batch, None, existing_concept_ids)
+            else:
+                with ProcessPoolExecutor(
+                    max_workers=CONFIG.process_limit,
+                ) as executor:
+                    for batch in batch_iterable(terms):
+                        extra_data = await generate_extra_data(
+                            concepts=batch,
+                            executor=executor,
+                        )
+
+                        if no_upsert:
+                            await self._insert_new_terms_batch(collection, batch, extra_data)
+                        else:
+                            await self._upsert_terms_batch(collection, batch, extra_data, existing_concept_ids)
 
     async def count_terms(self,
                           prefix: ConceptPrefix,
@@ -544,32 +653,19 @@ class MongoDocumentDatabase(DocumentDatabase):
         if operations:
             await collection.bulk_write(operations)
 
-    async def auto_complete_iter(self,
-                                 prefix: ConceptPrefix,
-                                 query: str,
-                                 limit: int = None,
-                                 model_class: type[Concept] = Concept,
-                                 ) -> AsyncIterator[ConceptUnion]:
+    @staticmethod
+    def _build_legacy_auto_complete_pipeline(n_gram_query: list[str],
+                                             score_query: str,
+                                             limit: int | None,
+                                             ) -> list[dict]:
         """
-        Run an auto-complete search query against the document database and return an async iterator.
-        :param prefix: The vocabulary prefix to search within.
-        :param query: The search query string.
-        :param limit: The maximum number of results to return. If None, return all matches.
-        :param model_class: The Concept subclass to instantiate for results.
-        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
+        Build the fallback aggregation pipeline matching against the pre-generated "nGrams"
+        field, used when this deployment has no Atlas Search/mongot support.
+        :param n_gram_query: The lowercased, whitespace-split query words (each len > 2).
+        :param score_query: The whitespace-stripped lowercased full query.
+        :param limit: The maximum number of results to return, or None for no limit.
+        :return: The aggregation pipeline.
         """
-        start = time.perf_counter()
-        first_item_at = None
-        items = 0
-        result_label = 'ok'
-
-        clean_query = re.sub(r'[()"\']', '', query.lower())
-
-        # N-gram query is used to match the pre-generated n-grams, while
-        # score query is only used to rank the already matched documents
-        n_gram_query = [word for word in clean_query.split() if len(word) > 2]
-        score_query = re.sub(r'\s', '', clean_query)
-
         pipeline: list[dict] = [
             # Match on the n-gram
             {
@@ -613,21 +709,122 @@ class MongoDocumentDatabase(DocumentDatabase):
         ]
 
         if limit is not None:
-            pipeline.append(
-                {
-                    '$limit': limit,
-                }
-            )
+            pipeline.append({'$limit': limit})
 
-        final_projection = {
+        pipeline.append({
             '$project': {
                 'nGrams': 0,
                 'searchText': 0,
             },
-        }
+        })
 
-        pipeline.append(final_projection)
+        return pipeline
+
+    def _build_native_auto_complete_pipeline(self,
+                                             n_gram_query: list[str],
+                                             limit: int | None,
+                                             ) -> list[dict]:
+        """
+        Build the `$search` aggregation pipeline used when this deployment has Atlas
+        Search/mongot support: each query word must autocomplete-match somewhere in
+        "conceptId"/"label"/"synonyms" (AND across words, OR across fields per word), ranked
+        by mongot's own relevance score, then by shorter label first, then by concept ID for
+        determinism. Unlike the legacy path, no position-based score is computed by hand.
+        :param n_gram_query: The lowercased, whitespace-split query words (each len > 2).
+        :param limit: The maximum number of results to return, or None for no limit.
+        :return: The aggregation pipeline.
+        """
+        pipeline: list[dict] = [
+            {
+                '$search': {
+                    'index': CONFIG.mongodb_text_index_name,
+                    'compound': {
+                        'must': [
+                            {
+                                'autocomplete': {
+                                    'query': word,
+                                    'path': ['conceptId', 'label', 'synonyms'],
+                                }
+                            }
+                            for word in n_gram_query
+                        ],
+                    },
+                },
+            },
+            {
+                '$addFields': {
+                    'searchScore': {'$meta': 'searchScore'},
+                    'labelLength': {
+                        '$cond': {
+                            'if': {'$gt': [{'$type': '$label'}, 'null']},
+                            'then': {'$strLenCP': '$label'},
+                            'else': 999,
+                        }
+                    }
+                }
+            },
+            {
+                '$sort': {
+                    'searchScore': -1,
+                    'labelLength': 1,
+                    'conceptId': 1,
+                },
+            },
+            {
+                '$project': {
+                    'searchScore': 0,
+                    'labelLength': 0,
+                    '_id': 0,
+                    # Defensive: only relevant for documents left over from before native
+                    # search was adopted (or its capability re-detected) that haven't gone
+                    # through a full vocabulary reload since -- new writes in native mode never
+                    # set these fields to begin with.
+                    'nGrams': 0,
+                    'searchText': 0,
+                },
+            },
+        ]
+
+        if limit is not None:
+            pipeline.append({'$limit': limit})
+
+        return pipeline
+
+    async def auto_complete_iter(self,
+                                 prefix: ConceptPrefix,
+                                 query: str,
+                                 limit: int = None,
+                                 model_class: type[Concept] = Concept,
+                                 ) -> AsyncIterator[ConceptUnion]:
+        """
+        Run an auto-complete search query against the document database and return an async iterator.
+        :param prefix: The vocabulary prefix to search within.
+        :param query: The search query string.
+        :param limit: The maximum number of results to return. If None, return all matches.
+        :param model_class: The Concept subclass to instantiate for results.
+        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
+        """
+        start = time.perf_counter()
+        first_item_at = None
+        items = 0
+        result_label = 'ok'
+
+        clean_query = re.sub(r'[()"\']', '', query.lower())
+
+        # N-gram query is used to match the pre-generated n-grams (legacy path) or as the
+        # autocomplete operator's search terms (native path), while score query is only used
+        # to rank the already matched documents in the legacy path.
+        n_gram_query = [word for word in clean_query.split() if len(word) > 2]
+        score_query = re.sub(r'\s', '', clean_query)
+
         collection = self.db[str(prefix.value)]
+        native = await self._supports_native_text_search(collection)
+
+        if native:
+            await self._ensure_text_index(collection)
+            pipeline = self._build_native_auto_complete_pipeline(n_gram_query, limit)
+        else:
+            pipeline = self._build_legacy_auto_complete_pipeline(n_gram_query, score_query, limit)
 
         try:
             cursor = await collection.aggregate(pipeline)

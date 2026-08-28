@@ -140,6 +140,30 @@ class PostgresVectorDatabase(VectorDatabase):
         result = await conn.execute(text('SELECT to_regclass(:name) IS NOT NULL'), {'name': table_name})
         return bool(result.scalar())
 
+    @staticmethod
+    async def _vector_column_exists(conn: AsyncConnection,
+                                    table_name: str,
+                                    ) -> bool:
+        """
+        Check whether a table's "vector" column exists, without raising if it does not.
+
+        In shared mode the table itself (owned by `SqlDocumentDatabase`) exists as soon as the
+        vocabulary is loaded, well before the "vector" column is added by
+        `_ensure_table_and_index` on first embedding write -- so a table existing is not enough
+        to assume the column does too (e.g. a vocabulary that is loaded but not yet embedded).
+        :param conn: The connection to check on.
+        :param table_name: The name of the table to check.
+        :return: True if the column exists, False otherwise.
+        """
+        result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = :t AND column_name = 'vector'"
+            ),
+            {'t': table_name},
+        )
+        return result.first() is not None
+
     async def _ensure_table_and_index(self,
                                       prefix: ConceptPrefix,
                                       ) -> Table:
@@ -284,6 +308,11 @@ class PostgresVectorDatabase(VectorDatabase):
         async with self.engine.connect() as conn:
             if not await self._table_exists(conn, table.name):
                 return 0
+            if not await self._vector_column_exists(conn, table.name):
+                # Table exists (the vocabulary is loaded) but no embedding has ever been
+                # written for it yet, so the "vector" column hasn't been added -- zero vectors,
+                # not an error.
+                return 0
 
             stmt = select(func.count()).select_from(table).where(table.c.vector.is_not(None))
             result = await conn.execute(stmt)
@@ -302,6 +331,9 @@ class PostgresVectorDatabase(VectorDatabase):
         async with self.engine.connect() as conn:
             if not await self._table_exists(conn, table.name):
                 raise ValueError(f'Vocabulary prefix {prefix} does not exist in the PostgreSQL vector store.')
+            if not await self._vector_column_exists(conn, table.name):
+                # Loaded but never embedded yet -- no vectors to yield, same as an empty table.
+                return
 
             stmt = select(table.c.concept_id, table.c.vector).where(table.c.vector.is_not(None))
             stream = await conn.stream(stmt)
@@ -348,6 +380,9 @@ class PostgresVectorDatabase(VectorDatabase):
 
         async with self.engine.begin() as conn:
             if not await self._table_exists(conn, table.name):
+                return
+            if not await self._vector_column_exists(conn, table.name):
+                # Loaded but never embedded yet -- nothing to clear/drop.
                 return
 
             if self._shared_with_doc_db:

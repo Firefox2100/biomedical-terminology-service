@@ -3,9 +3,10 @@ from pathlib import Path
 from typing import Annotated, Optional
 import typer
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.vocabulary import get_vocabulary_config
-from bioterms.similarity import calculate_similarity
+from bioterms.similarity import calculate_similarity, restore_similarity
 from .utils import CONSOLE, run_async
 
 
@@ -117,3 +118,65 @@ async def calculate_command(target_prefix: Annotated[
         for corp in corpus:
             for m in methods:
                 await _run_one_similarity_calculation(target, corp, m, threshold, offline, annotation_file)
+
+
+@app.command(name='restore', help='Restore similarity scores from offline dump files into the database.')
+@run_async
+async def restore_command(target_prefix: Annotated[
+                              Optional[ConceptPrefix],
+                              typer.Argument(help='The target vocabulary whose similarity dumps to restore.')
+                          ] = None,
+                          restore_all: Annotated[
+                              bool,
+                              typer.Option(
+                                  '--all',
+                                  '-a',
+                                  help='Restore similarity dumps for every vocabulary that has any.'
+                              )
+                          ] = False,
+                          batch_size: Annotated[
+                              int,
+                              typer.Option(
+                                  '--batch-size',
+                                  '-b',
+                                  help='Number of similarity scores written to the database per request.',
+                              )
+                          ] = 5000,
+                          offline_dir: Annotated[
+                              Optional[str],
+                              typer.Option(
+                                  '--offline-dir',
+                                  help='Directory containing the offline dump files '
+                                       '(default: BTS_DATA_DIR/offline).',
+                              )
+                          ] = None,
+                          ):
+    if restore_all:
+        if target_prefix:
+            raise typer.BadParameter('Cannot use --all option with a target prefix argument.')
+        targets = list(ConceptPrefix)
+    else:
+        if not target_prefix:
+            raise typer.BadParameter('Either specify a target vocabulary or use the --all flag.')
+        targets = [target_prefix]
+
+    search_dir = Path(offline_dir) if offline_dir else Path(CONFIG.data_dir) / 'offline'
+
+    for target in targets:
+        if restore_all and not list(search_dir.glob(f'{target.value}-*.similarity.dump')):
+            # --all sweeps every prefix; most won't have similarity dumps, which is expected
+            # (only a few vocabularies get similarity calculated at all) -- skip silently
+            # rather than reporting every vocabulary without one as a failure.
+            continue
+        try:
+            count = await restore_similarity(
+                target_prefix=target,
+                batch_size=batch_size,
+                offline_dir=offline_dir,
+            )
+            CONSOLE.print(
+                f'[green]Successfully restored {count} similarity scores for {target.value}.[/green]'
+            )
+        except Exception as e:
+            CONSOLE.print(f'[red]Failed to restore similarity scores for {target.value}: {e}[/red]')
+            traceback.print_exc()

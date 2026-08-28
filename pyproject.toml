@@ -63,7 +63,6 @@ cuda = [
 test = [
     "asyncpg~=0.31.0",
     "aiosqlite~=0.22.1",
-    "cupy-cuda12x[ctk]~=14.1.1",
     "deepdiff~=9.1.0",
     "locust~=2.46.4",
     "matplotlib~=3.10.9",

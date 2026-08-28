@@ -33,7 +33,9 @@ from bioterms.etc.enums import (
     SimilarityMethod,
 )
 from bioterms.model.annotation import Annotation
-from bioterms.model.concept.concept import Concept
+from bioterms.model.concept.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES, \
+    GRAPH_NODE_EXTRA_PROPERTY_COLUMNS
+from bioterms.model.concept import OhdsiConcept, UniProtConcept
 
 POSTGRES_IMAGE = 'postgres:18.6'
 
@@ -111,6 +113,85 @@ async def test_save_and_get_vocabulary_graph(graph_db):
     assert set(g.nodes) == {'HP:leaf', 'HP:mid1', 'HP:mid2', 'HP:root'}
     assert g.has_edge('HP:leaf', 'HP:mid1')
     assert g.has_edge('HP:mid1', 'HP:root')
+
+
+@pytest.mark.asyncio
+async def test_save_vocabulary_graph_writes_extra_properties(graph_db):
+    ohdsi_concepts = [
+        OhdsiConcept(prefix=ConceptPrefix.OHDSI, conceptId='1', sourceVocabularyId='SNOMED'),
+        OhdsiConcept(prefix=ConceptPrefix.OHDSI, conceptId='2'),
+    ]
+    ohdsi_graph = nx.MultiDiGraph()
+    for c in ohdsi_concepts:
+        ohdsi_graph.add_node(c.concept_id)
+    await graph_db.save_vocabulary_graph(ohdsi_concepts, ohdsi_graph)
+
+    uniprot_concepts = [
+        UniProtConcept(
+            prefix=ConceptPrefix.UNIPROT, conceptId='P68104',
+            reviewed=True, organismTaxId='9606', organismName='Homo sapiens',
+        ),
+    ]
+    uniprot_graph = nx.MultiDiGraph()
+    uniprot_graph.add_node('P68104')
+    await graph_db.save_vocabulary_graph(uniprot_concepts, uniprot_graph)
+
+    async with graph_db.engine.connect() as conn:
+        result = await conn.execute(text(
+            'SELECT concept_id, source_vocabulary_id, reviewed, organism_tax_id, organism_name '
+            'FROM graph_node_ohdsi ORDER BY concept_id'
+        ))
+        rows = {row.concept_id: row for row in result}
+        assert rows['1'].source_vocabulary_id == 'SNOMED'
+        assert rows['1'].reviewed is None
+        assert rows['2'].source_vocabulary_id is None
+
+        result = await conn.execute(text(
+            'SELECT reviewed, organism_tax_id, organism_name FROM graph_node_uniprot WHERE concept_id = :id'
+        ), {'id': 'P68104'})
+        row = result.one()
+        assert row.reviewed is True
+        assert row.organism_tax_id == '9606'
+        assert row.organism_name == 'Homo sapiens'
+
+
+@pytest.mark.asyncio
+async def test_extra_property_columns_are_indexed(graph_db):
+    await graph_db.save_vocabulary_graph(
+        [make_concept(ConceptPrefix.HPO, 'HP:leaf')],
+        nx.MultiDiGraph(),
+    )
+
+    async with graph_db.engine.connect() as conn:
+        result = await conn.execute(text(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'graph_node_hpo'"
+        ))
+        index_names = {row.indexname for row in result}
+
+    for prop in GRAPH_NODE_EXTRA_PROPERTIES:
+        column = GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop]
+        assert f'ix_graph_node_hpo_{column}' in index_names
+
+
+@pytest.mark.asyncio
+async def test_ensure_prefix_schema_migrates_pre_existing_table(graph_db):
+    # Simulate a table created before GRAPH_NODE_EXTRA_PROPERTIES existed.
+    async with graph_db.engine.begin() as conn:
+        await conn.execute(text(
+            "CREATE TABLE graph_node_mondo (concept_id TEXT PRIMARY KEY, types TEXT[] NOT NULL DEFAULT '{}')"
+        ))
+
+    async with graph_db.engine.begin() as conn:
+        await graph_db._ensure_prefix_schema(conn, ConceptPrefix.MONDO)
+
+    async with graph_db.engine.connect() as conn:
+        result = await conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'graph_node_mondo'"
+        ))
+        columns = {row.column_name for row in result}
+
+    for prop in GRAPH_NODE_EXTRA_PROPERTIES:
+        assert GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop] in columns
 
 
 @pytest.mark.asyncio

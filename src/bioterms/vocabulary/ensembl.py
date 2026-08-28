@@ -60,11 +60,55 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             pass
 
 
+def _load_hgnc_ensembl_symbol_lookup() -> dict[str, str]:
+    """
+    Build an ensembl_gene_id -> HGNC-approved symbol lookup from HGNC's own release file.
+
+    Ensembl's GTF gene_name is externally documented (Ensembl genebuild gene-naming docs)
+    as HGNC-sourced for the great majority of human protein-coding genes -- so asserting it
+    as a fresh has_symbol edge risks double-counting one HGNC nomenclature decision as two
+    independent votes (Ensembl's and HGNC's own). This lookup is used only to TAG (never to
+    filter, replace, or remove) Ensembl's GTF-derived has_symbol edges when the GTF's
+    gene_name matches HGNC's own ensembl_gene_id crosswalk for that gene -- downstream
+    consensus/provenance modelling can then discount a tagged edge without bts having to
+    change what it serves.
+    :return: A dict mapping ensembl_gene_id to HGNC's approved symbol. Empty if HGNC's
+        release file is not present -- this is a provenance enrichment, not a hard
+        prerequisite for loading Ensembl's own gene/transcript/exon/protein data.
+    """
+    hgnc_symbol_path = os.path.join(CONFIG.data_dir, 'hgnc/symbol.txt')
+    if not os.path.exists(hgnc_symbol_path):
+        verbose_print(
+            'HGNC symbol file not found -- Ensembl has_symbol edges will not be tagged '
+            'with HGNC crosswalk provenance.'
+        )
+        return {}
+
+    hgnc_df = pd.read_csv(
+        hgnc_symbol_path,
+        sep='\t',
+        dtype=str,
+        usecols=['ensembl_gene_id', 'symbol'],
+    )
+
+    lookup: dict[str, str] = {}
+    for _, row in hgnc_df.iterrows():
+        if pd.isna(row['ensembl_gene_id']) or pd.isna(row['symbol']):
+            continue
+        # A small number of ensembl_gene_id values (3 of 42,346 in the 2026-07-22 release)
+        # appear on more than one HGNC row; last one wins, which is an acceptable
+        # approximation for a tagging-only lookup.
+        lookup[row['ensembl_gene_id']] = row['symbol']
+
+    return lookup
+
+
 def _handle_gene_feature(attributes: dict,
                          row,
                          genes: dict[str, CONCEPT_CLASS],
                          ensembl_graph: nx.DiGraph,
                          annotations: list[Annotation],
+                         hgnc_ensembl_lookup: dict[str, str] = None,
                          ):
     """
     Process a GTF 'gene' feature row into a gene Concept and its HGNC symbol annotation.
@@ -72,14 +116,23 @@ def _handle_gene_feature(attributes: dict,
     if attributes['gene_id'] in genes:
         return
 
+    hgnc_ensembl_lookup = hgnc_ensembl_lookup or {}
+
     if 'gene_name' in attributes:
         label = attributes['gene_name']
+        hgnc_symbol = hgnc_ensembl_lookup.get(attributes['gene_id'])
+        properties = (
+            {'derivation': 'hgnc_ensembl_gene_id_xref'}
+            if hgnc_symbol is not None and hgnc_symbol == attributes['gene_name']
+            else None
+        )
         annotations.append(Annotation(
             prefixFrom=VOCABULARY_PREFIX,
             prefixTo=ConceptPrefix.HGNC_SYMBOL,
             conceptIdFrom=attributes['gene_id'],
             conceptIdTo=attributes['gene_name'],
-            annotationType=AnnotationType.HAS_SYMBOL
+            annotationType=AnnotationType.HAS_SYMBOL,
+            properties=properties,
         ))
     else:
         label = None
@@ -237,6 +290,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     proteins: dict[str, CONCEPT_CLASS] = {}
     ensembl_graph = nx.DiGraph()
     annotations = []
+    hgnc_ensembl_lookup = _load_hgnc_ensembl_symbol_lookup()
 
     verbose_print('Ensembl GTF file read, processing entries...')
 
@@ -248,7 +302,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
         feature = row['feature']
         if feature == 'gene':
-            _handle_gene_feature(attributes, row, genes, ensembl_graph, annotations)
+            _handle_gene_feature(attributes, row, genes, ensembl_graph, annotations, hgnc_ensembl_lookup)
         elif feature == 'transcript':
             _handle_transcript_feature(attributes, row, transcripts, ensembl_graph)
         elif feature == 'exon':

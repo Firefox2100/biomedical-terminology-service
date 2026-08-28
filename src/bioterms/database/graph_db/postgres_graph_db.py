@@ -58,7 +58,8 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
 from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
     EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES, GRAPH_NODE_EXTRA_PROPERTY_COLUMNS, \
+    GRAPH_NODE_EXTRA_PROPERTY_SQL_TYPES
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept_path import NodeInPath, ConceptPath
 from bioterms.model.related_term import RelatedTerm
@@ -293,9 +294,29 @@ class PostgresGraphDatabase(GraphDatabase):
         if p in self._prefix_schema_ready:
             return p
 
+        # GRAPH_NODE_EXTRA_PROPERTIES columns: every prefix's table gets every column (see
+        # that constant's docstring) so a fresh CREATE TABLE and an ALTER on a table from
+        # before these columns existed both converge on the same schema.
+        extra_columns_ddl = ''.join(
+            f', {GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop]} {GRAPH_NODE_EXTRA_PROPERTY_SQL_TYPES[prop]}'
+            for prop in GRAPH_NODE_EXTRA_PROPERTIES
+        )
         await conn.execute(text(f'CREATE TABLE IF NOT EXISTS graph_node_{p} ('
                                  f'concept_id TEXT PRIMARY KEY, '
-                                 f"types TEXT[] NOT NULL DEFAULT '{{}}')"))
+                                 f"types TEXT[] NOT NULL DEFAULT '{{}}'"
+                                 f'{extra_columns_ddl})'))
+        for prop in GRAPH_NODE_EXTRA_PROPERTIES:
+            column = GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop]
+            sql_type = GRAPH_NODE_EXTRA_PROPERTY_SQL_TYPES[prop]
+            await conn.execute(text(
+                f'ALTER TABLE graph_node_{p} ADD COLUMN IF NOT EXISTS {column} {sql_type}'
+            ))
+            # Indexed for the same reason as Neo4j's per-property indexes: an unindexed
+            # equality filter (e.g. organism_tax_id = '9606' at UniProt's 250M+-node scale)
+            # would otherwise be a full table scan.
+            await conn.execute(text(
+                f'CREATE INDEX IF NOT EXISTS ix_graph_node_{p}_{column} ON graph_node_{p} ({column})'
+            ))
         await conn.execute(text(f'CREATE TABLE IF NOT EXISTS graph_edge_{p} ('
                                  f'source_id TEXT NOT NULL, '
                                  f'target_id TEXT NOT NULL, '
@@ -467,20 +488,24 @@ class PostgresGraphDatabase(GraphDatabase):
         async with self.engine.begin() as conn:
             p = await self._ensure_prefix_schema(conn, prefix)
 
+            extra_columns = [GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop] for prop in GRAPH_NODE_EXTRA_PROPERTIES]
+            all_columns = ['concept_id', 'types'] + extra_columns
+            update_set = ', '.join(f'{col} = EXCLUDED.{col}' for col in ['types'] + extra_columns)
+
             node_upsert = text(f"""
-                INSERT INTO graph_node_{p} (concept_id, types)
-                VALUES (:concept_id, :types)
-                ON CONFLICT (concept_id) DO UPDATE SET types = EXCLUDED.types
+                INSERT INTO graph_node_{p} ({', '.join(all_columns)})
+                VALUES ({', '.join(':' + col for col in all_columns)})
+                ON CONFLICT (concept_id) DO UPDATE SET {update_set}
             """).bindparams(bindparam('types', type_=ARRAY(Text)))
 
             for batch in batch_iterable(concepts, consume=consume_concepts):
-                rows = [
-                    {
-                        'concept_id': c.concept_id,
-                        'types': [t.value for t in c.concept_types],
-                    }
-                    for c in batch
-                ]
+                rows = []
+                for c in batch:
+                    dumped = c.model_dump()
+                    row = {'concept_id': c.concept_id, 'types': [t.value for t in c.concept_types]}
+                    for prop in GRAPH_NODE_EXTRA_PROPERTIES:
+                        row[GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop]] = dumped.get(prop)
+                    rows.append(row)
                 await conn.execute(node_upsert, rows)
 
             bare_node_upsert = text(

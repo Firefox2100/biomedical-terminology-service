@@ -11,6 +11,7 @@ import tempfile
 import fnmatch
 import zlib
 import tarfile
+import warnings
 from collections.abc import MutableSequence, Iterable
 from pathlib import Path
 from itertools import islice
@@ -179,31 +180,80 @@ async def download_file(url: str,
                         ):
     """
     Download a file from a URL and save it to the specified file path.
+
+    Retries up to CONFIG.download_max_retries times on a transport error (including the
+    httpx.ReadTimeout that a multi-GB/multi-hour download can hit from ordinary network
+    jitter, even with DOWNLOAD_CLIENT's generous read timeout). Each retry resumes via an
+    HTTP Range request starting from whatever is already on disk, rather than restarting
+    from byte zero -- restarting a 100GB+ file (e.g. UniProt's TrEMBL release) from scratch
+    on every transient failure would be impractical. If the server does not honour the Range
+    request (responds 200 instead of 206), the partial file is discarded and the download
+    restarts from scratch, since it can no longer be trusted as a valid prefix of a fresh
+    response. A Range request that starts exactly at the resource's current size correctly
+    gets a 416 back (verified against a real server) -- read as "nothing left to do", not
+    an error, so re-running a download that already completed is a cheap no-op.
     :param url: The URL to download the file from.
     :param file_path: The relative file path to save the downloaded file.
-    :param headers: Optional headers to include in the request.
+    :param headers: Optional headers to include in every request.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
     if download_client is None:
         download_client = DOWNLOAD_CLIENT
 
-    async with download_client.stream(
-            'GET',
-            url,
-            follow_redirects=True,
-            headers=headers,
-    ) as response:
-        response.raise_for_status()
+    absolute_file_path = os.path.join(CONFIG.data_dir, file_path)
+    os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
 
-        absolute_file_path = os.path.join(CONFIG.data_dir, file_path)
-        os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
+    last_error: Exception | None = None
 
-        async with aiofiles.open(absolute_file_path, 'wb') as data_file:
-            async for chunk in aiter_progress(
-                response.aiter_bytes(),
-                description=f'Downloading {os.path.basename(file_path)}'
-            ):
-                await data_file.write(chunk)
+    for attempt in range(1, CONFIG.download_max_retries + 1):
+        resume_from = (
+            await aiofiles.os.path.getsize(absolute_file_path)
+            if await aiofiles.os.path.exists(absolute_file_path)
+            else 0
+        )
+
+        request_headers = dict(headers or {})
+        if resume_from:
+            request_headers['Range'] = f'bytes={resume_from}-'
+
+        try:
+            async with download_client.stream(
+                    'GET',
+                    url,
+                    follow_redirects=True,
+                    headers=request_headers,
+            ) as response:
+                if resume_from and response.status_code == 416:
+                    # The range starts at/beyond the resource's current size: the file on
+                    # disk is already the complete download.
+                    return
+
+                if resume_from and response.status_code != 206:
+                    # Range not honoured (some servers just return 200 with the full body).
+                    # The existing partial file's bytes can't be trusted as a prefix of this
+                    # fresh, full response, so start this attempt over from scratch.
+                    resume_from = 0
+
+                response.raise_for_status()
+
+                mode = 'ab' if resume_from else 'wb'
+                async with aiofiles.open(absolute_file_path, mode) as data_file:
+                    async for chunk in aiter_progress(
+                        response.aiter_bytes(),
+                        description=f'Downloading {os.path.basename(file_path)}',
+                    ):
+                        await data_file.write(chunk)
+            return
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            last_error = exc
+            if attempt < CONFIG.download_max_retries:
+                verbose_print(
+                    f'Download of {file_path} failed on attempt {attempt}/'
+                    f'{CONFIG.download_max_retries} ({exc!r}); retrying with resume...'
+                )
+                await asyncio.sleep(CONFIG.download_retry_backoff_seconds * attempt)
+
+    raise last_error
 
 
 async def get_trud_release_url(resource_url: str,
@@ -228,13 +278,35 @@ async def get_trud_release_url(resource_url: str,
     return payload['releases'][0]['archiveFileUrl']
 
 
+def _nearby_zip_entries(names: list[str], pattern: str, limit: int = 20) -> list[str]:
+    """
+    List zip entries in the same directory as a pattern that failed to match anything, so a
+    FilesNotFound error/warning can show what's actually there instead of just "not found" --
+    a release's exact filenames (edition code, date stamp, naming convention) can differ
+    between releases in ways that are otherwise only discoverable by downloading again.
+    :param pattern: The fnmatch pattern that produced no matches.
+    :param names: All entry names in the zip archive.
+    :param limit: Maximum number of nearby entries to return.
+    :return: Up to `limit` entry names sharing the pattern's directory.
+    """
+    directory_pattern = f'{pattern.rsplit("/", 1)[0]}/*' if '/' in pattern else '*'
+    return [name for name in names if fnmatch.fnmatch(name, directory_pattern)][:limit]
+
+
 async def extract_file_from_zip(zip_path: str,
-                                file_mapping: list[tuple[str, str]]
+                                file_mapping: list[tuple[str, str] | tuple[str, str, bool]],
                                 ):
     """
-    Extract a specific file from a zip archive based on a matching pattern.
+    Extract specific files from a zip archive based on matching patterns.
     :param zip_path: The path to the zip archive.
-    :param file_mapping: List of tuples mapping relative file patterns to extracted file names
+    :param file_mapping: List of tuples mapping relative file patterns to extracted file
+        names, optionally with a third `required` bool (default True, preserving the
+        original hard-fail behaviour). A `required=False` entry that matches nothing is
+        skipped with a visible warning (not silent, and not gated behind CONFIG.verbose_print
+        -- an intentionally-added feature quietly not working is worse than a noisy one)
+        instead of aborting the whole extraction; every other pattern in file_mapping still
+        gets its chance, including ones listed after it.
+    :raises FilesNotFound: If a required pattern matches nothing.
     """
     async with aiofiles.open(zip_path, 'rb') as f:
         zip_bytes = await f.read()
@@ -242,13 +314,23 @@ async def extract_file_from_zip(zip_path: str,
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zip_ref:
         names = zip_ref.namelist()
 
-        for pattern, dest_path in file_mapping:
+        for entry in file_mapping:
+            pattern, dest_path, required = entry if len(entry) == 3 else (*entry, True)
             matches = [name for name in names if fnmatch.fnmatch(name, pattern)]
 
             if not matches:
-                raise FilesNotFound(
-                    f'No files matching pattern "{pattern}" found in the ZIP archive.'
+                nearby = _nearby_zip_entries(names, pattern)
+                detail = (
+                    f' Files actually present in that directory: {nearby}' if nearby
+                    else ' That directory does not appear to exist in this archive at all.'
                 )
+                message = f'No files matching pattern "{pattern}" found in the ZIP archive.{detail}'
+
+                if required:
+                    raise FilesNotFound(message)
+
+                warnings.warn(f'{message} Skipping this optional file.', stacklevel=2)
+                continue
 
             member = matches[0]
 

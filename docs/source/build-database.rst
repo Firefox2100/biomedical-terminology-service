@@ -21,6 +21,24 @@ As an alternative to MongoDB, the document database can be backed by a SQL datab
 
 Set ``BTS_DOC_DATABASE_DRIVER=sql`` and ``BTS_SQL_DB_URL`` to a SQLAlchemy async URL to enable it, e.g. ``postgresql+asyncpg://user:password@host:5432/bts``. For PostgreSQL, install the ``postgres`` extra (``pip install .[postgres]``), which bundles the ``asyncpg`` driver - no separate driver package to track down. For MySQL/MariaDB or SQLite, install the plain ``sql`` extra (``pip install .[sql]``) plus an async driver package this project does not bundle, e.g. ``aiomysql``/``asyncmy`` for MySQL/MariaDB or ``aiosqlite`` for SQLite. SQLite is convenient for local development and small deployments but is not recommended for the concurrent write load of a full database build.
 
+Auto-complete search indexing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The auto-complete endpoints (``/api/*/auto-complete``, and the equivalent GraphQL/MCP/FHIR paths) need to find every concept whose label, synonyms, or ID contain each word of the query as a substring - not just as a prefix. The original implementation of this (still used as the fallback below) pre-computes every substring from 3 to 20 characters of each word in a concept's label/synonyms (``Concept.n_grams()``) and stores each one as its own row/array entry, so a query word can be matched with a plain equality lookup. This is simple and portable, but for a vocabulary the size this service targets (SNOMED-scale and up), materialising every substring of every word is a large multiple of the underlying text in extra storage and write I/O, on both the document database and (for MongoDB) the collection itself.
+
+Since this was first built (against plain MongoDB), both of the document database backends have gained a built-in way to do the same kind of substring indexing natively, without exploding the data into a side table/field. Each document database driver now **probes, once per process, whether its connected deployment actually has that native capability available** (a driver being selected does not by itself guarantee the capability - e.g. plain community MongoDB without the ``mongodb-search`` Compose profile, or a PostgreSQL user without permission to install extensions) and uses it when present, falling back to the original n-gram approach otherwise. This choice is cached for the life of the process; if you enable/disable the native capability on a live deployment (e.g. install ``pg_trgm`` after the fact), restart the service to pick it up.
+
+Because the underlying engines don't expose comparable relevance scoring, results are **not** guaranteed to come back in the exact same order across backends - every mode still guarantees an exact substring match per query word (AND across words), and orders ties by shorter label first then concept ID, but how "more relevant first" is approximated differs:
+
+- **MongoDB, native** (Atlas Search/mongot support detected - see the MongoDB section above): an Atlas Search index of type ``autocomplete`` (``tokenization: nGram``, ``minGrams``/``maxGrams`` matching ``Concept.n_grams()``'s own 3-20 range) is created directly on the ``conceptId``/``label``/``synonyms`` document fields (name configurable via ``BTS_MONGODB_TEXT_INDEX_NAME``). No ``nGrams``/``searchText`` field is written to documents at all. Queried via a ``$search`` ``compound.must`` of one ``autocomplete`` clause per query word; ranked by mongot's own relevance score.
+- **MongoDB, fallback** (no Atlas Search/mongot): unchanged from the original implementation - the ``nGrams`` array field plus a plain index, matched via ``$all`` and ranked by the query's byte offset within a precomputed ``searchText`` field.
+- **PostgreSQL, native**: the `pg_trgm <https://www.postgresql.org/docs/current/pgtrgm.html>`_ extension (enabled automatically via ``CREATE EXTENSION IF NOT EXISTS pg_trgm`` if the connection has privileges to do so) backs a GIN trigram index on the existing ``search_text`` column - no separate n-gram table. Queried with ``ILIKE '%word%'`` per word, index-accelerated by the trigram index for the expensive substring filtering; ranked with the same position-based (``strpos``) score as the fallback path, since trigram ``similarity()`` scores whole-string trigram overlap rather than reliably preferring an earlier/more exact match of the query itself.
+- **MySQL, native** (not MariaDB - see below): a ``FULLTEXT ... WITH PARSER ngram`` index on ``search_text``, using MySQL's built-in ngram full-text parser plugin. Queried with ``MATCH ... AGAINST (... IN BOOLEAN MODE)``, requiring every query word (``+word``); the same boolean-mode match score is reused for ranking. The parser's own ``ngram_token_size`` server variable (default 2) controls its internal n-gram length, independent of and coarser than ``Concept.n_grams()``'s 3-20 range - this does not affect correctness, only how much of the index tokenises finer than the words being searched for.
+- **SQLite, native**: an `FTS5 virtual table using the built-in trigram tokenizer <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>`_ (SQLite >= 3.34.0), mirrored by hand alongside the concept row on every write (FTS5 has no native upsert/trigger sync). Queried with one ``MATCH`` per word intersected together, index-accelerated the same way as PostgreSQL's trigram index; FTS5 does not expose a relevance score meaningful across an intersection of independent trigram matches, so ranking falls back to the same position-based (``instr``) score, computed over the already-small matched set rather than the full table.
+- **MariaDB, and any other SQL dialect**: no native trigram/n-gram full-text capability is probed for, so these always fall back to the portable n-gram table, identically to the original implementation.
+
+The n-gram table/field is still always generated for **offline** vocabulary loading (``--offline``, see below) regardless of native support, since the resulting dump file may be imported into a database backend/version where native support isn't available.
+
 Neo4j
 ^^^^^
 
@@ -35,7 +53,7 @@ As an alternative to Neo4j, the graph database can be backed by PostgreSQL inste
 
 Schema, briefly (see the driver's module docstring, ``src/bioterms/database/graph_db/postgres_graph_db.py``, for the exact DDL):
 
-* One set of ``graph_node_<prefix>`` / ``graph_edge_<prefix>`` / ``graph_closure_<prefix>`` tables per vocabulary, keeping each vocabulary's own indexes small even at SNOMED/OHDSI scale (~1M and ~10M concepts respectively). ``graph_closure_<prefix>`` is a precomputed transitive closure over each vocabulary's ``is_a``/``part_of`` edges - the two hottest graph operations, ancestor and descendant lookup, become an indexed read against this table instead of a traversal, at the cost of needing a (re)build step. ``create_index()`` (called automatically as part of ``bioterms-cli vocabulary load``) rebuilds the closure table for every vocabulary prefix that currently has nodes; re-run a vocabulary load (or call it directly) again after any change to that vocabulary's hierarchy edges. OHDSI's ~150 source sub-vocabularies are not further segmented here, since the OHDSI vocabulary loader does not currently capture which sub-vocabulary each concept came from - a reasonable follow-up if OHDSI's own tables become a bottleneck.
+* One set of ``graph_node_<prefix>`` / ``graph_edge_<prefix>`` / ``graph_closure_<prefix>`` tables per vocabulary, keeping each vocabulary's own indexes small even at SNOMED/OHDSI scale (~1M and ~10M concepts respectively). ``graph_closure_<prefix>`` is a precomputed transitive closure over each vocabulary's ``is_a``/``part_of`` edges - the two hottest graph operations, ancestor and descendant lookup, become an indexed read against this table instead of a traversal, at the cost of needing a (re)build step. ``create_index()`` (called automatically as part of ``bioterms-cli vocabulary load``) rebuilds the closure table for every vocabulary prefix that currently has nodes; re-run a vocabulary load (or call it directly) again after any change to that vocabulary's hierarchy edges. OHDSI's ~150 source sub-vocabularies are not further segmented here, since the OHDSI vocabulary loader does not currently capture which sub-vocabulary each concept came from - a reasonable follow-up if OHDSI's own tables become a bottleneck. Every ``graph_node_<prefix>`` table also carries the same ``GRAPH_NODE_EXTRA_PROPERTIES`` columns as Neo4j (``source_vocabulary_id``, ``reviewed``, ``organism_tax_id``, ``organism_name``, each indexed) - see the Neo4j section above for what they're for. ``_ensure_prefix_schema`` adds any missing ones via ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` on every call, so an existing deployment's tables catch up automatically on the next vocabulary load; no manual migration needed.
 * One ``graph_annotation`` table for all cross-vocabulary annotation edges and one ``graph_similarity`` table for all similarity scores, each partitioned by source prefix (`PostgreSQL declarative partitioning <https://www.postgresql.org/docs/current/ddl-partitioning.html>`_) rather than split into one table per prefix pair - both need multi-hop, prefix-crossing traversal (``map_terms``) or cross-prefix lookups (``get_similar_terms`` with ``same_prefix=False``, ``translate_terms``) that are only really expressible as a single recursive CTE/query over one table; partitioning still gives most of the per-prefix segmentation benefit.
 
 Like the MongoDB and PostgreSQL vector store options, ``BTS_POSTGRES_GRAPH_DB_URL`` is independent of ``BTS_SQL_DB_URL``/``BTS_POSTGRES_VECTOR_DB_URL`` but can safely be set to the exact same value - graph tables live under their own ``graph_*`` names, so the document store's ``concept_*`` tables and the vector store's columns/tables never collide with them. Setting all three to the same PostgreSQL instance is how to run the document, vector, and graph stores - everything except Redis - on one PostgreSQL server.
@@ -99,15 +117,16 @@ The CLI provides a command to download the supported vocabularies automatically,
 
 Some vocabularies require an API key to download. The supported credentials are:
 
-* NHS TRUD API key for CTV3 and SNOMED CT. You need to subscribe to these vocabularies and wait for them to approve the subscription, before the API key can be used to download the files.
+* NHS TRUD API key for CTV3 and SNOMED CT. You need to subscribe to these vocabularies and wait for them to approve the subscription, before the API key can be used to download the files. SNOMED's download also includes its historical Association Reference Set files (SAME_AS/REPLACED_BY/WAS_A/POSSIBLY_EQUIVALENT_TO/etc, loaded as ``snomed_association`` relationships distinguished by SNOMED's own numeric ``refsetId``) - no separate credential or step needed, but if you downloaded SNOMED before this was added, re-run ``vocabulary download snomed --redownload`` to pick them up.
 * BioPortal API key for OMIM and ORDO
 * NIH UMLS API key for SNOMED-ORDO mapping files
 
 And not all vocabularies can be downloaded this way. Particularly:
 
-* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into a Neo4j 4 (note that we use Neo4j 5 for this service, so you may need to install Neo4j 4 separately) instance first, and use the provided script ``scripts/dump_reactome_to_csv.py`` to export the data to CSV files that can be imported into the main database.
+* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into a Neo4j 4 (note that we use Neo4j 5 for this service, so you may need to install Neo4j 4 separately) instance first, and use the provided script ``scripts/dump_reactome_to_csv.py`` to export the data to CSV files that can be imported into the main database. Reactome's own protein identity is expressed as ``EXACT`` annotations to UniProt (see below), not as a resolved HGNC symbol directly - it does not need UniProt loaded first for correctness (annotation targets are created as bare stub nodes if missing), but loading UniProt first gives those nodes their full properties immediately instead of on UniProt's next load.
 * OHDSI standardized vocabularies are not open for public download, and provides no download API. You need to manually download the latest release from Athena, and unzip it to the data folder.
 * UMLS system provides no way to fetch the latest release files automatically, so the files downloaded from UMLS are using hard-coded URL. If you need a different version, you need to manually download the files from UMLS and place them in the data folder, or open an issue/pull request to notify us of the desired version.
+* UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
 
 Loading the vocabulary
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -121,6 +140,32 @@ The vocabularies can be loaded into the document database and graph database usi
 This reads the vocabulary files from the data folder, processes them and holds them in a memory list for concepts, and a memory graph for relationships. If the vocabulary is large, this may take a significant amount of RAM. After processing, the concepts and relationships are written to the document database and graph database respectively. Depending on the size of the vocabulary, this may take a long time. The indices are automatically created during this process.
 
 Additionally, this command supports a ``--offline`` flag, which allows the database to be built without an actual database connection. The results will be written into dump files in the offline directory, which can later be imported into the database using the database import tools provided by the respective database systems. This is useful when building on systems like HPC, which are optimised for computation but not for disk I/O operations, and may have trouble running database processes.
+
+Vocabulary load order
+^^^^^^^^^^^^^^^^^^^^^
+
+``bioterms-cli vocabulary load --all`` does **not** load in dependency order - it iterates ``ConceptPrefix`` in its declared enum order, which loads Ensembl before HGNC_SYMBOL and will fail ``ensure_gene_symbol_loaded()``'s check. Load vocabularies individually, in this order:
+
+#. ``hgnc_symbol`` first, always - HGNC, Ensembl, and UniProt all annotate into it and refuse to load without it (``VocabularyNotLoaded``) outside ``--offline`` mode.
+#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi`` - independent of each other and of step 1's ordering constraint, any order among these is fine.
+#. ``ensembl`` - requires ``hgnc_symbol`` from step 1.
+#. ``uniprot`` - requires ``hgnc_symbol`` from step 1. No hard ordering constraint versus Reactome (see the download note above), but loading it before Reactome means Reactome's annotations land on fully-populated nodes immediately.
+#. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.
+
+The Read v2 migration overlay (below) is a separate script, not part of this load order, but expects ``ohdsi``, ``ctv3``, and ``snomed`` to already be loaded for a clean result.
+
+Read v2 migration overlay
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Read v2 is a retired vocabulary that cannot be licensed or downloaded on its own - OHDSI's ``ohdsi`` vocabulary load already includes its ``read`` sub-vocabulary content, but those nodes have no path at all to CTV3 or SNOMED (degree exactly 1, connected only to their own OHDSI standard-concept mapping). NHS's data migration package (TRUD item 9) is still downloadable, though, and contains "Clinically Assured" mapping tables that this project loads as a transient overlay: ``ANNOTATED_WITH`` annotations, tagged ``source: nhs_read_v2_migration_29.0.0``, directly onto the existing OHDSI/CTV3/SNOMED nodes.
+
+This is **not** part of ``bioterms-cli vocabulary download``/``load`` - it is not registered as a vocabulary, has no ``ConceptPrefix`` of its own, and will not be picked up by ``--all``. Run it directly instead, using the same ``BTS_NHS_TRUD_API_KEY`` as CTV3/SNOMED:
+
+.. code-block:: bash
+
+    python scripts/load_read_v2_migration.py
+
+Pass ``--skip-download`` to reuse already-downloaded files under ``data/read_v2_migration/``, or ``--download-only`` to fetch without loading. The script writes directly to the live graph database (no ``--offline`` mode) via the same ``save_annotations`` path as the rest of the service.
 
 Loading the annotations
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -227,7 +272,27 @@ Neo4j ``LOAD CSV`` reads from Neo4j's configured import directory. Copy the ``*.
     FOR (n:Concept)
     REQUIRE (n.prefix, n.id) IS UNIQUE;
 
-For ``xxx.node_ids.dump`` files, they are CSV files that contain node IDs and concept types for creating graph nodes. The second column is written as a Python-style list string, for example ``['pathway', 'reaction']``. Import one vocabulary at a time, replacing ``some-prefix`` with the vocabulary prefix in the file name:
+A handful of fields beyond id/prefix/type-labels are also promoted to real node properties, because some later phase of graph analysis needs to filter on them directly rather than through the document database - e.g. scoping OHDSI's internal hierarchy to its SNOMED-sourced subset, or scoping UniProt's full, multi-organism release down to human. This is the complete list (``bioterms.model.concept.GRAPH_NODE_EXTRA_PROPERTIES`` in the source, kept in sync with this doc), each worth its own index at UniProt's scale (250M+ nodes, where an unindexed equality filter is a full node scan):
+
+.. code-block:: cypher
+
+    CREATE INDEX concept_sourceVocabularyId_index IF NOT EXISTS
+    FOR (n:Concept)
+    ON (n.sourceVocabularyId);
+
+    CREATE INDEX concept_reviewed_index IF NOT EXISTS
+    FOR (n:Concept)
+    ON (n.reviewed);
+
+    CREATE INDEX concept_organismTaxId_index IF NOT EXISTS
+    FOR (n:Concept)
+    ON (n.organismTaxId);
+
+    CREATE INDEX concept_organismName_index IF NOT EXISTS
+    FOR (n:Concept)
+    ON (n.organismName);
+
+For ``xxx.node_ids.dump`` files, they are CSV files that contain node IDs, concept types, and the extra properties above for creating graph nodes. The second column is written as a Python-style list string, for example ``['pathway', 'reaction']``. Columns 3-6 are, in order, ``sourceVocabularyId``, ``reviewed`` (``'True'``/``'False'``/empty), ``organismTaxId``, and ``organismName`` - present only for the vocabularies that populate them (OHDSI stamps ``sourceVocabularyId``; UniProt stamps all three of the others), empty otherwise. Import one vocabulary at a time, replacing ``some-prefix`` with the vocabulary prefix in the file name:
 
 .. code-block:: cypher
 
@@ -238,8 +303,14 @@ For ``xxx.node_ids.dump`` files, they are CSV files that contain node IDs and co
         WHERE size(row) >= 1 AND row[0] IS NOT NULL AND trim(row[0]) <> ''
         WITH
             toString(row[0]) AS conceptId,
-            CASE WHEN size(row) >= 2 AND row[1] IS NOT NULL THEN trim(row[1]) ELSE '' END AS rawTypes
-        WITH conceptId,
+            CASE WHEN size(row) >= 2 AND row[1] IS NOT NULL THEN trim(row[1]) ELSE '' END AS rawTypes,
+            CASE WHEN size(row) >= 3 AND row[2] IS NOT NULL AND trim(row[2]) <> '' THEN trim(row[2]) ELSE null END AS sourceVocabularyId,
+            CASE WHEN size(row) >= 4 AND row[3] = 'True' THEN true
+                 WHEN size(row) >= 4 AND row[3] = 'False' THEN false
+                 ELSE null END AS reviewed,
+            CASE WHEN size(row) >= 5 AND row[4] IS NOT NULL AND trim(row[4]) <> '' THEN trim(row[4]) ELSE null END AS organismTaxId,
+            CASE WHEN size(row) >= 6 AND row[5] IS NOT NULL AND trim(row[5]) <> '' THEN trim(row[5]) ELSE null END AS organismName
+        WITH conceptId, sourceVocabularyId, reviewed, organismTaxId, organismName,
             CASE
                 WHEN rawTypes = '' OR rawTypes = '[]' THEN []
                 ELSE [
@@ -259,12 +330,17 @@ For ``xxx.node_ids.dump`` files, they are CSV files that contain node IDs and co
                     | trim(label)
                 ]
             END AS parsedLabels
-        RETURN conceptId, [label IN parsedLabels WHERE label <> ''] AS labels
+        RETURN conceptId, [label IN parsedLabels WHERE label <> ''] AS labels,
+            sourceVocabularyId, reviewed, organismTaxId, organismName
         ",
         "
         MERGE (n:Concept {prefix: $concept_prefix, id: conceptId})
-        WITH n, labels
+        WITH n, labels, sourceVocabularyId, reviewed, organismTaxId, organismName
         CALL apoc.create.addLabels(n, labels) YIELD node
+        FOREACH (_ IN CASE WHEN sourceVocabularyId IS NULL THEN [] ELSE [1] END | SET node.sourceVocabularyId = sourceVocabularyId)
+        FOREACH (_ IN CASE WHEN reviewed IS NULL THEN [] ELSE [1] END | SET node.reviewed = reviewed)
+        FOREACH (_ IN CASE WHEN organismTaxId IS NULL THEN [] ELSE [1] END | SET node.organismTaxId = organismTaxId)
+        FOREACH (_ IN CASE WHEN organismName IS NULL THEN [] ELSE [1] END | SET node.organismName = organismName)
         RETURN count(node) AS upserted
         ",
         {batchSize: 10000, parallel: true, params: {concept_prefix: 'some-prefix'}}

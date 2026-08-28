@@ -253,11 +253,13 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
         dtype={
             'concept_id': int,
             'concept_name': str,
+            'vocabulary_id': str,
             'valid_end_date': int,
         },
         usecols=[
             'concept_id',
             'concept_name',
+            'vocabulary_id',
             'valid_end_date',
         ],
         sep='\t',
@@ -279,6 +281,7 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
                 status=ConceptStatus.DEPRECATED
                        if row['valid_end_date'] < date_int
                        else ConceptStatus.ACTIVE,
+                sourceVocabularyId=None if pd.isna(row['vocabulary_id']) else str(row['vocabulary_id']),
             )
             concepts[row['concept_id']] = concept
 

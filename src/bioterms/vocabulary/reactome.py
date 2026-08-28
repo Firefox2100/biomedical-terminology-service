@@ -12,13 +12,14 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import ReactomeConcept
 from bioterms.model.annotation import Annotation
-from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_graph_to_file, \
-    write_annotations_to_file
+from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
 
 
 VOCABULARY_NAME = 'Reactome Pathways'
 VOCABULARY_PREFIX = ConceptPrefix.REACTOME
-ANNOTATIONS = []
+ANNOTATIONS = [
+    ConceptPrefix.UNIPROT,
+]
 SIMILARITY_METHODS = []
 FILE_PATHS = [
     'reactome/pathway.csv',
@@ -32,43 +33,6 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = ReactomeConcept
-
-HGNC_SYMBOL_FILE_PATH = 'hgnc/symbol.txt'
-
-
-def _load_uniprot_to_symbol_map() -> dict[str, str]:
-    """
-    Build a UniProt accession -> current HGNC symbol crosswalk from the HGNC release file.
-
-    reactome/gene_mapping.csv's 'symbol' column is misnamed: it actually holds UniProt
-    accessions (Reactome's native protein identifier), not HGNC gene symbols -- every value
-    observed matches the UniProt accession format, not a gene symbol. This resolves them to
-    the real current HGNC symbol via HGNC's own 'uniprot_ids' column so that the HGNC_SYMBOL
-    ('gene' prefix) namespace only ever contains genuine symbols.
-    :return: A dict mapping UniProt accession -> HGNC symbol.
-    """
-    hgnc_symbol_path = os.path.join(CONFIG.data_dir, HGNC_SYMBOL_FILE_PATH)
-    if not os.path.exists(hgnc_symbol_path):
-        raise FilesNotFound(
-            'HGNC release file (hgnc/symbol.txt) not found; required to resolve Reactome\'s '
-            'UniProt-based gene mapping to HGNC symbols.'
-        )
-
-    hgnc_df = pd.read_csv(
-        str(hgnc_symbol_path),
-        sep='\t',
-        dtype=str,
-        usecols=['symbol', 'uniprot_ids'],
-    )
-
-    uniprot_to_symbol: dict[str, str] = {}
-    for _, row in hgnc_df.dropna(subset=['uniprot_ids']).iterrows():
-        for uniprot_id in row['uniprot_ids'].split('|'):
-            # First mapping wins on the rare case a UniProt accession is listed for more
-            # than one HGNC entry; ambiguous re-assignment is not attempted here.
-            uniprot_to_symbol.setdefault(uniprot_id, row['symbol'])
-
-    return uniprot_to_symbol
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -283,50 +247,35 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('Reactome release files not found')
 
-    verbose_print('Checking if HGNC symbols are loaded...')
-
-    if not offline:
-        await ensure_gene_symbol_loaded(
-            doc_db=doc_db,
-            graph_db=graph_db,
-        )
-
     concepts, reactome_graph = _process_concept_files()
     _process_relationship_files(reactome_graph)
 
-    verbose_print('Building UniProt -> HGNC symbol crosswalk...')
-    uniprot_to_symbol = _load_uniprot_to_symbol_map()
+    verbose_print('Building Reactome -> UniProt identity annotations...')
 
+    # gene_mapping.csv's 'symbol' column is misnamed: it actually holds UniProt accessions
+    # (Reactome's native protein identifier, confirmed against Reactome's own
+    # ReferenceGeneProduct.identifier field), not HGNC gene symbols. This is Reactome's own
+    # identity claim about which protein a GenomeEncodedEntity is -- EXACT is appropriate.
+    # HGNC-symbol resolution for that UniProt accession is the UniProt vocabulary's own
+    # concern (see vocabulary/uniprot.py's has_symbol annotations), not duplicated here --
+    # collapsing Reactome's protein-identity claim and HGNC's nomenclature claim into one
+    # edge was exactly the provenance conflation this change is meant to undo.
     annotations = []
-    unresolved_count = 0
     mapping_df = pd.read_csv(
         str(os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
     )
     for _, row in iter_progress(
         mapping_df.iterrows(),
-        description='Processing Reactome gene symbol mappings',
+        description='Processing Reactome UniProt mappings',
         total=len(mapping_df),
     ):
-        # row['symbol'] is actually a UniProt accession (see _load_uniprot_to_symbol_map) --
-        # resolve it to the real HGNC symbol rather than using it as one directly.
-        symbol = uniprot_to_symbol.get(row['symbol'])
-        if symbol is None:
-            unresolved_count += 1
-            continue
-
         annotations.append(Annotation(
             prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=ConceptPrefix.HGNC_SYMBOL,
+            prefixTo=ConceptPrefix.UNIPROT,
             conceptIdFrom=row['gene_id'],
-            conceptIdTo=symbol,
-            annotationType=AnnotationType.HAS_SYMBOL,
+            conceptIdTo=row['symbol'],
+            annotationType=AnnotationType.EXACT,
         ))
-
-    if unresolved_count:
-        verbose_print(
-            f'{unresolved_count} of {len(mapping_df)} Reactome UniProt IDs had no matching '
-            f'HGNC symbol and were skipped.'
-        )
 
     verbose_print('Reactome concepts constructed, saving to databases...')
 
@@ -359,6 +308,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         del concepts
         await write_annotations_to_file(
             prefix_from=VOCABULARY_PREFIX,
-            prefix_to=ConceptPrefix.HGNC_SYMBOL,
+            prefix_to=ConceptPrefix.UNIPROT,
             annotations=annotations,
         )

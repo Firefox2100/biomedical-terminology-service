@@ -1,4 +1,5 @@
 import os
+import aiofiles.os
 import httpx
 import networkx as nx
 import pandas as pd
@@ -40,6 +41,18 @@ FILE_PATHS: list[str] = [
     'snomed/uk_drug/definition.txt',
     'snomed/uk_drug/relationship.txt',
 ]
+# Historical Association Reference Set files (SAME_AS/REPLACED_BY/WAS_A/
+# POSSIBLY_EQUIVALENT_TO/etc, distinguished by refsetId) -- same three RF2 zips as
+# FILE_PATHS above (TRUD items 4/101/105), just a previously-unextracted
+# Full/Refset/Content member. Kept out of FILE_PATHS/check_files_exist deliberately: a
+# release downloaded before this was added won't have these files yet, and that must not
+# block the rest of SNOMED from loading -- _process_associations is skipped per-release
+# when its association file is absent.
+ASSOCIATION_FILE_PATHS: list[str] = [
+    'snomed/international/association.txt',
+    'snomed/uk_clinical/association.txt',
+    'snomed/uk_drug/association.txt',
+]
 TIMESTAMP_FILE = 'snomed/.timestamp'
 CONCEPT_CLASS = SnomedConcept
 
@@ -47,6 +60,14 @@ CONCEPT_CLASS = SnomedConcept
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
     """
     Download the SNOMED vocabulary files.
+
+    Gated on FILE_PATHS only, not ASSOCIATION_FILE_PATHS: the association files are
+    extracted with required=False (see the file_mapping entries below), so a release whose
+    exact filename this doesn't match yet would otherwise make this check permanently False
+    and re-trigger a full multi-GB re-download of everything on every call, forever, even
+    though the core files are already fine. Use --redownload to explicitly retry fetching
+    the association files (also covered by delete_vocabulary_files below) once the pattern
+    is confirmed correct for a given release.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
     if check_files_exist(FILE_PATHS):
@@ -79,6 +100,8 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
              os.path.join(CONFIG.data_dir, FILE_PATHS[2])),
             ('SnomedCT_InternationalRF2*/Full/Terminology/sct2_Relationship_*.txt',
              os.path.join(CONFIG.data_dir, FILE_PATHS[3])),
+            ('SnomedCT_InternationalRF2*/Full/Refset/Content/der2_*Refset_Association*Full*.txt',
+             os.path.join(CONFIG.data_dir, ASSOCIATION_FILE_PATHS[0]), False),
         ],
         download_client=download_client,
     )
@@ -94,6 +117,8 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
              os.path.join(CONFIG.data_dir, FILE_PATHS[6])),
             ('SnomedCT_UKClinicalRF2*/Full/Terminology/sct2_Relationship_*.txt',
              os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
+            ('SnomedCT_UKClinicalRF2*/Full/Refset/Content/der2_*Refset_Association*Full*.txt',
+             os.path.join(CONFIG.data_dir, ASSOCIATION_FILE_PATHS[1]), False),
         ],
         download_client=download_client,
     )
@@ -109,9 +134,32 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
              os.path.join(CONFIG.data_dir, FILE_PATHS[10])),
             ('SnomedCT_UKDrugRF2*/Full/Terminology/sct2_Relationship_*.txt',
              os.path.join(CONFIG.data_dir, FILE_PATHS[11])),
+            ('SnomedCT_UKDrugRF2*/Full/Refset/Content/der2_*Refset_Association*Full*.txt',
+             os.path.join(CONFIG.data_dir, ASSOCIATION_FILE_PATHS[2]), False),
         ],
         download_client=download_client,
     )
+
+
+async def delete_vocabulary_files():
+    """
+    Delete the SNOMED release files, including the historical Association Reference Set
+    files -- ASSOCIATION_FILE_PATHS is deliberately kept out of the vocabulary/__init__.py
+    default fallback's FILE_PATHS-only deletion (see its module comment), so a --redownload
+    would otherwise leave stale association files on disk after this override didn't exist.
+    They would still get overwritten correctly on the next download regardless (extraction
+    always truncates), so this is a cleanliness fix rather than a correctness one.
+    """
+    for file_path in FILE_PATHS + ASSOCIATION_FILE_PATHS:
+        try:
+            await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
+        except OSError:
+            pass
+
+    try:
+        await aiofiles.os.remove(os.path.join(CONFIG.data_dir, TIMESTAMP_FILE))
+    except OSError:
+        pass
 
 
 def _process_concepts(concept_file_path: str) -> dict[int, CONCEPT_CLASS]:
@@ -212,7 +260,7 @@ def _process_definitions(definition_file_path: str,
 
 
 def _process_relationships(relationship_file_path: str,
-                           snomed_graph: nx.DiGraph,
+                           snomed_graph: nx.MultiDiGraph,
                            ) -> None:
     """
     Process RF2 relationship file and update the SNOMED graph with relationships.
@@ -241,27 +289,64 @@ def _process_relationships(relationship_file_path: str,
             snomed_graph.add_edge(
                 str(row['sourceId']),
                 str(row['destinationId']),
+                key='is_a',
                 label=ConceptRelationshipType.IS_A
             )
         elif row['typeId'] == 370124000:
             # REPLACED_BY relationship -- NOTE: this typeId does not appear anywhere in the
             # current release's relationship files (verified: 0 rows, active or inactive).
             # SNOMED's actual concept-inactivation history (SAME_AS/REPLACED_BY/WAS_A/
-            # MOVED_TO) lives in the separate Association Reference Set files
-            # (der2_cRefset_AssociationReferenceFull*.txt), which this loader does not read.
-            # Left in place rather than guessing a replacement SCTID; SNOMED replaced_by is
-            # effectively non-functional until that's addressed.
+            # MOVED_TO) lives in the separate Association Reference Set files, which
+            # _process_associations below reads instead. Left in place rather than removed,
+            # in case a future RF2 release populates this typeId directly.
             snomed_graph.add_edge(
                 str(row['sourceId']),
                 str(row['destinationId']),
+                key='replaced_by',
                 label=ConceptRelationshipType.REPLACED_BY
             )
+
+
+def _process_associations(association_file_path: str,
+                          snomed_graph: nx.MultiDiGraph,
+                          ) -> None:
+    """
+    Process an RF2 Historical Association Reference Set file and add association edges to
+    the SNOMED graph, one relation type per refsetId (SAME_AS/REPLACED_BY/WAS_A/
+    POSSIBLY_EQUIVALENT_TO/MOVED_TO/etc all have distinct, standard SNOMED refsetIds --
+    deliberately not resolved to a name here, since that classification/trust judgment
+    belongs in the consuming project's relation-semantics config, not this loader. The raw
+    refsetId is preserved as the edge key so no two distinct association types are ever
+    collapsed into one relation.
+    :param association_file_path: The path to the association reference set file.
+    :param snomed_graph: The SNOMED ontology graph to update.
+    """
+    association_df = pd.read_csv(association_file_path, sep='\t', dtype={'refsetId': str})
+    association_df = rf2_dataframe_deduplicate(association_df)
+
+    verbose_print(f'Association file {association_file_path} loaded, processing associations...')
+
+    for _, row in iter_progress(
+        association_df.iterrows(),
+        description='Processing SNOMED historical associations',
+        total=len(association_df)
+    ):
+        if not bool(row['active']):
+            continue
+
+        snomed_graph.add_edge(
+            str(row['referencedComponentId']),
+            str(row['targetComponentId']),
+            key=f'snomed_association_{row["refsetId"]}',
+            label=ConceptRelationshipType.SNOMED_ASSOCIATION,
+        )
 
 
 async def _load_snomed_release(concept_file: str,
                                description_file: str,
                                definition_file: str,
                                relationship_file: str,
+                               association_file: str = None,
                                doc_db: DocumentDatabase = None,
                                graph_db: GraphDatabase = None,
                                offline: bool = False,
@@ -273,6 +358,9 @@ async def _load_snomed_release(concept_file: str,
     :param description_file: The path to the description file.
     :param definition_file: The path to the definition file.
     :param relationship_file: The path to the relationship file.
+    :param association_file: Optional path to the historical association reference set
+        file. Skipped (with a message) when None or the file does not exist on disk --
+        releases downloaded before this was added won't have it yet.
     :param doc_db: Optional DocumentDatabase instance to use.
     :param graph_db: Optional GraphDatabase instance to use.
     :param offline: Whether to operate in offline mode and write to data files only.
@@ -289,7 +377,11 @@ async def _load_snomed_release(concept_file: str,
     _process_descriptions(description_full_path, concepts_dict)
     _process_definitions(definition_full_path, concepts_dict)
 
-    snomed_graph = nx.DiGraph()
+    # MultiDiGraph, not DiGraph: a single (source, target) pair can now legitimately carry
+    # more than one edge -- an is_a/replaced_by relationship alongside one or more distinct
+    # snomed_association refsetId edges, or two different association refsetIds between the
+    # same pair. A plain DiGraph would silently overwrite one with the other.
+    snomed_graph = nx.MultiDiGraph()
     concepts = list(concepts_dict.values())
     del concepts_dict
 
@@ -297,6 +389,16 @@ async def _load_snomed_release(concept_file: str,
         snomed_graph.add_node(concept.concept_id)
 
     _process_relationships(relationship_full_path, snomed_graph)
+
+    if association_file is not None:
+        association_full_path = os.path.join(CONFIG.data_dir, association_file)
+        if os.path.exists(association_full_path):
+            _process_associations(association_full_path, snomed_graph)
+        else:
+            verbose_print(
+                f'Association file {association_full_path} not found -- skipping historical '
+                f'association edges for this release (re-download to pick them up).'
+            )
 
     verbose_print('Concept processing complete, saving to databases...')
 
@@ -347,6 +449,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description_file=FILE_PATHS[1],
         definition_file=FILE_PATHS[2],
         relationship_file=FILE_PATHS[3],
+        association_file=ASSOCIATION_FILE_PATHS[0],
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
@@ -359,6 +462,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description_file=FILE_PATHS[5],
         definition_file=FILE_PATHS[6],
         relationship_file=FILE_PATHS[7],
+        association_file=ASSOCIATION_FILE_PATHS[1],
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
@@ -370,6 +474,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description_file=FILE_PATHS[9],
         definition_file=FILE_PATHS[10],
         relationship_file=FILE_PATHS[11],
+        association_file=ASSOCIATION_FILE_PATHS[2],
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,

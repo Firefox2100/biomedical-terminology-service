@@ -65,3 +65,12 @@ class OhdsiConcept(Concept):
         description='List of drug strengths associated with the concept.',
         alias='drugStrengths',
     )
+    source_vocabulary_id: Optional[str] = Field(
+        None,
+        description='The OHDSI vocabulary_id (CONCEPT.csv) this concept originates from '
+                    '(e.g. SNOMED, Read, RxNorm). Scopes subsets of the OHDSI internal '
+                    'hierarchy/relationships that are reformatted copies of a source '
+                    'vocabulary also natively present in this graph, rather than '
+                    'independently OHDSI-curated content.',
+        alias='sourceVocabularyId',
+    )

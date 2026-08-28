@@ -1,4 +1,5 @@
 import traceback
+from pathlib import Path
 from typing import Annotated, Optional
 from rich.table import Table
 import typer
@@ -6,7 +7,7 @@ import typer
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.vocabulary import get_vocabulary_config
 from bioterms.annotation import download_annotation, load_annotation, delete_annotation, get_annotation_status, \
-    get_annotation_config
+    get_annotation_config, restore_annotation
 from .utils import CONSOLE, run_async
 
 
@@ -186,6 +187,62 @@ async def load_command(prefix_1: Annotated[
 
     for prefix_a, prefix_b in annotations:
         await _load_one_annotation(prefix_a, prefix_b, overwrite, offline)
+
+
+@app.command(name='restore', help='Restore an annotation dump file into the database.')
+@run_async
+async def restore_command(annotation_dump: Annotated[
+                              Path,
+                              typer.Argument(help='Path to a <prefix1>[-<prefix2>].annotation.dump file.')
+                          ],
+                          source_prefix: Annotated[
+                              Optional[str],
+                              typer.Option(
+                                  '--source-prefix',
+                                  help='Fallback source prefix for rows without one, overriding '
+                                       'inference from the dump filename.',
+                              )
+                          ] = None,
+                          target_prefix: Annotated[
+                              Optional[str],
+                              typer.Option(
+                                  '--target-prefix',
+                                  help='Fallback target prefix for rows without one, overriding '
+                                       'inference from the dump filename.',
+                              )
+                          ] = None,
+                          overwrite: Annotated[
+                              bool,
+                              typer.Option(
+                                 '--overwrite',
+                                 '-o',
+                                 help='Drop existing annotations for the pair before restoring, instead of '
+                                      'upserting into whatever is already there. Requires the pair to be '
+                                      'resolvable from the filename or --source-prefix/--target-prefix.')
+                          ] = False,
+                          batch_size: Annotated[
+                              int,
+                              typer.Option(
+                                  '--batch-size',
+                                  '-b',
+                                  help='Number of annotations written to the database per request.',
+                              )
+                          ] = 5000,
+                          ):
+    try:
+        count = await restore_annotation(
+            dump_path=annotation_dump,
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+            overwrite=overwrite,
+            batch_size=batch_size,
+        )
+        CONSOLE.print(
+            f'[green]Successfully restored {count} annotations from {annotation_dump}.[/green]'
+        )
+    except Exception as e:
+        CONSOLE.print(f'[red]Failed to restore annotations from {annotation_dump}: {e}[/red]')
+        traceback.print_exc()
 
 
 @app.command(name='delete', help='Delete a vocabulary annotation from database.')

@@ -24,12 +24,21 @@ OMIM                         Supported          Downloaded from the BioPortal AP
 ORDO                         Supported          Downloaded from the BioPortal API.
 Reactome                     Supported          Reactome only releases a Neo4j/SQL dump; this project provides a script
                                                  to convert that dump into the CSV import format it expects.
-SNOMED CT                    Supported          Downloaded from the NHS TRUD API.
+SNOMED CT                    Supported          Downloaded from the NHS TRUD API, including its historical Association
+                                                 Reference Set files (SAME_AS/REPLACED_BY/WAS_A/etc, loaded as
+                                                 ``snomed_association`` relationships).
+UniProt                      Supported          Downloaded via FTP from UniProt. The **complete** UniProtKB release
+                                                 (Swiss-Prot + TrEMBL, every organism) is loaded, not a subset scoped
+                                                 to another vocabulary - see :doc:`build-database` for its size and
+                                                 the ``organismTaxId``/``organismName`` properties used to scope it
+                                                 at query time instead.
 ICD 10                       Not Supported       On the roadmap for future support.
 ICD 11                       Will Not Support    ICD 11 does not release the full terminology, only some linearizations.
 ============================ ================== ===========================================================================
 
 For other vocabularies not listed here, if you have a use case for their inclusion, please open an issue on the GitHub repository to discuss potential support and implementation.
+
+Read v2 is a special case: it is not itself a supported vocabulary (it cannot be licensed or downloaded on its own, and has no ``ConceptPrefix``), but a transient migration-mapping overlay onto the existing OHDSI/CTV3/SNOMED nodes is available - see :doc:`build-database`'s "Read v2 migration overlay" section.
 
 Specifically, although ICD 10 and ICD 11 are officially endorsed by the WHO and widely used in clinical settings, they are not prioritized for support in this software. ICD uses a flat structure without rich semantic relationships between concepts, providing minimal benefit for research on ontology itself. Additionally, ICD 11 does not release the full terminology, only some linearizations, which limits its utility in this context. If this changes in the future, or if you are willing to contribute to their integration, please reach out via the GitHub repository.
 
@@ -58,6 +67,7 @@ Gene Symbol - HPO     HPO's own gene mapping file, downloaded alongside HPO.
 Gene Symbol - NCIT    NCIT's own gene mapping file, downloaded alongside NCIT.
 Gene Symbol - OMIM    Derived from the OMIM release (BioPortal API).
 Gene Symbol - ORDO    ORDO's own gene mapping file, downloaded alongside ORDO.
+Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference, loaded alongside UniProt.
 HGNC - Mondo          Derived from cross-references in the Mondo release.
 HPO - Mondo           Derived from cross-references in the Mondo release.
 HPO - ORDO            HPO-ORDO Ontological Module (HOOM), from the BioPortal API (requires a BioPortal API key).
@@ -69,6 +79,7 @@ NCIT - OHDSI          Derived from the OHDSI release.
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
+Reactome - UniProt    UniProt accession Reactome's own gene/protein records reference, loaded alongside Reactome.
 ===================== ======================================================================================
 
 Annotation pairs that are derived from a vocabulary's own release files (Mondo's cross-references, or a vocabulary's own gene/mapping file) do not require a separate download step or credential beyond what the parent vocabulary already needs.

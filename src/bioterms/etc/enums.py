@@ -42,6 +42,7 @@ class ConceptPrefix(Enum):
     ORDO = 'ordo'
     REACTOME = 'reactome'
     SNOMED = 'snomed'
+    UNIPROT = 'uniprot'
 
 
 class ConceptStatus(Enum):
@@ -77,6 +78,7 @@ class ConceptRelationshipType(Enum):
     OHDSI_RELATIONSHIP = 'ohdsi_relationship'
     ANNOTATED_WITH = 'annotated_with'
     CONSIDER = 'consider'
+    SNOMED_ASSOCIATION = 'snomed_association'
 
 
 class DocDatabaseDriverType(Enum):

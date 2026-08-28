@@ -2,6 +2,7 @@ import os
 import io
 import csv
 import importlib
+from pathlib import Path
 import aiofiles
 import networkx as nx
 
@@ -382,5 +383,107 @@ async def get_similarity_status(prefix: ConceptPrefix,
     await cache.save_similarity_status(
         status=status,
     )
+
+
+def _parse_similarity_dump_filename(path: Path,
+                                    target_prefix: ConceptPrefix,
+                                    ) -> tuple[SimilarityMethod, ConceptPrefix | None]:
+    """
+    Parse the similarity method (and, if present, corpus prefix) out of a
+    `<target_prefix>-<method>[-<corpus>].similarity.dump` filename, as written by
+    `calculate_similarity(..., offline=True)`.
+    :param path: The similarity dump file path.
+    :param target_prefix: The target vocabulary prefix expected to lead the filename.
+    :return: The similarity method and corpus prefix (None for intrinsic similarity).
+    """
+    suffix = '.similarity.dump'
+    stem = path.name[:-len(suffix)]
+    start = f'{target_prefix.value}-'
+    if not stem.startswith(start):
+        raise ValueError(f'Unexpected similarity filename: {path.name}')
+    remainder = stem[len(start):]
+    for method in sorted(SimilarityMethod, key=lambda value: len(value.value), reverse=True):
+        if remainder == method.value:
+            return method, None
+        method_prefix = f'{method.value}-'
+        if remainder.startswith(method_prefix):
+            corpus_value = remainder[len(method_prefix):]
+            try:
+                return method, ConceptPrefix(corpus_value)
+            except ValueError as exc:
+                raise ValueError(f'Unknown corpus prefix in {path.name}') from exc
+    raise ValueError(f'Unknown similarity method in {path.name}')
+
+
+async def restore_similarity(target_prefix: ConceptPrefix,
+                             batch_size: int = 5000,
+                             offline_dir: str | os.PathLike | None = None,
+                             cache: Cache = None,
+                             graph_db: GraphDatabase = None,
+                             ) -> int:
+    """
+    Restore every offline `<target_prefix>-*.similarity.dump` file (produced by
+    `calculate_similarity(..., offline=True)`) into the live graph database.
+
+    This goes through `GraphDatabase.save_similarity_scores` -- the same interface the live
+    (non-offline) calculation path uses (see `_flush_similarity_results`), so it works against
+    whichever graph database driver is configured (Neo4j or PostgreSQL) rather than assuming
+    Neo4j. Like the live path, there is no "overwrite" here: similarity scores are always
+    upserted (MERGE), since nothing in this codebase deletes similarity relationships either.
+    :param target_prefix: The target vocabulary prefix whose similarity dumps to restore.
+    :param batch_size: Number of similarity scores written per `save_similarity_scores` call.
+    :param offline_dir: Directory containing the offline dump files (default: BTS_DATA_DIR/offline).
+    :param cache: The cache instance.
+    :param graph_db: The graph database instance.
+    :return: The total number of similarity scores restored.
+    """
+    offline_dir = str(offline_dir) if offline_dir is not None else os.path.join(CONFIG.data_dir, 'offline')
+    paths = sorted(Path(offline_dir).glob(f'{target_prefix.value}-*.similarity.dump'))
+    if not paths:
+        raise ValueError(f'No similarity dump files found for {target_prefix.value} in {offline_dir}')
+
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    total = 0
+
+    for path in paths:
+        method, corpus = _parse_similarity_dump_filename(path, target_prefix)
+        batch: list[tuple[str, str, float]] = []
+
+        with path.open(encoding='utf-8', newline='') as f:
+            for row in csv.reader(f):
+                if not row or not any(value.strip() for value in row):
+                    continue
+                if len(row) < 3:
+                    raise ValueError(f'Malformed similarity row in {path}: {row!r}')
+                batch.append((row[0], row[1], float(row[2])))
+                if len(batch) >= batch_size:
+                    await graph_db.save_similarity_scores(
+                        prefix_from=target_prefix,
+                        prefix_to=target_prefix,
+                        similarity_scores=batch,
+                        similarity_method=method,
+                        corpus_prefix=corpus,
+                    )
+                    total += len(batch)
+                    batch = []
+
+        if batch:
+            await graph_db.save_similarity_scores(
+                prefix_from=target_prefix,
+                prefix_to=target_prefix,
+                similarity_scores=batch,
+                similarity_method=method,
+                corpus_prefix=corpus,
+            )
+            total += len(batch)
+
+    if cache is None:
+        cache = get_active_cache()
+
+    await cache.rotate_dataset_version()
+
+    return total
 
     return status

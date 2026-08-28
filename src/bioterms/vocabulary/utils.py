@@ -18,7 +18,7 @@ from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorData
     get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.database.doc_db.utils import generate_extra_data
 from bioterms.model.vocabulary_status import VocabularyStatus
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
 from bioterms.model.annotation import Annotation
 
 
@@ -35,6 +35,7 @@ ALL_VOCABULARIES = {
     ConceptPrefix.ORDO: 'ordo',
     ConceptPrefix.REACTOME: 'reactome',
     ConceptPrefix.SNOMED: 'snomed',
+    ConceptPrefix.UNIPROT: 'uniprot',
 }
 
 
@@ -263,7 +264,14 @@ async def write_graph_to_file(prefix: ConceptPrefix,
     for i in range(0, len(concepts), 10000):
         batch = [c.model_dump() for c in concepts[i:i + 10000]]
         rows = [
-            (concept['conceptId'], concept['conceptTypes'])
+            (
+                concept['conceptId'],
+                concept['conceptTypes'],
+                *(
+                    '' if concept.get(prop) is None else str(concept[prop])
+                    for prop in GRAPH_NODE_EXTRA_PROPERTIES
+                ),
+            )
             for concept in batch
         ]
         chunk = _encode_csv_batch(rows, csv_kwargs)

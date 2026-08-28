@@ -1,12 +1,12 @@
 import asyncio
 import re
 import time
-from uuid import UUID
+from uuid import UUID, uuid4
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 from sqlalchemy import Column, ForeignKey, Index, MetaData, String, DateTime, Table, Text, and_, \
-    bindparam, case, delete, func, insert, update, literal, select, text
+    bindparam, case, delete, func, insert, intersect, update, literal, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
@@ -98,6 +98,36 @@ async def _manual_upsert_rows(conn: AsyncConnection,
             )
 
 
+def _escape_like_term(term: str) -> str:
+    """
+    Escape a search term for safe interpolation into an ILIKE '%...%' pattern.
+    :param term: The raw search term.
+    :return: The term with LIKE metacharacters escaped (to be used with escape='\\\\').
+    """
+    return term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
+def _escape_mysql_boolean_term(term: str) -> str:
+    """
+    Strip MySQL boolean full-text query operators from a user-supplied search term, so it can
+    be safely interpolated into a `MATCH ... AGAINST (... IN BOOLEAN MODE)` query string built
+    by string concatenation (boolean mode has no separate parameter placeholder for operators).
+    :param term: The raw search term.
+    :return: The term with boolean-mode operator characters removed.
+    """
+    return re.sub(r'[+\-><()~*"@]', '', term)
+
+
+def _fts5_quote(term: str) -> str:
+    """
+    Quote a search term as an SQLite FTS5 string literal/phrase, so it is matched literally
+    rather than parsed as FTS5 query syntax.
+    :param term: The raw search term.
+    :return: The term wrapped in double quotes, with internal double quotes escaped.
+    """
+    return '"' + term.replace('"', '""') + '"'
+
+
 @dataclass(frozen=True)
 class _UserTables:
     users: Table
@@ -108,6 +138,7 @@ class _UserTables:
 class _PrefixTables:
     concept: Table
     ngram: Table
+    fts: Table
 
 
 def _build_user_tables(metadata: MetaData,
@@ -504,7 +535,26 @@ class SqlUserRepository(UserRepository):
 class SqlDocumentDatabase(DocumentDatabase):
     """
     A SQL implementation of the DocumentDatabase interface.
+
+    Auto-complete substring search is backed by a native trigram/n-gram text index when the
+    connected database supports one, falling back to the portable hand-rolled n-gram side
+    table (see `Concept.n_grams()`) otherwise:
+
+    - PostgreSQL: a `pg_trgm` GIN index on `search_text` (the `pg_trgm` extension is enabled
+      automatically if the connection has privileges to do so).
+    - SQLite: an FTS5 virtual table using the built-in `trigram` tokenizer (SQLite >= 3.34.0).
+    - MySQL: a `FULLTEXT ... WITH PARSER ngram` index on `search_text` (MySQL's built-in ngram
+      full-text parser plugin; not available on MariaDB, which falls back to the n-gram table).
+
+    Capability is probed once per instance (see `_get_native_search_mode`) and cached for the
+    instance's lifetime -- it is not re-probed per query.
     """
+
+    # Sentinel values for `self._native_search_mode`.
+    _NATIVE_NONE = 'none'
+    _NATIVE_PG_TRGM = 'pg_trgm'
+    _NATIVE_SQLITE_TRIGRAM = 'sqlite_trigram'
+    _NATIVE_MYSQL_NGRAM = 'mysql_ngram'
 
     def __init__(
         self,
@@ -525,6 +575,10 @@ class SqlDocumentDatabase(DocumentDatabase):
         self._is_sqlite = self._engine.dialect.name == 'sqlite'
 
         self._json_type = JSONB if self._is_postgres else JSON
+
+        self._native_search_mode: Optional[str] = None
+        self._native_search_lock = asyncio.Lock()
+        self._search_index_ready: set[str] = set()
 
     @property
     def users(self) -> SqlUserRepository:
@@ -593,11 +647,154 @@ class SqlDocumentDatabase(DocumentDatabase):
             ),
         )
 
+        # Only used in `_NATIVE_SQLITE_TRIGRAM` mode. Not part of `create_all` (SQLite FTS5
+        # virtual tables need the dialect-specific `CREATE VIRTUAL TABLE ... USING fts5(...)`
+        # DDL issued by `_ensure_search_index`) -- this Table object exists purely so DML
+        # (insert/delete/select) against it can go through the normal query builder.
+        fts = Table(
+            f'{concept_table_name}_fts',
+            self._md,
+            Column('concept_id', String(255), primary_key=True),
+            Column('search_text', Text, nullable=False),
+        )
+
         Index(f'ix_{concept_table_name}_vector_id', concept.c.vector_id)
         Index(f'ix_{ngram_table_name}_ngram', ngram.c.ngram)
 
-        self._tables_cache[p] = _PrefixTables(concept=concept, ngram=ngram)
+        self._tables_cache[p] = _PrefixTables(concept=concept, ngram=ngram, fts=fts)
         return self._tables_cache[p]
+
+    async def _detect_native_search_mode(self,
+                                         conn: AsyncConnection,
+                                         ) -> str:
+        """
+        Probe the connected database for a native trigram/n-gram full-text search capability.
+        Each probe is a real (throwaway) DDL statement rather than a version/catalog check,
+        since the capability can be missing even on a database that generally supports it
+        (e.g. PostgreSQL without the `pg_trgm` extension installed, or MySQL/MariaDB without
+        the `ngram` full-text parser plugin loaded) -- and can be missing for permission
+        reasons even where the feature is technically installed.
+        :param conn: An AsyncConnection with an open write transaction.
+        :return: One of the `_NATIVE_*` sentinels, or `_NATIVE_NONE` if nothing usable was found.
+        """
+        if self._is_postgres:
+            try:
+                # In its own SAVEPOINT: a failed statement aborts the whole surrounding
+                # transaction on PostgreSQL, which would otherwise take the fallback SELECT
+                # below down with it too (masking whatever it would have found).
+                async with conn.begin_nested():
+                    await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+                return self._NATIVE_PG_TRGM
+            except Exception:
+                # Might already be enabled by a DBA even though this connection lacks
+                # privileges to CREATE EXTENSION itself -- check before giving up on it.
+                try:
+                    result = await conn.execute(
+                        text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'")
+                    )
+                    if result.first() is not None:
+                        return self._NATIVE_PG_TRGM
+                except Exception:
+                    pass
+                return self._NATIVE_NONE
+
+        if self._is_sqlite:
+            probe = f'_bts_fts5_probe_{uuid4().hex}'
+            try:
+                await conn.execute(
+                    text(f"CREATE VIRTUAL TABLE {probe} USING fts5(x, tokenize='trigram')")
+                )
+                await conn.execute(text(f'DROP TABLE {probe}'))
+                return self._NATIVE_SQLITE_TRIGRAM
+            except Exception:
+                return self._NATIVE_NONE
+
+        if self._is_mysql:
+            probe = f'_bts_ngram_probe_{uuid4().hex}'
+            try:
+                await conn.execute(
+                    text(
+                        f'CREATE TEMPORARY TABLE {probe} '
+                        f'(x TEXT, FULLTEXT idx_{probe} (x) WITH PARSER ngram) ENGINE=InnoDB'
+                    )
+                )
+                await conn.execute(text(f'DROP TEMPORARY TABLE {probe}'))
+                return self._NATIVE_MYSQL_NGRAM
+            except Exception:
+                return self._NATIVE_NONE
+
+        return self._NATIVE_NONE
+
+    async def _get_native_search_mode(self) -> str:
+        """
+        Get the native search mode for this database, detecting and caching it on first use.
+        :return: One of the `_NATIVE_*` sentinels.
+        """
+        if self._native_search_mode is not None:
+            return self._native_search_mode
+
+        async with self._native_search_lock:
+            if self._native_search_mode is not None:
+                return self._native_search_mode
+
+            async with self._engine.begin() as conn:
+                self._native_search_mode = await self._detect_native_search_mode(conn)
+
+        return self._native_search_mode
+
+    async def _ensure_search_index(self,
+                                   conn: AsyncConnection,
+                                   tables: _PrefixTables,
+                                   mode: str,
+                                   suffix: str,
+                                   ):
+        """
+        Ensure the native search index (or, for `_NATIVE_NONE`, nothing -- the n-gram table is
+        already handled by `create_all`) exists for a prefix's concept table, doing nothing if
+        it was already ensured earlier in this instance's lifetime.
+        :param conn: AsyncConnection with an open write transaction.
+        :param tables: The _PrefixTables for this prefix.
+        :param mode: The native search mode, from `_get_native_search_mode`.
+        :param suffix: The safe table-name suffix for this prefix (see `safe_table_suffix`).
+        """
+        if suffix in self._search_index_ready:
+            return
+
+        concept_name = tables.concept.name
+
+        if mode == self._NATIVE_PG_TRGM:
+            idx_name = f'ix_{concept_name}_trgm'
+            await conn.execute(
+                text(
+                    f'CREATE INDEX IF NOT EXISTS {idx_name} ON {concept_name} '
+                    f'USING GIN (search_text gin_trgm_ops)'
+                )
+            )
+        elif mode == self._NATIVE_SQLITE_TRIGRAM:
+            await conn.execute(
+                text(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {tables.fts.name} USING fts5("
+                    f"concept_id UNINDEXED, search_text, tokenize='trigram')"
+                )
+            )
+        elif mode == self._NATIVE_MYSQL_NGRAM:
+            idx_name = f'ftx_{concept_name}_ngram'
+            exists_result = await conn.execute(
+                text(
+                    'SELECT 1 FROM information_schema.statistics '
+                    'WHERE table_schema = DATABASE() AND table_name = :t AND index_name = :i'
+                ),
+                {'t': concept_name, 'i': idx_name},
+            )
+            if exists_result.first() is None:
+                await conn.execute(
+                    text(
+                        f'ALTER TABLE {concept_name} ADD FULLTEXT INDEX {idx_name} '
+                        f'(search_text) WITH PARSER ngram'
+                    )
+                )
+
+        self._search_index_ready.add(suffix)
 
     async def _ensure_tables_exist(self,
                                    conn: AsyncConnection,
@@ -610,12 +807,21 @@ class SqlDocumentDatabase(DocumentDatabase):
         :return: A _PrefixTables instance.
         """
         tables = self._tables_for_prefix(prefix)
+        mode = await self._get_native_search_mode()
+
+        create_tables = [tables.concept]
+        if mode == self._NATIVE_NONE:
+            create_tables.append(tables.ngram)
 
         await conn.run_sync(
             self._md.create_all,
-            tables=[tables.concept, tables.ngram],
+            tables=create_tables,
             checkfirst=True
         )
+
+        suffix = safe_table_suffix(prefix.value if hasattr(prefix, 'value') else str(prefix))
+        await self._ensure_search_index(conn, tables, mode, suffix)
+
         return tables
 
     def _index_target_sql(self,
@@ -664,6 +870,49 @@ class SqlDocumentDatabase(DocumentDatabase):
         payload['vectorId'] = row.vector_id
         return payload
 
+    async def _index_exists(self,
+                            conn,
+                            idx_name: str,
+                            table_name: str,
+                            ) -> bool:
+        """
+        Check whether an index with the given name already exists, without raising if it does
+        not. Used to make `create_index` idempotent -- a plain `CREATE INDEX` has no portable
+        `IF NOT EXISTS` across every dialect this driver supports (see the comment in
+        `create_index`), so a duplicate-name failure is disambiguated afterwards from a real
+        failure by checking the catalog directly instead.
+        :param conn: The database connection to execute on.
+        :param idx_name: The name of the index to check for.
+        :param table_name: The name of the table the index belongs to.
+        :return: True if the index already exists, False otherwise (including on dialects this
+            doesn't know how to check, so callers should treat False as "inconclusive").
+        """
+        try:
+            if self._is_postgres:
+                result = await conn.execute(
+                    text('SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = :name'),
+                    {'name': idx_name},
+                )
+            elif self._is_mysql:
+                result = await conn.execute(
+                    text(
+                        'SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() '
+                        'AND table_name = :table AND index_name = :name'
+                    ),
+                    {'table': table_name, 'name': idx_name},
+                )
+            elif self._is_sqlite:
+                result = await conn.execute(
+                    text("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = :name"),
+                    {'name': idx_name},
+                )
+            else:
+                return False
+        except Exception:
+            return False
+
+        return result.first() is not None
+
     @staticmethod
     async def _drop_index_if_exists(conn,
                                     idx_name: str,
@@ -672,16 +921,24 @@ class SqlDocumentDatabase(DocumentDatabase):
         """
         Best-effort drop of an index, trying both the standalone and table-qualified DROP INDEX
         syntax since dialects differ on which is required.
+
+        Each attempt runs inside its own SAVEPOINT (`conn.begin_nested()`): on PostgreSQL, a
+        failed statement -- including a routine "no such index" from an index that was never
+        there in the first place, the expected case here -- aborts the whole surrounding
+        transaction, not just that statement, which would otherwise take down the CREATE INDEX
+        this is normally called right before. The savepoint contains the failure to itself.
         :param conn: The database connection to execute on.
         :param idx_name: The name of the index to drop.
         :param table_name: The name of the table the index belongs to.
         """
         try:
-            await conn.execute(text(f'DROP INDEX {idx_name}'))
+            async with conn.begin_nested():
+                await conn.execute(text(f'DROP INDEX {idx_name}'))
         except Exception:
             # Some DBs need "DROP INDEX idx ON table"
             try:
-                await conn.execute(text(f'DROP INDEX {idx_name} ON {table_name}'))
+                async with conn.begin_nested():
+                    await conn.execute(text(f'DROP INDEX {idx_name} ON {table_name}'))
             except Exception:
                 pass
 
@@ -716,19 +973,30 @@ class SqlDocumentDatabase(DocumentDatabase):
                 await self._drop_index_if_exists(conn, idx_name, concept.name)
 
             unique_sql = 'UNIQUE ' if unique else ''
-            # Some DBs do not support IF NOT EXISTS for indexes uniformly.
+            create_stmt = text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} ({target_sql})')
+
+            # Some DBs do not support IF NOT EXISTS for indexes uniformly, hence the plain
+            # CREATE + catch below rather than relying on that -- wrapped in its own SAVEPOINT
+            # since on PostgreSQL a failed statement aborts the whole surrounding transaction,
+            # which would otherwise take down the _index_exists check right after it too.
             try:
-                await conn.execute(text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} ({target_sql})'))
+                async with conn.begin_nested():
+                    await conn.execute(create_stmt)
             except Exception as e:
                 if not overwrite:
+                    # create_index() is meant to be idempotent -- called on every
+                    # load/restore, same as the Mongo driver's create_index(), where
+                    # re-creating an already-identical index is a silent no-op. A duplicate
+                    # index name is not a real error here; anything else still is.
+                    if await self._index_exists(conn, idx_name, concept.name):
+                        return
                     raise IndexCreationError(f'Failed to create index {idx_name}: {e}') from e
 
                 # Last attempt: drop then create
                 await self._drop_index_if_exists(conn, idx_name, concept.name)
                 try:
-                    await conn.execute(
-                        text(f'CREATE {unique_sql}INDEX {idx_name} ON {concept.name} ({target_sql})')
-                    )
+                    async with conn.begin_nested():
+                        await conn.execute(create_stmt)
                 except Exception as e2:
                     raise IndexCreationError(f'Failed to create index {idx_name}: {e2}') from e2
 
@@ -751,7 +1019,10 @@ class SqlDocumentDatabase(DocumentDatabase):
             tables = await self._ensure_tables_exist(conn, prefix)
             idx_name = f"{tables.concept.name}_{field}_index"
             try:
-                await conn.execute(text(f"DROP INDEX {idx_name}"))
+                # Own SAVEPOINT: a failed statement aborts the whole surrounding transaction on
+                # PostgreSQL, which would otherwise take the "ON table" fallback below with it.
+                async with conn.begin_nested():
+                    await conn.execute(text(f"DROP INDEX {idx_name}"))
             except Exception:
                 await conn.execute(text(f"DROP INDEX {idx_name} ON {tables.concept.name}"))
 
@@ -773,18 +1044,20 @@ class SqlDocumentDatabase(DocumentDatabase):
             tables = await self._ensure_tables_exist(conn, prefix)
             concept_t = tables.concept
             ngram_t = tables.ngram
+            fts_t = tables.fts
+            mode = await self._get_native_search_mode()
 
             for i in range(0, len(terms), self._batch_size):
                 batch = terms[i : i + self._batch_size]
 
                 rows = []
                 ngram_rows = []
+                fts_rows = []
 
                 for c in batch:
                     payload = c.model_dump(exclude_none=True)
 
                     st = c.search_text()
-                    ngrams = c.n_grams()
 
                     rows.append(
                         {
@@ -795,8 +1068,19 @@ class SqlDocumentDatabase(DocumentDatabase):
                             'vector_id': getattr(c, 'vector_id', None),
                         }
                     )
-                    for ng in ngrams:
-                        ngram_rows.append({'concept_id': c.concept_id, 'ngram': ng})
+
+                    if mode == self._NATIVE_NONE:
+                        # No native trigram/n-gram search available: keep populating the
+                        # portable n-gram side table used by the fallback query path.
+                        for ng in c.n_grams():
+                            ngram_rows.append({'concept_id': c.concept_id, 'ngram': ng})
+                    elif mode == self._NATIVE_SQLITE_TRIGRAM:
+                        # The FTS5 shadow table isn't kept in sync automatically (it isn't
+                        # declared as an "external content" table over `concept_t`), so it is
+                        # mirrored by hand alongside the concept row itself.
+                        fts_rows.append({'concept_id': c.concept_id, 'search_text': st})
+                    # NATIVE_PG_TRGM / NATIVE_MYSQL_NGRAM index `concept_t.search_text`
+                    # directly -- no extra row needed beyond the concept upsert below.
 
                 if not rows:
                     continue
@@ -825,9 +1109,15 @@ class SqlDocumentDatabase(DocumentDatabase):
                         )
 
                 concept_ids = [c.concept_id for c in batch]
-                await conn.execute(delete(ngram_t).where(ngram_t.c.concept_id.in_(concept_ids)))
-                if ngram_rows:
-                    await conn.execute(insert(ngram_t), ngram_rows)
+
+                if mode == self._NATIVE_NONE:
+                    await conn.execute(delete(ngram_t).where(ngram_t.c.concept_id.in_(concept_ids)))
+                    if ngram_rows:
+                        await conn.execute(insert(ngram_t), ngram_rows)
+                elif mode == self._NATIVE_SQLITE_TRIGRAM:
+                    await conn.execute(delete(fts_t).where(fts_t.c.concept_id.in_(concept_ids)))
+                    if fts_rows:
+                        await conn.execute(insert(fts_t), fts_rows)
 
     async def count_terms(self,
                           prefix: ConceptPrefix,
@@ -934,8 +1224,20 @@ class SqlDocumentDatabase(DocumentDatabase):
         async with self._engine.begin() as conn:
             tables = self._tables_for_prefix(prefix)
 
+            # The FTS5 shadow table isn't managed by `create_all`/metadata, so it needs an
+            # explicit drop here; PostgreSQL's trgm GIN index and MySQL's ngram FULLTEXT index
+            # both live on `concept_t` itself and are dropped along with it.
+            await conn.execute(text(f'DROP TABLE IF EXISTS {tables.fts.name}'))
             await conn.execute(text(f'DROP TABLE IF EXISTS {tables.ngram.name}'))
             await conn.execute(text(f'DROP TABLE IF EXISTS {tables.concept.name}'))
+
+            # The concept table (and, with it, any native search index) was just dropped, so
+            # the "already ensured" cache entry for this prefix is stale -- clear it before
+            # `_ensure_tables_exist` recreates the tables, or the search index would silently
+            # never come back.
+            suffix = safe_table_suffix(prefix.value if hasattr(prefix, 'value') else str(prefix))
+            self._search_index_ready.discard(suffix)
+
             await self._ensure_tables_exist(conn, prefix)
 
     async def update_vector_mapping(self,
@@ -966,6 +1268,142 @@ class SqlDocumentDatabase(DocumentDatabase):
             )
             await conn.execute(stmt, rows)
 
+    def _label_length_expr(self,
+                           tables: _PrefixTables,
+                           ):
+        """
+        Build the "shorter label first" tie-break expression shared by every auto-complete
+        query mode: NULL labels sort last, matching Mongo's historical `999` sentinel.
+        :param tables: The _PrefixTables for this prefix.
+        :return: A SQLAlchemy expression giving the label's character length, or 999 if absent.
+        """
+        concept_t = tables.concept
+        label_len = func.char_length(concept_t.c.label) if self._is_postgres else func.length(concept_t.c.label)
+        return case(
+            (concept_t.c.label.is_(None), literal(999)),
+            else_=label_len
+        )
+
+    def _build_auto_complete_stmt(self,
+                                  tables: _PrefixTables,
+                                  mode: str,
+                                  n_gram_query: list[str],
+                                  score_query: str,
+                                  limit: int | None,
+                                  ):
+        """
+        Build the auto-complete SELECT statement appropriate for the given native search mode.
+        Every mode requires every word in `n_gram_query` to occur as a substring somewhere in
+        the concept's `search_text`; modes differ in how relevance ("more relevant first") is
+        approximated on top of that, since the underlying engines don't expose comparable
+        scoring -- see the driver docstring and `docs/source/build-database.rst` for the exact
+        differences. All modes order ties by shorter label first, then concept ID, for
+        determinism.
+        :param tables: The _PrefixTables for this prefix.
+        :param mode: The native search mode, from `_get_native_search_mode`.
+        :param n_gram_query: The lowercased, whitespace-split query words (each len > 2).
+        :param score_query: The whitespace-stripped lowercased full query, used for position
+            scoring in the fallback and PostgreSQL modes.
+        :param limit: The maximum number of rows to return, or None for no limit.
+        :return: A SQLAlchemy Select statement yielding `payload`/`vector_id` columns.
+        """
+        concept_t = tables.concept
+        label_length = self._label_length_expr(tables)
+
+        if mode == self._NATIVE_PG_TRGM:
+            conditions = [
+                concept_t.c.search_text.ilike(f'%{_escape_like_term(w)}%', escape='\\')
+                for w in n_gram_query
+            ]
+            # The `pg_trgm` GIN index accelerates the ILIKE substring filtering above (the
+            # expensive part at this dataset's scale); ranking reuses the same position-based
+            # score as the fallback path for consistent "more relevant first" behaviour, rather
+            # than trigram `similarity()` (which scores the whole search_text's trigram overlap
+            # and does not reliably prefer an earlier/more exact match of the query itself).
+            pos = func.strpos(concept_t.c.search_text, score_query)
+            score = case(
+                (pos == 0, literal(10 ** 9)),
+                else_=pos - 1
+            )
+            stmt = (
+                select(concept_t.c.payload, concept_t.c.vector_id)
+                .where(and_(*conditions))
+                .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
+            )
+
+        elif mode == self._NATIVE_MYSQL_NGRAM:
+            boolean_query = ' '.join(
+                f'+{_escape_mysql_boolean_term(w)}' for w in n_gram_query if _escape_mysql_boolean_term(w)
+            )
+            match_expr = 'MATCH(search_text) AGAINST (:bts_bq IN BOOLEAN MODE)'
+            where_clause = text(match_expr).bindparams(bts_bq=boolean_query)
+            order_clause = text(f'{match_expr} DESC').bindparams(bts_bq=boolean_query)
+            stmt = (
+                select(concept_t.c.payload, concept_t.c.vector_id)
+                .select_from(concept_t)
+                .where(where_clause)
+                .order_by(order_clause, label_length.asc(), concept_t.c.concept_id.asc())
+            )
+
+        elif mode == self._NATIVE_SQLITE_TRIGRAM:
+            fts_t = tables.fts
+            word_subqueries = [
+                select(fts_t.c.concept_id).where(fts_t.c.search_text.op('MATCH')(_fts5_quote(w)))
+                for w in n_gram_query
+            ]
+            matched = word_subqueries[0] if len(word_subqueries) == 1 else intersect(*word_subqueries)
+            subq = matched.subquery()
+
+            # FTS5 doesn't expose a relevance score meaningful across an INTERSECT of
+            # independent trigram matches, so relevance is approximated the same way as the
+            # fallback path: how early the full (whitespace-stripped) query appears in
+            # `search_text`. This is a plain scalar function over the already-small matched
+            # set, not a full scan -- the trigram index has already done the heavy filtering.
+            pos = func.instr(concept_t.c.search_text, score_query)
+            score = case(
+                (pos == 0, literal(10 ** 9)),
+                else_=pos - 1
+            )
+
+            stmt = (
+                select(concept_t.c.payload, concept_t.c.vector_id)
+                .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
+                .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
+            )
+
+        else:
+            ngram_t = tables.ngram
+            subq = (
+                select(ngram_t.c.concept_id)
+                .where(ngram_t.c.ngram.in_(n_gram_query))
+                .group_by(ngram_t.c.concept_id)
+                .having(func.count(func.distinct(ngram_t.c.ngram)) == literal(len(n_gram_query)))
+                .subquery()
+            )
+
+            if self._is_postgres:
+                pos = func.strpos(concept_t.c.search_text, score_query)
+            elif self._is_mysql:
+                pos = func.locate(score_query, concept_t.c.search_text)
+            else:
+                pos = func.instr(concept_t.c.search_text, score_query)
+
+            score = case(
+                (pos == 0, literal(10 ** 9)),
+                else_=pos - 1  # convert to 0-based like Mongo, best-effort
+            )
+
+            stmt = (
+                select(concept_t.c.payload, concept_t.c.vector_id)
+                .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
+                .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
+            )
+
+        if limit is not None:
+            stmt = stmt.limit(limit)
+
+        return stmt
+
     async def auto_complete_iter(self,
                                  prefix: ConceptPrefix,
                                  query: str,
@@ -995,48 +1433,15 @@ class SqlDocumentDatabase(DocumentDatabase):
         try:
             async with self._engine.connect() as conn:
                 tables = await self._ensure_tables_exist(conn, prefix)
-                concept_t = tables.concept
-                ngram_t = tables.ngram
+                mode = await self._get_native_search_mode()
 
-                subq = (
-                    select(ngram_t.c.concept_id)
-                    .where(ngram_t.c.ngram.in_(n_gram_query))
-                    .group_by(ngram_t.c.concept_id)
-                    .having(func.count(func.distinct(ngram_t.c.ngram)) == literal(len(n_gram_query)))
-                    .subquery()
+                stmt = self._build_auto_complete_stmt(
+                    tables=tables,
+                    mode=mode,
+                    n_gram_query=n_gram_query,
+                    score_query=score_query,
+                    limit=limit,
                 )
-
-                if self._is_postgres:
-                    pos = func.strpos(concept_t.c.search_text, score_query)
-                elif self._is_mysql:
-                    pos = func.locate(score_query, concept_t.c.search_text)
-                else:
-                    pos = func.instr(concept_t.c.search_text, score_query)
-
-                score = case(
-                    (pos == 0, literal(10 ** 9)),
-                    else_=pos - 1  # convert to 0-based like Mongo, best-effort
-                )
-
-                # labelLength: Mongo used 999 if label missing
-                if self._is_postgres:
-                    label_len = func.char_length(concept_t.c.label)
-                else:
-                    label_len = func.length(concept_t.c.label)
-
-                label_length = case(
-                    (concept_t.c.label.is_(None), literal(999)),
-                    else_=label_len
-                )
-
-                stmt = (
-                    select(concept_t.c.payload, concept_t.c.vector_id)
-                    .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
-                    .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
-                )
-
-                if limit is not None:
-                    stmt = stmt.limit(limit)
 
                 stream = await conn.stream(stmt)
                 async for row in stream:
