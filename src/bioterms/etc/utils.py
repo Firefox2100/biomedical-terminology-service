@@ -472,7 +472,10 @@ def get_transformer() -> 'SentenceTransformer':
     if _TRANSFORMER is None:
         from sentence_transformers import SentenceTransformer
 
-        _TRANSFORMER = SentenceTransformer(CONFIG.transformer_model_name)
+        _TRANSFORMER = SentenceTransformer(
+            CONFIG.transformer_model_name,
+            device=CONFIG.torch_device,
+        )
 
     return _TRANSFORMER
 

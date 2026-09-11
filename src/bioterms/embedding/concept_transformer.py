@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.utils import aiter_progress
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, EmbeddingItem
 from .text_transformer import TextTransformer
 
 
@@ -19,9 +19,9 @@ def _init_embed_worker():
     _PROCESS_TRANSFORMER = TextTransformer()
 
 
-def _embed_concept_text_batch(batch: list[tuple[str, str]]) -> list[tuple[str, list[float]]]:
+def _embed_item_text_batch(batch: list[EmbeddingItem]) -> list[tuple[EmbeddingItem, list[float]]]:
     """
-    Embed a single (concept_id, text) batch inside a worker process.
+    Embed a single batch of embedding items inside a worker process.
     """
     global _PROCESS_TRANSFORMER
 
@@ -29,85 +29,82 @@ def _embed_concept_text_batch(batch: list[tuple[str, str]]) -> list[tuple[str, l
         _PROCESS_TRANSFORMER = TextTransformer()
 
     vectors = _PROCESS_TRANSFORMER.embed_strings(
-        texts=[text for _, text in batch],
+        texts=[item.text for item in batch],
     )
-    return [(concept_id, vectors[idx]) for idx, (concept_id, _) in enumerate(batch)]
+    return list(zip(batch, vectors))
 
 
-def _prepare_embed_batch(batch: list[Concept]) -> list[tuple[str, str]]:
+async def _item_batches_iter(concepts: list[Concept] | AsyncIterator[Concept],
+                             batch_size: int,
+                             total_concepts: int | None,
+                             ) -> AsyncIterator[list[EmbeddingItem]]:
     """
-    Convert a batch of concepts into (concept_id, canonical_text) pairs for embedding.
-    :param batch: The batch of Concept instances to prepare.
-    :return: A list of (concept_id, canonical_text) tuples.
-    """
-    return [(c.concept_id, c.canonical_text()) for c in batch]
-
-
-async def _concept_batches_iter(concepts: list[Concept] | AsyncIterator[Concept],
-                                batch_size: int,
-                                total_concepts: int | None,
-                                ) -> AsyncIterator[list[Concept]]:
-    """
-    Batch a list or async iterator of concepts into fixed-size chunks for embedding.
+    Flatten a list or async iterator of concepts into their EmbeddingItems, and batch those
+    items into fixed-size chunks for embedding. A concept's items are never split across two
+    batches' worth of *different* concepts arbitrarily -- item order simply follows concept
+    order -- but a single concept's own items can span a batch boundary, since the batch size
+    bounds embedding call size, not concept count.
     :param concepts: A list or async iterator of Concept instances to batch.
-    :param batch_size: The number of concepts per batch.
+    :param batch_size: The number of embedding items per batch.
     :param total_concepts: Optional total number of concepts, used for progress tracking.
-    :return: An async iterator of concept batches.
+    :return: An async iterator of EmbeddingItem batches.
     """
-    if isinstance(concepts, AsyncIterator):
-        batch = []
+    async def concept_source():
+        if isinstance(concepts, AsyncIterator):
+            async for concept in aiter_progress(
+                concepts,
+                description='Embedding concepts',
+                total=total_concepts,
+            ):
+                yield concept
+        elif isinstance(concepts, list):
+            for concept in concepts:
+                yield concept
+        else:
+            raise TypeError('concepts must be a list or an AsyncIterator of Concept instances')
 
-        async for concept in aiter_progress(
-            concepts,
-            description='Embedding concepts',
-            total=total_concepts,
-        ):
-            batch.append(concept)
+    batch: list[EmbeddingItem] = []
+    async for concept in concept_source():
+        batch.extend(concept.embedding_items())
 
-            if len(batch) >= batch_size:
-                yield batch
-                batch = []
+        while len(batch) >= batch_size:
+            yield batch[:batch_size]
+            batch = batch[batch_size:]
 
-        if batch:
-            yield batch
-    elif isinstance(concepts, list):
-        while concepts:
-            batch = concepts[:batch_size]
-            del concepts[:batch_size]
-            yield batch
-    else:
-        raise TypeError('concepts must be a list or an AsyncIterator of Concept instances')
+    if batch:
+        yield batch
 
 
 class ConceptTransformer(TextTransformer):
     """
-    A class with convenient methods for transforming Concept instances into embeddings.
+    A class with convenient methods for transforming Concept instances into per-item
+    embeddings (see `Concept.embedding_items`).
     """
 
     def _process_batch(self,
-                       batch: list[Concept],
-                       ) -> list[tuple[str, list[float]]]:
+                       batch: list[EmbeddingItem],
+                       ) -> list[tuple[EmbeddingItem, list[float]]]:
         """
-        Embed a batch of concepts synchronously in the current process.
-        :param batch: The batch of Concept instances to embed.
-        :return: A list of (concept_id, embedding_vector) tuples.
+        Embed a batch of embedding items synchronously in the current process.
+        :param batch: The batch of EmbeddingItem instances to embed.
+        :return: A list of (EmbeddingItem, embedding_vector) tuples.
         """
         vectors = self.embed_strings(
-            texts=[c.canonical_text() for c in batch],
+            texts=[item.text for item in batch],
         )
 
-        return [(c.concept_id, vectors[idx]) for idx, c in enumerate(batch)]
+        return list(zip(batch, vectors))
 
     @staticmethod
-    async def _embed_parallel(concept_batches: AsyncIterator[list[Concept]],
+    async def _embed_parallel(item_batches: AsyncIterator[list[EmbeddingItem]],
                               worker_processes: int,
-                              ) -> AsyncIterator[list[tuple[str, list[float]]]]:
+                              ) -> AsyncIterator[list[tuple[EmbeddingItem, list[float]]]]:
         """
-        Embed concept batches across a pool of worker processes, streaming results as they
+        Embed item batches across a pool of worker processes, streaming results as they
         complete rather than waiting for the whole pool to finish.
-        :param concept_batches: An async iterator of concept batches to embed.
+        :param item_batches: An async iterator of EmbeddingItem batches to embed.
         :param worker_processes: Number of worker processes to use.
-        :return: An async iterator of chunks of (concept_id, embedding_vector) tuples.
+        :return: An async iterator of chunks of (EmbeddingItem, embedding_vector) tuples.
         """
         loop = asyncio.get_running_loop()
         queue_size = max(worker_processes * 2, 1)
@@ -118,11 +115,11 @@ class ConceptTransformer(TextTransformer):
         ) as executor:
             pending: set[asyncio.Future] = set()
 
-            async for batch in concept_batches:
+            async for batch in item_batches:
                 pending.add(loop.run_in_executor(
                     executor,
-                    _embed_concept_text_batch,
-                    _prepare_embed_batch(batch),
+                    _embed_item_text_batch,
+                    batch,
                 ))
 
                 if len(pending) >= queue_size:
@@ -147,14 +144,14 @@ class ConceptTransformer(TextTransformer):
                              batch_size: int | None = None,
                              worker_processes: int | None = None,
                              total_concepts: int | None = None,
-                             ) -> AsyncIterator[list[tuple[str, list[float]]]]:
+                             ) -> AsyncIterator[list[tuple[EmbeddingItem, list[float]]]]:
         """
-        Embed concept texts using the configured SentenceTransformer model.
+        Embed every concept's embedding items using the configured SentenceTransformer model.
         :param concepts: A list or async iterator of Concept instances to embed
-        :param batch_size: Number of concepts to process in each batch
+        :param batch_size: Number of embedding items to process in each batch
         :param worker_processes: Number of worker processes for embedding. If None, uses config
         :param total_concepts: Optional total number of concepts, used for progress tracking
-        :return: An iterator of chunks of tuples containing concept IDs and their embedding vectors
+        :return: An iterator of chunks of (EmbeddingItem, embedding_vector) tuples
         """
         if batch_size is None:
             batch_size = CONFIG.embedding_batch_size
@@ -166,7 +163,7 @@ class ConceptTransformer(TextTransformer):
         if worker_processes < 1:
             raise ValueError('worker_processes must be at least 1')
 
-        batches = _concept_batches_iter(concepts, batch_size, total_concepts)
+        batches = _item_batches_iter(concepts, batch_size, total_concepts)
 
         if worker_processes == 1:
             async for batch in batches:

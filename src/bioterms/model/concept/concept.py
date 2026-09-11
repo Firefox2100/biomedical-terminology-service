@@ -1,12 +1,30 @@
 import re
+from dataclasses import dataclass
 from typing import Optional
 from pydantic import Field, ConfigDict
 
-from bioterms.etc.enums import ConceptType, ConceptPrefix, ConceptStatus
+from bioterms.etc.enums import ConceptType, ConceptPrefix, ConceptStatus, EmbeddingKind
 from ..base import JsonModel
 
 
 _UNWANTED_CHARS_PATTERN = re.compile(r'[()"\'\s]')
+
+
+@dataclass(frozen=True)
+class EmbeddingItem:
+    """
+    A single unit of text derived from a concept that gets its own embedding vector.
+
+    A concept contributes one ALIAS item per distinct label/synonym string (each embedded
+    separately, rather than one embedding for a concatenation of all of them), plus one
+    DEFINITION item when the concept has a definition. `item_id` is stable for a given
+    concept as long as its label/synonyms/definition don't change, since it is derived from
+    the concept id, the kind, and the item's position within that kind.
+    """
+    item_id: str
+    concept_id: str
+    kind: EmbeddingKind
+    text: str
 
 # The graph database deliberately stores almost nothing beyond node id/prefix/type-labels --
 # full concept detail lives in the document database. This is the explicit allowlist of
@@ -88,19 +106,6 @@ class Concept(JsonModel):
         ConceptStatus.ACTIVE,
         description='The status of the concept, indicating whether it is active or deprecated.',
     )
-    vector_id: Optional[str] = Field(
-        None,
-        description='The identifier of the vector representation of the concept in the vector database.',
-        alias='vectorId',
-    )
-    vector: Optional[list[float]] = Field(
-        None,
-        description='The embedding vector of the concept, stored directly on the concept document. '
-                    'Only populated when using a vector database driver (e.g. MongoDB) that embeds '
-                    'vectors alongside the rest of the concept data instead of in a separate store.',
-        exclude=True,
-    )
-
     def n_grams(self,
                 min_length: int = 3,
                 max_length: int = 20,
@@ -167,20 +172,47 @@ class Concept(JsonModel):
 
         return search_text
 
-    def canonical_text(self) -> str:
+    def embedding_items(self) -> list[EmbeddingItem]:
         """
-        Generate a canonical text representation of the concept, used for text embedding.
-        :return: A string of canonical text.
+        Break the concept down into the individual text units that get their own embedding
+        vector: one ALIAS item per distinct label/synonym string, and one DEFINITION item if
+        the concept has a definition. This replaces embedding one large concatenated string
+        per concept -- each alias/synonym and the definition are embedded independently so
+        that, e.g., a short exact synonym is not diluted by an unrelated definition sentence.
+        :return: A list of EmbeddingItem instances (may be empty if the concept has neither
+            a label/synonyms nor a definition).
         """
-        concept_str = ''
+        items: list[EmbeddingItem] = []
+        seen: set[str] = set()
 
-        if self.label:
-            concept_str += self.label + ': '
+        def add_alias(text: Optional[str]) -> None:
+            if not text:
+                return
+            normalized = text.strip()
+            if not normalized:
+                return
+            key = normalized.casefold()
+            if key in seen:
+                return
+            seen.add(key)
+            items.append(EmbeddingItem(
+                item_id=f'{self.concept_id}:alias:{len(items)}',
+                concept_id=self.concept_id,
+                kind=EmbeddingKind.ALIAS,
+                text=normalized,
+            ))
 
-        if self.definition:
-            concept_str += self.definition + ' '
-
+        add_alias(self.label)
         if self.synonyms:
-            concept_str += '(' + ' '.join(self.synonyms) + ')'
+            for synonym in self.synonyms:
+                add_alias(synonym)
 
-        return concept_str.strip(' :')
+        if self.definition and self.definition.strip():
+            items.append(EmbeddingItem(
+                item_id=f'{self.concept_id}:definition:0',
+                concept_id=self.concept_id,
+                kind=EmbeddingKind.DEFINITION,
+                text=self.definition.strip(),
+            ))
+
+        return items

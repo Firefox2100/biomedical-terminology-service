@@ -7,4 +7,4 @@ and auto-completing terms from various biomedical vocabularies, and other advanc
 features such as semantic similarity and cross-vocabulary mapping.
 """
 
-__version__ = "1.1.0"
+__version__ = "2.0.0-aplha.1"

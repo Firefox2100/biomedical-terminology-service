@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 from sqlalchemy import Column, ForeignKey, Index, MetaData, String, DateTime, Table, Text, and_, \
-    bindparam, case, delete, func, insert, intersect, update, literal, select, text
+    bindparam, case, delete, func, insert, intersect, literal_column, or_, update, literal, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
@@ -626,7 +626,6 @@ class SqlDocumentDatabase(DocumentDatabase):
             Column('payload', self._json_type, nullable=False),
             Column('search_text', Text, nullable=False),
             Column('label', Text, nullable=True),
-            Column('vector_id', Text, nullable=True),
         )
 
         ngram = Table(
@@ -658,7 +657,6 @@ class SqlDocumentDatabase(DocumentDatabase):
             Column('search_text', Text, nullable=False),
         )
 
-        Index(f'ix_{concept_table_name}_vector_id', concept.c.vector_id)
         Index(f'ix_{ngram_table_name}_ngram', ngram.c.ngram)
 
         self._tables_cache[p] = _PrefixTables(concept=concept, ngram=ngram, fts=fts)
@@ -858,17 +856,11 @@ class SqlDocumentDatabase(DocumentDatabase):
     @staticmethod
     def _row_to_payload(row) -> dict:
         """
-        Reconstruct a concept payload dict from a result row selecting `payload` and
-        `vector_id`. The `vector_id` column, not the JSON payload's own "vectorId" key, is the
-        authoritative source: `update_vector_mapping` only updates the dedicated column (a
-        single-column update is portable across dialects without JSON-patching functions), so
-        reads must merge it back in here rather than trusting a possibly-stale copy in `payload`.
-        :param row: A result row with `payload` and `vector_id` columns.
-        :return: The payload dict, with "vectorId" reflecting the dedicated column.
+        Reconstruct a concept payload dict from a result row selecting `payload`.
+        :param row: A result row with a `payload` column.
+        :return: The payload dict.
         """
-        payload = dict(row.payload)
-        payload['vectorId'] = row.vector_id
-        return payload
+        return dict(row.payload)
 
     async def _index_exists(self,
                             conn,
@@ -1065,7 +1057,6 @@ class SqlDocumentDatabase(DocumentDatabase):
                             'payload': payload,
                             'search_text': st,
                             'label': getattr(c, 'label', None),
-                            'vector_id': getattr(c, 'vector_id', None),
                         }
                     )
 
@@ -1088,7 +1079,7 @@ class SqlDocumentDatabase(DocumentDatabase):
                 if no_upsert:
                     await conn.execute(insert(concept_t).values(rows))
                 else:
-                    update_columns = ['payload', 'search_text', 'label', 'vector_id']
+                    update_columns = ['payload', 'search_text', 'label']
                     upsert_stmt = _build_upsert_stmt(
                         self._engine.dialect.name,
                         concept_t,
@@ -1147,7 +1138,7 @@ class SqlDocumentDatabase(DocumentDatabase):
         """
         async with self._engine.connect() as conn:
             tables = await self._ensure_tables_exist(conn, prefix)
-            stmt = select(tables.concept.c.payload, tables.concept.c.vector_id)
+            stmt = select(tables.concept.c.payload)
             if limit and limit > 0:
                 stmt = stmt.limit(limit)
 
@@ -1178,7 +1169,7 @@ class SqlDocumentDatabase(DocumentDatabase):
             async with self._engine.connect() as conn:
                 tables = await self._ensure_tables_exist(conn, prefix)
                 stmt = select(
-                    tables.concept.c.payload, tables.concept.c.vector_id
+                    tables.concept.c.payload
                 ).where(tables.concept.c.concept_id.in_(concept_ids))
                 stream = await conn.stream(stmt)
                 async for row in stream:
@@ -1240,34 +1231,6 @@ class SqlDocumentDatabase(DocumentDatabase):
 
             await self._ensure_tables_exist(conn, prefix)
 
-    async def update_vector_mapping(self,
-                                    prefix: ConceptPrefix,
-                                    mapping: dict[str, str],
-                                    ):
-        """
-        Update the vector mapping for concepts in the document database.
-        :param prefix: The vocabulary prefix to update the vector mapping for.
-        :param mapping: A dictionary mapping concept IDs to vector IDs.
-        """
-        if not mapping:
-            return
-
-        async with self._engine.begin() as conn:
-            tables = await self._ensure_tables_exist(conn, prefix)
-            concept_t = tables.concept
-
-            # Executemany update is typically fine and portable. The WHERE-clause bindparam is
-            # deliberately named differently from the "concept_id" column: SQLAlchemy reserves
-            # that name for the implicit VALUES/SET bindparam on update()/insert() statements,
-            # and raises a CompileError if a bindparam() with the same name is used elsewhere.
-            rows = [{'b_concept_id': cid, 'vector_id': vid} for cid, vid in mapping.items()]
-            stmt = (
-                concept_t.update()
-                .where(concept_t.c.concept_id == bindparam('b_concept_id'))
-                .values(vector_id=bindparam('vector_id'))
-            )
-            await conn.execute(stmt, rows)
-
     def _label_length_expr(self,
                            tables: _PrefixTables,
                            ):
@@ -1305,7 +1268,7 @@ class SqlDocumentDatabase(DocumentDatabase):
         :param score_query: The whitespace-stripped lowercased full query, used for position
             scoring in the fallback and PostgreSQL modes.
         :param limit: The maximum number of rows to return, or None for no limit.
-        :return: A SQLAlchemy Select statement yielding `payload`/`vector_id` columns.
+        :return: A SQLAlchemy Select statement yielding a `payload` column.
         """
         concept_t = tables.concept
         label_length = self._label_length_expr(tables)
@@ -1326,7 +1289,7 @@ class SqlDocumentDatabase(DocumentDatabase):
                 else_=pos - 1
             )
             stmt = (
-                select(concept_t.c.payload, concept_t.c.vector_id)
+                select(concept_t.c.payload)
                 .where(and_(*conditions))
                 .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
             )
@@ -1339,7 +1302,7 @@ class SqlDocumentDatabase(DocumentDatabase):
             where_clause = text(match_expr).bindparams(bts_bq=boolean_query)
             order_clause = text(f'{match_expr} DESC').bindparams(bts_bq=boolean_query)
             stmt = (
-                select(concept_t.c.payload, concept_t.c.vector_id)
+                select(concept_t.c.payload)
                 .select_from(concept_t)
                 .where(where_clause)
                 .order_by(order_clause, label_length.asc(), concept_t.c.concept_id.asc())
@@ -1366,7 +1329,7 @@ class SqlDocumentDatabase(DocumentDatabase):
             )
 
             stmt = (
-                select(concept_t.c.payload, concept_t.c.vector_id)
+                select(concept_t.c.payload)
                 .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
                 .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
             )
@@ -1394,7 +1357,7 @@ class SqlDocumentDatabase(DocumentDatabase):
             )
 
             stmt = (
-                select(concept_t.c.payload, concept_t.c.vector_id)
+                select(concept_t.c.payload)
                 .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
                 .order_by(score.asc(), label_length.asc(), concept_t.c.concept_id.asc())
             )
@@ -1403,6 +1366,130 @@ class SqlDocumentDatabase(DocumentDatabase):
             stmt = stmt.limit(limit)
 
         return stmt
+
+    def _build_lexical_search_stmt(self,
+                                   tables: _PrefixTables,
+                                   mode: str,
+                                   n_gram_query: list[str],
+                                   score_query: str,
+                                   limit: int,
+                                   ):
+        """
+        Build the lexical-recall SELECT statement appropriate for the given native search
+        mode, yielding `(concept_id, score)` rows ranked best-first. Unlike
+        `_build_auto_complete_stmt`, only one query word needs to match (OR, not AND) --
+        this is a recall arm for RRF fusion in `bioterms.search.hybrid`, not a precise
+        autocomplete match, so it favours recall over precision and leaves ranking to each
+        mode's real relevance function where one exists.
+        :param tables: The _PrefixTables for this prefix.
+        :param mode: The native search mode, from `_get_native_search_mode`.
+        :param n_gram_query: The lowercased, whitespace-split query words (each len > 2).
+        :param score_query: The whitespace-stripped lowercased full query.
+        :param limit: The maximum number of rows to return.
+        :return: A SQLAlchemy Select statement yielding `concept_id`/`score` columns.
+        """
+        concept_t = tables.concept
+
+        if mode == self._NATIVE_PG_TRGM:
+            conditions = [
+                concept_t.c.search_text.ilike(f'%{_escape_like_term(w)}%', escape='\\')
+                for w in n_gram_query
+            ]
+            score = func.similarity(concept_t.c.search_text, score_query)
+            stmt = (
+                select(concept_t.c.concept_id, score.label('score'))
+                .where(or_(*conditions))
+                .order_by(score.desc())
+            )
+
+        elif mode == self._NATIVE_MYSQL_NGRAM:
+            # Natural language mode (unlike the boolean mode auto-complete uses) returns a
+            # real relevance score and matches on any of the words, which is what a recall
+            # arm wants.
+            match_expr = 'MATCH(search_text) AGAINST (:bts_nl)'
+            score = text(f'{match_expr} AS score').bindparams(bts_nl=score_query)
+            where_clause = text(match_expr).bindparams(bts_nl=score_query)
+            stmt = (
+                select(concept_t.c.concept_id, score)
+                .select_from(concept_t)
+                .where(where_clause)
+                .order_by(text('score DESC'))
+            )
+
+        elif mode == self._NATIVE_SQLITE_TRIGRAM:
+            fts_t = tables.fts
+            match_query = ' OR '.join(_fts5_quote(w) for w in n_gram_query)
+            subq = (
+                select(
+                    fts_t.c.concept_id,
+                    literal_column(f'bm25({fts_t.name})').label('bm25_score'),
+                )
+                .where(fts_t.c.search_text.op('MATCH')(match_query))
+                .subquery()
+            )
+            stmt = (
+                select(concept_t.c.concept_id, subq.c.bm25_score.label('score'))
+                .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
+                # SQLite's bm25() is lower-is-better, unlike every other mode here.
+                .order_by(subq.c.bm25_score.asc())
+            )
+
+        else:
+            ngram_t = tables.ngram
+            subq = (
+                select(ngram_t.c.concept_id, func.count(func.distinct(ngram_t.c.ngram)).label('score'))
+                .where(ngram_t.c.ngram.in_(n_gram_query))
+                .group_by(ngram_t.c.concept_id)
+                .subquery()
+            )
+            stmt = (
+                select(concept_t.c.concept_id, subq.c.score)
+                .select_from(concept_t.join(subq, subq.c.concept_id == concept_t.c.concept_id))
+                .order_by(subq.c.score.desc())
+            )
+
+        return stmt.limit(limit)
+
+    async def lexical_search_iter(self,
+                                  prefix: ConceptPrefix,
+                                  query: str,
+                                  limit: int = 10,
+                                  ) -> AsyncIterator[tuple[str, float]]:
+        """
+        Run a scored lexical/keyword search against a vocabulary's concept_id/label/synonyms,
+        and return matching concept IDs ranked best-first.
+        :param prefix: The vocabulary prefix to search within.
+        :param query: The search query string.
+        :param limit: The top number of concepts to return.
+        :return: An async iterator of (concept_id, score) tuples, best match first.
+        """
+        clean_query = re.sub(r'[()"\']', '', query.lower())
+        n_gram_query = [word for word in clean_query.split() if len(word) > 2]
+        score_query = re.sub(r'\s', '', clean_query)
+
+        if not n_gram_query:
+            return
+
+        async with self._engine.connect() as conn:
+            tables = await self._ensure_tables_exist(conn, prefix)
+            mode = await self._get_native_search_mode()
+
+            stmt = self._build_lexical_search_stmt(
+                tables=tables,
+                mode=mode,
+                n_gram_query=n_gram_query,
+                score_query=score_query,
+                limit=limit,
+            )
+
+            stream = await conn.stream(stmt)
+            async for row in stream:
+                score = float(row.score) if row.score is not None else 0.0
+                if mode == self._NATIVE_SQLITE_TRIGRAM:
+                    # Undo bm25()'s lower-is-better convention so "higher score = better
+                    # match" holds uniformly across every backend.
+                    score = -score
+                yield row.concept_id, score
 
     async def auto_complete_iter(self,
                                  prefix: ConceptPrefix,

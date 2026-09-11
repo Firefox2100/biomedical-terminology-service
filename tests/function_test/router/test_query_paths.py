@@ -7,7 +7,7 @@ os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 import pytest
 
 from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptRelationshipType, ConceptStatus, \
-    SimilarityMethod
+    EmbeddingKind, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.concept_path import ConceptPath, NodeInPath
 from bioterms.model.related_term import RelatedTerm
@@ -20,6 +20,7 @@ from bioterms.router.search import search_terms_v1
 from bioterms.router.similarity import SimilarityRequestV1, TranslateRequestV1, get_similar_terms_v1, \
     get_similar_terms_v2, translate_terms_v1, translate_terms_v2
 from bioterms.router.trace import trace_terms_v1
+from bioterms.search import hybrid as hybrid_module
 
 
 async def collect_streaming_json(response):
@@ -38,32 +39,64 @@ def make_concept(concept_id, label):
 
 
 class FakeDocumentDatabase:
-    def __init__(self, concepts):
+    def __init__(self, concepts, lexical_results=None):
         self.concepts = concepts
+        self.lexical_results = lexical_results or []
         self.calls = []
 
     async def get_terms_by_ids_iter(self, prefix, concept_ids, model_class=Concept):
         self.calls.append({
+            'method': 'get_terms_by_ids_iter',
             'prefix': prefix,
             'concept_ids': concept_ids,
             'model_class': model_class,
         })
         for concept_id in concept_ids:
-            yield self.concepts[concept_id]
+            if concept_id in self.concepts:
+                yield self.concepts[concept_id]
+
+    async def get_terms_by_ids(self, prefix, concept_ids, model_class=Concept):
+        self.calls.append({
+            'method': 'get_terms_by_ids',
+            'prefix': prefix,
+            'concept_ids': concept_ids,
+            'model_class': model_class,
+        })
+        return [self.concepts[cid] for cid in concept_ids if cid in self.concepts]
+
+    async def lexical_search(self, prefix, query, limit):
+        self.calls.append({
+            'method': 'lexical_search',
+            'prefix': prefix,
+            'query': query,
+            'limit': limit,
+        })
+        return self.lexical_results[:limit]
 
 
 class FakeVectorDatabase:
-    def __init__(self, concept_ids):
-        self.concept_ids = concept_ids
+    def __init__(self, alias_hits=None, definition_hits=None):
+        self.alias_hits = alias_hits or []
+        self.definition_hits = definition_hits or []
         self.calls = []
 
-    async def search_concepts(self, query, prefix, limit):
+    async def search_items(self, query_vector, prefix, kind, limit):
         self.calls.append({
-            'query': query,
+            'query_vector': query_vector,
             'prefix': prefix,
+            'kind': kind,
             'limit': limit,
         })
-        return self.concept_ids
+        hits = self.alias_hits if kind == EmbeddingKind.ALIAS else self.definition_hits
+        return hits[:limit]
+
+
+class FakeTextTransformer:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def embed_strings(self, texts):
+        return [[0.1, 0.2, 0.3] for _ in texts]
 
 
 class FakeGraphDatabase:
@@ -160,14 +193,20 @@ class FakeGraphDatabase:
 
 
 @pytest.mark.asyncio
-async def test_search_terms_v1_uses_vector_ids_to_stream_document_results(monkeypatch):
+async def test_search_terms_v1_fuses_alias_embedding_recall(monkeypatch):
     concepts = {
         '0000001': make_concept('0000001', 'First Concept'),
         '0000002': make_concept('0000002', 'Second Concept'),
     }
+    # No lexical or definition-embedding hits: with only one recall arm contributing, RRF
+    # fusion preserves that arm's own rank order.
     doc_db = FakeDocumentDatabase(concepts)
-    vector_db = FakeVectorDatabase(['0000002', '0000001'])
+    vector_db = FakeVectorDatabase(alias_hits=[
+        ('0000002', 'Second Concept', 0.9),
+        ('0000001', 'First Concept', 0.5),
+    ])
     monkeypatch.setattr(search_module, 'get_vocabulary_config', lambda prefix: {'conceptClass': Concept})
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
 
     response = await search_terms_v1(
         prefix=ConceptPrefix.HPO,
@@ -179,16 +218,42 @@ async def test_search_terms_v1_uses_vector_ids_to_stream_document_results(monkey
     body = await collect_streaming_json(response)
 
     assert [item['conceptId'] for item in body] == ['0000002', '0000001']
-    assert vector_db.calls == [{
-        'query': 'phenotype',
+
+    alias_calls = [c for c in vector_db.calls if c['kind'] == EmbeddingKind.ALIAS]
+    assert alias_calls == [{
+        'query_vector': [0.1, 0.2, 0.3],
         'prefix': ConceptPrefix.HPO,
+        'kind': EmbeddingKind.ALIAS,
         'limit': 2,
     }]
-    assert doc_db.calls == [{
-        'prefix': ConceptPrefix.HPO,
-        'concept_ids': ['0000002', '0000001'],
-        'model_class': Concept,
-    }]
+
+
+@pytest.mark.asyncio
+async def test_search_terms_v1_pins_exact_match_ahead_of_fusion(monkeypatch):
+    concepts = {
+        '0000001': make_concept('0000001', 'phenotype'),
+        '0000002': make_concept('0000002', 'Second Concept'),
+    }
+    doc_db = FakeDocumentDatabase(concepts, lexical_results=[('0000001', 1.0)])
+    # The embedding arm ranks '0000002' first -- without the exact-match bypass, RRF could
+    # bury the exact label match under it.
+    vector_db = FakeVectorDatabase(alias_hits=[
+        ('0000002', 'Second Concept', 0.9),
+        ('0000001', 'phenotype', 0.1),
+    ])
+    monkeypatch.setattr(search_module, 'get_vocabulary_config', lambda prefix: {'conceptClass': Concept})
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+
+    response = await search_terms_v1(
+        prefix=ConceptPrefix.HPO,
+        query='phenotype',
+        limit=2,
+        doc_db=doc_db,
+        vector_db=vector_db,
+    )
+    body = await collect_streaming_json(response)
+
+    assert [item['conceptId'] for item in body][0] == '0000001'
 
 
 @pytest.mark.asyncio

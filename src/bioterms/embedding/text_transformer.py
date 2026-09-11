@@ -28,12 +28,27 @@ class TextTransformer:
             self.managed = True
             self.transformer = transformer
 
+    @property
+    def dimension(self) -> int:
+        """
+        The dimensionality of vectors produced by the configured model. Vector database
+        drivers use this (instead of a hardcoded constant) when creating collections/
+        indexes/tables, so switching the configured embedding model does not silently
+        produce dimension-mismatched writes.
+        :return: The embedding vector dimension.
+        """
+        return self.transformer.get_sentence_embedding_dimension()
+
     def embed_strings(self,
                       texts: list[str],
+                      prompt_name: str | None = None,
                       ) -> list[list[float]]:
         """
         Embed a list of strings using the provided SentenceTransformer.
         :param texts: The list of strings to embed
+        :param prompt_name: Optional named prompt (as defined by the model's `prompts` config,
+            e.g. "query" vs "document") to apply before encoding. Ignored by models that don't
+            define named prompts.
         :return: A list of embeddings, each represented as a list of floats,
             in the same order as the input texts
         """
@@ -48,6 +63,7 @@ class TextTransformer:
             vs = self.transformer.encode(
                 inputs=texts,
                 normalize_embeddings=True,
+                prompt_name=prompt_name,
             )
             enc_end = time.perf_counter()
             EMBED_DURATION.labels(model=model, result='ok').observe(enc_end - enc_start)

@@ -46,7 +46,7 @@ differences.
 search_vocabulary
 -----------------
 
-Performs embedding-based semantic search over a vocabulary's concepts.
+Performs hybrid lexical + semantic search over a vocabulary's concepts (see :doc:`usage/search`).
 
 * ``vocabulary`` (**ConceptPrefix**, required): The vocabulary to search.
 * ``query`` (**string**, required): The search query string.

@@ -251,7 +251,7 @@ class Settings(BaseSettings):
     )
 
     transformer_model_name: str = Field(
-        'BAAI/bge-base-en-v1.5',
+        'FremyCompany/BioLORD-2023',
         description='Name of the transformer model to use for embeddings',
     )
     embedding_process_limit: int = Field(
@@ -267,21 +267,12 @@ class Settings(BaseSettings):
         'cpu',
         description='Torch device to use for model inference (e.g., "cpu", "cuda")',
     )
-    gnn_epochs: int = Field(
-        100,
-        description='Number of epochs to train the GNN model',
-    )
-    gnn_hidden_dim: int = Field(
-        256,
-        description='Hidden dimension size for the GNN model',
-    )
-    gnn_output_dim: int = Field(
-        256,
-        description='Output dimension size for the GNN model',
-    )
-    gnn_learning_rate: float = Field(
-        1e-3,
-        description='Learning rate for training the GNN model',
+    search_rrf_k: int = Field(
+        60,
+        description='The "k" constant used when fusing the lexical, alias-embedding, and '
+                    'definition-embedding recall lists with Reciprocal Rank Fusion in '
+                    'GET /search/v1 (and the equivalent GraphQL/MCP search paths). Higher '
+                    'values flatten the influence of rank position across the three lists.',
     )
     vector_database_driver: VectorDatabaseDriverType = Field(
         VectorDatabaseDriverType.QDRANT,
@@ -294,8 +285,10 @@ class Settings(BaseSettings):
     mongodb_vector_index_name: str = Field(
         'vector_index',
         description='Name of the MongoDB Atlas/mongot vector search index created on the '
-                    '"vector" field of each vocabulary collection, when '
-                    'BTS_VECTOR_DATABASE_DRIVER=mongodb.',
+                    '"vector" field of each vocabulary\'s "<prefix>.vectors" embedding-item '
+                    'collection, when BTS_VECTOR_DATABASE_DRIVER=mongodb. The index is '
+                    'filterable on "kind" so alias and definition items can be searched '
+                    'separately.',
     )
     mongodb_vector_num_candidates_multiplier: int = Field(
         10,
@@ -306,11 +299,11 @@ class Settings(BaseSettings):
     postgres_vector_db_url: str = Field(
         'postgresql+asyncpg://localhost:5432/bts',
         description='SQLAlchemy async URL for the PostgreSQL/pgvector vector database, used '
-                    'when BTS_VECTOR_DATABASE_DRIVER=postgresql. When this is equal to '
-                    'BTS_SQL_DB_URL (i.e. the document database is also PostgreSQL, via '
-                    'BTS_DOC_DATABASE_DRIVER=sql), vectors are stored as an extra column on '
-                    'the same concept tables the SQL document database driver already uses, '
-                    'instead of a separate set of vector-only tables.',
+                    'when BTS_VECTOR_DATABASE_DRIVER=postgresql. This may safely equal '
+                    'BTS_SQL_DB_URL to run the document and vector stores on one PostgreSQL '
+                    'instance -- embedding items still live in their own '
+                    '"concept_<prefix>_vector_item" tables, so this works whether or not the '
+                    'document database is also PostgreSQL.',
     )
 
     verbose_print: bool = Field(

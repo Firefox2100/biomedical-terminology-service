@@ -89,6 +89,14 @@ class DocDatabaseDriverType(Enum):
     SQL = 'sql'
 
 
+class EmbeddingKind(Enum):
+    """
+    The kind of text an embedding item was derived from.
+    """
+    ALIAS = 'alias'
+    DEFINITION = 'definition'
+
+
 class GraphDatabaseDriverType(Enum):
     """
     The type of graph database driver.

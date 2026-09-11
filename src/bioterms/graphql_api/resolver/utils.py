@@ -8,6 +8,7 @@ from ariadne import QueryType
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_config
+from bioterms.search import hybrid_search
 from ..data_loader import DataLoader
 
 
@@ -409,7 +410,8 @@ async def resolve_search(info,
                          limit: int = None,
                          ) -> dict:
     """
-    Resolve concept search based on vector similarity.
+    Resolve concept search, fusing lexical and embedding-based recall (see
+    `bioterms.search.hybrid`).
     :param info: The GraphQL resolver info.
     :param query: The search query string.
     :param prefix: The vocabulary prefix.
@@ -419,20 +421,17 @@ async def resolve_search(info,
     doc_db = info.context['doc_db']
     vector_db = info.context['vector_db']
 
-    concept_ids = await vector_db.search_concepts(
+    concepts_iter = hybrid_search(
         query=query,
         prefix=prefix,
+        doc_db=doc_db,
+        vector_db=vector_db,
+        model_class=get_vocabulary_config(prefix)['conceptClass'],
         limit=limit or 10,
     )
 
-    concepts = await doc_db.get_terms_by_ids(
-        prefix=prefix,
-        concept_ids=concept_ids,
-        model_class=get_vocabulary_config(prefix)['conceptClass'],
-    )
-
     results = [
-        concept.model_dump(exclude_none=True) for concept in concepts
+        concept.model_dump(exclude_none=True) async for concept in concepts_iter
     ]
 
     return assemble_response(results)
