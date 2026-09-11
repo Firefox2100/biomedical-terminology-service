@@ -1,13 +1,35 @@
-import runpy
+import pytest
 from pathlib import Path
 
-import pytest
+from bioterms.annotation import _canonical_annotation_prefix, _infer_annotation_dump_prefixes
+from bioterms.vocabulary.utils import parse_annotation_curie
 
 
-SCRIPT = runpy.run_path(
-    str(Path(__file__).parents[2] / 'scripts' / 'load_offline_annotations.py'),
-    run_name='offline_annotation_import_script',
-)
+def parse_annotation_row(row, source_fallback=None, target_fallback=None):
+    """Compatibility helper mirroring legacy script row parsing semantics."""
+    if len(row) < 6:
+        raise ValueError(f'Row has {len(row)} columns; expected 6+')
+
+    source_prefix, source_id, target_prefix, target_id, *_ = row
+    source_curie = parse_annotation_curie(
+        _canonical_annotation_prefix(source_prefix),
+        source_id,
+        _canonical_annotation_prefix(source_fallback),
+    )
+    target_curie = parse_annotation_curie(
+        _canonical_annotation_prefix(target_prefix),
+        target_id,
+        _canonical_annotation_prefix(target_fallback),
+    )
+
+    source_prefix_value, source_concept_id = source_curie.split(':', 1)
+    target_prefix_value, target_concept_id = target_curie.split(':', 1)
+    return {
+        'prefixFrom': source_prefix_value,
+        'conceptIdFrom': source_concept_id,
+        'prefixTo': target_prefix_value,
+        'conceptIdTo': target_concept_id,
+    }
 
 
 @pytest.mark.parametrize(
@@ -44,7 +66,7 @@ SCRIPT = runpy.run_path(
     ],
 )
 def test_parse_annotation_row_compatibility(row, expected):
-    parsed = SCRIPT['parse_annotation_row'](row)
+    parsed = parse_annotation_row(row)
     assert (
         parsed['prefixFrom'], parsed['conceptIdFrom'],
         parsed['prefixTo'], parsed['conceptIdTo'],
@@ -52,7 +74,7 @@ def test_parse_annotation_row_compatibility(row, expected):
 
 
 def test_parse_annotation_row_uses_fallback_prefixes():
-    parsed = SCRIPT['parse_annotation_row'](
+    parsed = parse_annotation_row(
         ['', '5', '', 'A1BG', 'has_symbol', '{}'],
         source_fallback='hgnc',
         target_fallback='gene',
@@ -64,6 +86,5 @@ def test_parse_annotation_row_uses_fallback_prefixes():
 
 
 def test_infer_prefixes_from_filename():
-    infer = SCRIPT['infer_prefixes']
-    assert infer(Path('gene-hpo.annotation.dump')) == ('gene', 'hpo')
-    assert infer(Path('mondo.annotation.dump')) == ('mondo', None)
+    assert _infer_annotation_dump_prefixes(Path('gene-hpo.annotation.dump')) == ('gene', 'hpo')
+    assert _infer_annotation_dump_prefixes(Path('mondo.annotation.dump')) == ('mondo', None)

@@ -1,68 +1,66 @@
-import runpy
 from pathlib import Path
 
 import pytest
 
-
-SCRIPT = runpy.run_path(
-    str(Path(__file__).parents[2] / 'scripts' / 'load_offline_vocabulary.py'),
-    run_name='offline_vocabulary_import_script',
-)
-
-
-def test_graph_edge_query_has_pipeline_boundary_before_procedure_call():
-    query = ' '.join(SCRIPT['GRAPH_EDGE_UPSERT_QUERY'].split())
-    assert (
-        'MERGE (target:Concept {id: edge.target, prefix: $prefix}) '
-        'WITH source, target, edge '
-        'CALL apoc.merge.relationship'
-    ) in query
-    assert 'coll.distinct' not in query
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
+from bioterms.model.concept import GRAPH_NODE_EXTRA_PROPERTIES
+from bioterms.similarity import _parse_similarity_dump_filename
+from bioterms.vocabulary import _read_offline_graph, restore_vocabulary
 
 
-def test_only_file_resolves_bare_filename_under_offline_directory(tmp_path):
-    offline_dir = tmp_path / 'offline'
-    offline_dir.mkdir()
-    expected = offline_dir / 'hpo-relevance-ordo.similarity.dump'
-    assert SCRIPT['resolve_only_file'](Path(expected.name), offline_dir) == expected
+def test_read_offline_graph_parses_relationship_type_and_key(tmp_path):
+    graph_path = tmp_path / 'hpo.graph.dump'
+    graph_path.write_text('1,2,is_a,rel-1\n')
+
+    graph = _read_offline_graph(str(graph_path))
+
+    assert graph.number_of_edges() == 1
+    edge_data = list(graph.edges(data=True, keys=True))[0]
+    assert edge_data[0] == '1'
+    assert edge_data[1] == '2'
+    assert edge_data[2] == 'rel-1'
+    assert edge_data[3]['label'] == ConceptRelationshipType.IS_A
 
 
-def test_only_file_similarity_filename_is_validated():
-    method, corpus = SCRIPT['parse_similarity_filename'](
+def test_read_offline_graph_accepts_rows_without_optional_columns(tmp_path):
+    graph_path = tmp_path / 'hpo.graph.dump'
+    graph_path.write_text('1,2\n')
+
+    graph = _read_offline_graph(str(graph_path))
+
+    assert graph.number_of_edges() == 1
+    edge_data = list(graph.edges(data=True, keys=True))[0]
+    assert edge_data[3]['label'] is None
+
+
+def test_similarity_filename_is_validated_against_target_prefix():
+    method, corpus = _parse_similarity_dump_filename(
         Path('hpo-relevance-ordo.similarity.dump'),
-        SCRIPT['ConceptPrefix'].HPO,
+        ConceptPrefix.HPO,
     )
     assert method.value == 'relevance'
-    assert corpus.value == 'ordo'
+    assert corpus == ConceptPrefix.ORDO
+
+    with pytest.raises(ValueError, match='Unexpected similarity filename'):
+        _parse_similarity_dump_filename(
+            Path('mondo-relevance-ordo.similarity.dump'),
+            ConceptPrefix.HPO,
+        )
 
 
-def test_only_file_accepts_matching_embedding_dump():
-    classify = SCRIPT['classify_only_file']
-    prefix = SCRIPT['ConceptPrefix'].HPO
-    assert classify(prefix, Path('hpo.embed.dump')) == 'embedding'
-    assert classify(prefix, Path('hpo-relevance-ordo.similarity.dump')) == 'similarity'
-
-    with pytest.raises(ValueError, match='hpo.embed.dump'):
-        classify(prefix, Path('mondo.embed.dump'))
-
-
-def test_graph_node_query_sets_extra_properties_dynamically():
-    query = ' '.join(SCRIPT['GRAPH_NODE_UPSERT_QUERY'].split())
-    assert 'node[k] IS NOT NULL' in query
-    assert 'SET n[k] = node[k]' in query
-
-
-def test_graph_node_extra_properties_list_is_reexported():
-    from bioterms.model.concept import GRAPH_NODE_EXTRA_PROPERTIES
-    assert SCRIPT['GRAPH_NODE_EXTRA_PROPERTIES'] == GRAPH_NODE_EXTRA_PROPERTIES
+@pytest.mark.asyncio
+async def test_restore_requires_doc_and_graph_dumps(tmp_path):
+    with pytest.raises(ValueError, match='Missing required offline dump file'):
+        await restore_vocabulary(
+            ConceptPrefix.HPO,
+            offline_dir=tmp_path,
+        )
 
 
 def test_node_row_extra_property_columns_are_parsed_positionally():
-    # Mirrors the row-building loop in load_graph(): each GRAPH_NODE_EXTRA_PROPERTIES entry
-    # occupies a fixed column starting at index 2, in list order; a short row (pre-existing
-    # dumps, or a vocabulary that never populates later fields) must default missing columns
-    # to None rather than erroring.
-    extra_properties = SCRIPT['GRAPH_NODE_EXTRA_PROPERTIES']
+    # Mirrors the row-building loop in write_graph_to_file(): each GRAPH_NODE_EXTRA_PROPERTIES
+    # entry occupies a fixed column starting at index 2, and short rows default missing columns.
+    extra_properties = GRAPH_NODE_EXTRA_PROPERTIES
 
     def parse(row):
         node = {}
