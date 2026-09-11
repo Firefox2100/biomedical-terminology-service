@@ -191,6 +191,11 @@ def _add_relationship(ohdsi_graph: nx.MultiDiGraph,
         )
     elif relationship_id in [
         'Is a',
+        # Vocabulary-qualified variant of 'Is a'/'Subsumes' -- same semantics, own
+        # relationship_id/reverse pair in RELATIONSHIP.csv. Confirmed via that file: no
+        # other "X is a"/"X subsumes" variant has any actual rows in CONCEPT_RELATIONSHIP.csv
+        # for this data extract.
+        'RxNorm is a',
     ]:
         ohdsi_graph.add_edge(
             source_concept_id,
@@ -248,11 +253,13 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
         dtype={
             'concept_id': int,
             'concept_name': str,
+            'vocabulary_id': str,
             'valid_end_date': int,
         },
         usecols=[
             'concept_id',
             'concept_name',
+            'vocabulary_id',
             'valid_end_date',
         ],
         sep='\t',
@@ -274,6 +281,7 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
                 status=ConceptStatus.DEPRECATED
                        if row['valid_end_date'] < date_int
                        else ConceptStatus.ACTIVE,
+                sourceVocabularyId=None if pd.isna(row['vocabulary_id']) else str(row['vocabulary_id']),
             )
             concepts[row['concept_id']] = concept
 
@@ -313,6 +321,38 @@ def _process_synonyms(concepts: dict[int, CONCEPT_CLASS]):
                 if concept.synonyms is None:
                     concept.synonyms = []
                 concept.synonyms.append(str(synonym))
+
+
+def _apply_drug_strength_row(row,
+                             concepts: dict[int, CONCEPT_CLASS],
+                             ):
+    """
+    Build a drug strength entry from one DRUG_STRENGTH.csv row and attach it to its drug concept.
+    :param row: The row from the OHDSI DRUG_STRENGTH.csv file.
+    :param concepts: A dictionary mapping concept IDs to Concept instances.
+    """
+    drug_strength = OhdsiDrugStrength(
+        ingredientId=str(row['ingredient_concept_id']),
+        amountValue=row['amount_value'] if not pd.isna(row['amount_value']) else None,
+        numeratorValue=row['numerator_value'] if not pd.isna(row['numerator_value']) else None,
+        denominatorValue=row['denominator_value'] if not pd.isna(row['denominator_value']) else None,
+    )
+
+    if not pd.isna(row['amount_unit_concept_id']):
+        amount_unit = concepts[row['amount_unit_concept_id']].label
+        drug_strength.amount_unit = amount_unit
+    if not pd.isna(row['numerator_unit_concept_id']):
+        numerator_unit = concepts[row['numerator_unit_concept_id']].label
+        drug_strength.numerator_unit = numerator_unit
+    if not pd.isna(row['denominator_unit_concept_id']):
+        denominator_unit = concepts[row['denominator_unit_concept_id']].label
+        drug_strength.denominator_unit = denominator_unit
+
+    drug_concept = concepts.get(row['drug_concept_id'])
+    if drug_concept:
+        if drug_concept.drug_strengths is None:
+            drug_concept.drug_strengths = []
+        drug_concept.drug_strengths.append(drug_strength)
 
 
 def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
@@ -357,28 +397,7 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
                                     total=len(chunk),
                                     transient=True,
                                     ):
-            drug_strength = OhdsiDrugStrength(
-                ingredientId=str(row['ingredient_concept_id']),
-                amountValue=row['amount_value'] if not pd.isna(row['amount_value']) else None,
-                numeratorValue=row['numerator_value'] if not pd.isna(row['numerator_value']) else None,
-                denominatorValue=row['denominator_value'] if not pd.isna(row['denominator_value']) else None,
-            )
-
-            if not pd.isna(row['amount_unit_concept_id']):
-                amount_unit = concepts[row['amount_unit_concept_id']].label
-                drug_strength.amount_unit = amount_unit
-            if not pd.isna(row['numerator_unit_concept_id']):
-                numerator_unit = concepts[row['numerator_unit_concept_id']].label
-                drug_strength.numerator_unit = numerator_unit
-            if not pd.isna(row['denominator_unit_concept_id']):
-                denominator_unit = concepts[row['denominator_unit_concept_id']].label
-                drug_strength.denominator_unit = denominator_unit
-
-            drug_concept = concepts.get(row['drug_concept_id'])
-            if drug_concept:
-                if drug_concept.drug_strengths is None:
-                    drug_concept.drug_strengths = []
-                drug_concept.drug_strengths.append(drug_strength)
+            _apply_drug_strength_row(row, concepts)
 
 
 def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
@@ -418,6 +437,11 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
                                     ):
             if row['valid_end_date'] < date_int:
                 continue
+            if row['concept_id_1'] == row['concept_id_2']:
+                # Self-mapping rows (overwhelmingly 'Maps to'/'Mapped from' pairs, where every
+                # standard concept trivially maps to itself) carry no graph-topological
+                # information -- skip, mirroring the same guard in _process_annotations.
+                continue
             _add_relationship(
                 ohdsi_graph,
                 row['relationship_id'],
@@ -447,7 +471,12 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
                                     total=len(chunk),
                                     transient=True,
                                     ):
-            if row['min_levels_of_separation'] != 0:
+            # min_levels_of_separation == 0 means ancestor and descendant are the SAME
+            # concept (CONCEPT_ANCESTOR's documented self-row convention) -- that is not a
+            # hierarchy edge. Direct parent-child pairs are separation == 1; deeper values
+            # are transitive (grandparent, etc.) and are intentionally not flattened into
+            # is_a here.
+            if row['min_levels_of_separation'] != 1:
                 continue
 
             ohdsi_graph.add_edge(

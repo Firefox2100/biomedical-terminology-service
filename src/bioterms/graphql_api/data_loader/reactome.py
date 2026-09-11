@@ -316,6 +316,8 @@ class ReactomeLoader:
         self._reaction_pathway_loader = None
         self._gene_input_loader = None
         self._gene_output_loader = None
+        self._reaction_by_gene_input_loader = None
+        self._reaction_by_gene_output_loader = None
 
     @property
     def sub_pathway(self) -> ReactomePathwayLoaderByParent:
@@ -414,12 +416,12 @@ class ReactomeLoader:
         Get the loader for reactions given gene IDs as inputs.
         :return: The ReactomeReactionLoaderByInput instance.
         """
-        if self._gene_input_loader is None:
-            self._gene_input_loader = ReactomeReactionLoaderByInput(
+        if self._reaction_by_gene_input_loader is None:
+            self._reaction_by_gene_input_loader = ReactomeReactionLoaderByInput(
                 graph_db=self._graph_db,
             )
 
-        return self._gene_input_loader
+        return self._reaction_by_gene_input_loader
 
     @property
     def gene_as_output(self) -> ReactomeReactionLoaderByOutput:
@@ -427,9 +429,9 @@ class ReactomeLoader:
         Get the loader for reactions given gene IDs as outputs.
         :return: The ReactomeReactionLoaderByOutput instance.
         """
-        if self._gene_output_loader is None:
-            self._gene_output_loader = ReactomeReactionLoaderByOutput(
+        if self._reaction_by_gene_output_loader is None:
+            self._reaction_by_gene_output_loader = ReactomeReactionLoaderByOutput(
                 graph_db=self._graph_db,
             )
 
-        return self._gene_output_loader
+        return self._reaction_by_gene_output_loader

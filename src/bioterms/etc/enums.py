@@ -14,6 +14,8 @@ class AnnotationType(Enum):
     NARROW = 'narrow'
     RELATED = 'related'
     HAS_SYMBOL = 'has_symbol'
+    ALIAS_SYMBOL = 'alias_symbol'
+    PREVIOUS_SYMBOL = 'previous_symbol'
     ANNOTATED_WITH = 'annotated_with'
 
 
@@ -40,6 +42,7 @@ class ConceptPrefix(Enum):
     ORDO = 'ordo'
     REACTOME = 'reactome'
     SNOMED = 'snomed'
+    UNIPROT = 'uniprot'
 
 
 class ConceptStatus(Enum):
@@ -73,6 +76,9 @@ class ConceptRelationshipType(Enum):
     HAS_INPUT = 'has_input'
     HAS_OUTPUT = 'has_output'
     OHDSI_RELATIONSHIP = 'ohdsi_relationship'
+    ANNOTATED_WITH = 'annotated_with'
+    CONSIDER = 'consider'
+    SNOMED_ASSOCIATION = 'snomed_association'
 
 
 class DocDatabaseDriverType(Enum):
@@ -88,6 +94,7 @@ class GraphDatabaseDriverType(Enum):
     The type of graph database driver.
     """
     NEO4J = 'neo4j'
+    POSTGRESQL = 'postgresql'
 
 
 class ServiceEnvironment(Enum):
@@ -114,3 +121,5 @@ class VectorDatabaseDriverType(Enum):
     The type of vector database driver.
     """
     QDRANT = 'qdrant'
+    MONGODB = 'mongodb'
+    POSTGRESQL = 'postgresql'

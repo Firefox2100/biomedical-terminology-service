@@ -5,8 +5,8 @@ document.addEventListener('DOMContentLoaded', function () {
     return;
   }
 
-  const deleteEndpointPattern = endpointsEl.getAttribute('data-delete-endpoint');
-  const csrfToken = endpointsEl.getAttribute('data-csrf-token');
+  const deleteEndpointPattern = endpointsEl.dataset.deleteEndpoint;
+  const csrfToken = endpointsEl.dataset.csrfToken;
 
   if (!deleteEndpointPattern) {
     console.warn('API Key management: missing data-delete-endpoint on #api-key-endpoints.');
@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   buttons.forEach(function (btn) {
     btn.addEventListener('click', async function () {
-      const keyId = this.getAttribute('data-key-id');
+      const keyId = this.dataset.keyId;
       if (!keyId) {
         console.warn('API Key management: revoke button missing data-key-id.');
         return;

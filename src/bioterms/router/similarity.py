@@ -2,7 +2,7 @@
 Router for similarity and translation endpoints.
 """
 
-from typing import List, Optional, Union
+from typing import Annotated, List, Optional
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -12,6 +12,7 @@ from bioterms.etc.metrics import SIM_REQS, SIM_ROOTS, SIM_THRESHOLD, SIM_LIMIT
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.similar_term import SimilarTerm
+from bioterms.model.translated_term import TranslatedTerm
 from .utils import response_generator
 
 
@@ -67,7 +68,13 @@ class TranslateRequestV1(JsonModel):
         description='List of constraint term IDs to filter the translations.',
         alias='constraintIds',
     )
-    threshold: Union[float, List[float]] = Field(
+    constraint_prefix: Optional[ConceptPrefix] = Field(
+        None,
+        description='The vocabulary prefix that constraintIds belong to. Defaults to the same '
+                    'vocabulary as termIds (the prefix path parameter) if not provided.',
+        alias='constraintPrefix',
+    )
+    threshold: float | List[float] = Field(
         ...,
         description='The similarity score threshold(s) for the translations. '
                     'If a single float is provided, it will be applied to all constraint IDs. '
@@ -130,13 +137,15 @@ class TranslatedTermV1(JsonModel):
 @similarity_router.post('/{prefix}/similarity/v1', response_model=List[SimilarTermV1])
 async def get_similar_terms_v1(prefix: ConceptPrefix,
                                requested_terms: SimilarityRequestV1,
-                               result_threshold: int = Query(
-                                   0,
-                                   description='The maximum number of terms to return in the '
-                                               'response. 0 for no limit.',
-                                   ge=0,
-                               ),
-                               graph_db: GraphDatabase = Depends(get_active_graph_db),
+                               graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                               result_threshold: Annotated[
+                                   int,
+                                   Query(
+                                       description='The maximum number of terms to return in the '
+                                                   'response. 0 for no limit.',
+                                       ge=0,
+                                   )
+                               ] = 0,
                                ):
     """
     Get similar terms for the requested term IDs (V1). This endpoint is compatible with Cafe Variome
@@ -190,44 +199,54 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
 
 @similarity_router.get('/{prefix}/similarity/v2', response_model=List[SimilarTerm])
 async def get_similar_terms_v2(prefix: ConceptPrefix,
-                               concept_ids: List[str] = Query(
-                                   ...,
-                                   description='List of concept IDs to get similar concepts for.'
-                               ),
-                               threshold: float = Query(
-                                   1.0,
-                                   description='Minimum similarity score to consider a term as '
-                                               'similar. 0 to return all. Please note that the '
-                                               'server may have chosen to store only connections '
-                                               'which similarity score are above a certain value. '
-                                               'In this case, since the data is not stored, '
-                                               'they will not be returned even if the threshold '
-                                               'is set to lower.',
-                                   ge=0.0,
-                                   le=1.0,
-                               ),
-                               same_prefix: bool = Query(
-                                   True,
-                                   description='Whether to only return similar terms with the '
-                                               'same prefix as the original term.',
-                               ),
-                               corpus: Optional[ConceptPrefix] = Query(
-                                   None,
-                                   description='If specified, only consider similarity scores '
-                                               'calculated within the given corpus/prefix.',
-                               ),
-                               method: Optional[SimilarityMethod] = Query(
-                                   None,
-                                   description='If specified, only consider similarity scores '
-                                               'calculated with the given method.',
-                               ),
-                               limit: Optional[int] = Query(
-                                   None,
-                                   description='Maximum number of descendants to return for '
-                                               'each term.',
-                                   ge=1,
-                               ),
-                               graph_db: GraphDatabase = Depends(get_active_graph_db),
+                               concept_ids: Annotated[
+                                   List[str],
+                                   Query(description='List of concept IDs to get similar concepts for.')
+                               ],
+                               graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                               threshold: Annotated[
+                                   float,
+                                   Query(
+                                       description='Minimum similarity score to consider a term as '
+                                                   'similar. 0 to return all. Please note that the '
+                                                   'server may have chosen to store only connections '
+                                                   'which similarity score are above a certain value. '
+                                                   'In this case, since the data is not stored, '
+                                                   'they will not be returned even if the threshold '
+                                                   'is set to lower.',
+                                       ge=0.0,
+                                       le=1.0,
+                                   )
+                               ] = 1.0,
+                               same_prefix: Annotated[
+                                   bool,
+                                   Query(
+                                       description='Whether to only return similar terms with the '
+                                                   'same prefix as the original term.',
+                                   )
+                               ] = True,
+                               corpus: Annotated[
+                                   Optional[ConceptPrefix],
+                                   Query(
+                                       description='If specified, only consider similarity scores '
+                                                   'calculated within the given corpus/prefix.',
+                                   )
+                               ] = None,
+                               method: Annotated[
+                                   Optional[SimilarityMethod],
+                                   Query(
+                                       description='If specified, only consider similarity scores '
+                                                   'calculated with the given method.',
+                                   )
+                               ] = None,
+                               limit: Annotated[
+                                   Optional[int],
+                                   Query(
+                                       description='Maximum number of descendants to return for '
+                                                   'each term.',
+                                       ge=1,
+                                   )
+                               ] = None,
                                ):
     """
     Get similar terms for the requested term IDs (V2).
@@ -293,12 +312,14 @@ async def get_similar_terms_v2(prefix: ConceptPrefix,
 @similarity_router.post('/{prefix}/translate/v1', response_model=List[TranslatedTermV1])
 async def translate_terms_v1(prefix: ConceptPrefix,
                              translate_request: TranslateRequestV1,
-                             result_threshold: int = Query(
-                                 0,
-                                 description='The maximum number of terms to return in the '
-                                             'response. 0 for no limit.'
-                             ),
-                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                             result_threshold: Annotated[
+                                 int,
+                                 Query(
+                                     description='The maximum number of terms to return in the '
+                                                 'response. 0 for no limit.'
+                                 )
+                             ] = 0,
                              ):
     """
     Translate terms for the requested term IDs (V1). This endpoint is compatible with
@@ -310,11 +331,13 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of translated terms with their similarity scores.
     """
+    constraint_prefix = translate_request.constraint_prefix or prefix
+
     translate_iter = graph_db.translate_terms_iter(
         original_ids=translate_request.term_ids,
         original_prefix=prefix,
         constraint_ids={
-            prefix: set(translate_request.constraint_ids),
+            constraint_prefix: set(translate_request.constraint_ids),
         },
         threshold=translate_request.threshold,
         limit=result_threshold if result_threshold > 0 else None,
@@ -330,36 +353,42 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     return v1_translated_terms
 
 
-@similarity_router.get('/{prefix}/translate/v2', response_model=List[SimilarTerm])
+@similarity_router.get('/{prefix}/translate/v2', response_model=List[TranslatedTerm])
 async def translate_terms_v2(prefix: ConceptPrefix,
-                             original_ids: List[str] = Query(
-                                 ...,
-                                 description='List of concept IDs to get similar concepts for.'
-                             ),
-                             constraint_concepts: List[str] = Query(
-                                 ...,
-                                 description='List of constraint concept IDs to filter the '
-                                             'translations. In prefix:id format.'
-                             ),
-                             threshold: float = Query(
-                                 1.0,
-                                 description='Minimum similarity score to consider a term as '
-                                             'similar. 0 to return all. Please note that the '
-                                             'server may have chosen to store only connections '
-                                             'which similarity score are above a certain value. '
-                                             'In this case, since the data is not stored, '
-                                             'they will not be returned even if the threshold '
-                                             'is set to lower.',
-                                 ge=0.0,
-                                 le=1.0,
-                             ),
-                             limit: Optional[int] = Query(
-                                 None,
-                                 description='Maximum number of descendants to return for '
-                                             'each term.',
-                                 ge=1,
-                             ),
-                             graph_db: GraphDatabase = Depends(get_active_graph_db),
+                             original_ids: Annotated[
+                                 List[str],
+                                 Query(description='List of concept IDs to get similar concepts for.')
+                             ],
+                             constraint_concepts: Annotated[
+                                 List[str],
+                                 Query(
+                                     description='List of constraint concept IDs to filter the '
+                                                 'translations. In prefix:id format.'
+                                 )
+                             ],
+                             graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                             threshold: Annotated[
+                                 float,
+                                 Query(
+                                     description='Minimum similarity score to consider a term as '
+                                                 'similar. 0 to return all. Please note that the '
+                                                 'server may have chosen to store only connections '
+                                                 'which similarity score are above a certain value. '
+                                                 'In this case, since the data is not stored, '
+                                                 'they will not be returned even if the threshold '
+                                                 'is set to lower.',
+                                     ge=0.0,
+                                     le=1.0,
+                                 )
+                             ] = 1.0,
+                             limit: Annotated[
+                                 Optional[int],
+                                 Query(
+                                     description='Maximum number of descendants to return for '
+                                                 'each term.',
+                                     ge=1,
+                                 )
+                             ] = None,
                              ):
     """
     Translate terms for the requested term IDs (V2).

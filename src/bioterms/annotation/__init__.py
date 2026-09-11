@@ -1,13 +1,73 @@
+import csv
 import importlib
 import importlib.resources
 import inspect
+import json
+import os
+from pathlib import Path
 import aiofiles
 import aiofiles.os
 
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.enums import AnnotationType, ConceptPrefix
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import Cache, GraphDatabase, get_active_cache, get_active_graph_db
 from bioterms.model.annotation_status import AnnotationStatus
+from bioterms.model.annotation import Annotation
+from bioterms.vocabulary.utils import parse_annotation_curie, write_annotations_to_file
+
+
+class _OfflineAnnotationGraphDB:
+    """
+    Lightweight adapter that captures annotation writes into offline dump files.
+    """
+
+    def __init__(self,
+                 prefix_1: ConceptPrefix,
+                 prefix_2: ConceptPrefix,
+                 overwrite: bool,
+                 ):
+        self.prefix_1 = prefix_1
+        self.prefix_2 = prefix_2
+        self.overwrite = overwrite
+        self._written = False
+
+    async def count_terms(self,
+                          prefix: ConceptPrefix,
+                          ) -> int:
+        # Offline annotation generation may run without online databases.
+        return 1
+
+    async def count_annotations(self,
+                                prefix_1: ConceptPrefix,
+                                prefix_2: ConceptPrefix,
+                                ) -> int:
+        if self.overwrite:
+            return 0
+
+        offline_file_path = os.path.join(
+            CONFIG.data_dir,
+            'offline',
+            f'{self.prefix_1.value}-{self.prefix_2.value}.annotation.dump',
+        )
+        return 1 if os.path.exists(offline_file_path) and os.path.getsize(offline_file_path) > 0 else 0
+
+    async def save_annotations(self,
+                               annotations: list[Annotation],
+                               ):
+        await write_annotations_to_file(
+            prefix_from=self.prefix_1,
+            prefix_to=self.prefix_2,
+            annotations=annotations,
+            overwrite=self.overwrite and not self._written,
+        )
+        self._written = True
+
+
+def _offline_annotation_dump_path(prefix_1: ConceptPrefix,
+                                  prefix_2: ConceptPrefix,
+                                  ) -> str:
+    return os.path.join(CONFIG.data_dir, 'offline', f'{prefix_1.value}-{prefix_2.value}.annotation.dump')
 
 
 def _get_annotation_module_name(prefix_1: ConceptPrefix,
@@ -113,7 +173,7 @@ async def download_annotation(prefix_1: ConceptPrefix,
         raise ValueError(f'Annotation module for {prefix_1} and {prefix_2} does not '
                          f'have a download_annotation function.')
 
-    result = download_func()
+    result = download_func(download_client=download_client)
     if inspect.iscoroutine(result):
         await result
 
@@ -152,9 +212,26 @@ async def delete_annotation(prefix_1: ConceptPrefix,
     await cache.rotate_dataset_version()
 
 
+def _offline_dump_already_exists(annotation_module,
+                                 ) -> bool:
+    """
+    Check whether an offline annotation dump already exists for the given annotation module.
+    Used to tolerate a NotImplementedError from an annotation's live loader when running
+    offline, since the annotation may have already been dumped by an earlier offline run.
+    :param annotation_module: The annotation module being loaded.
+    :return: True if the offline dump file exists, False otherwise.
+    """
+    dump_path = _offline_annotation_dump_path(
+        annotation_module.VOCABULARY_PREFIX_1,
+        annotation_module.VOCABULARY_PREFIX_2,
+    )
+    return os.path.exists(dump_path)
+
+
 async def load_annotation(prefix_1: ConceptPrefix,
                           prefix_2: ConceptPrefix,
                           overwrite: bool = True,
+                          offline: bool = False,
                           graph_db: GraphDatabase = None,
                           ):
     """
@@ -162,16 +239,16 @@ async def load_annotation(prefix_1: ConceptPrefix,
     :param prefix_1: The first prefix.
     :param prefix_2: The second prefix.
     :param overwrite: Whether to overwrite existing annotation data.
+    :param offline: Whether to write output to offline dump file instead of graph database.
     :param graph_db: Optional GraphDatabase instance to use.
     """
     annotation_module = get_annotation_module(prefix_1, prefix_2)
-    cache = get_active_cache()
 
     if not check_files_exist(annotation_module.FILE_PATHS):
         raise ValueError(f'Annotation files for {prefix_1} and {prefix_2} not found. '
                          f'Are they downloaded?')
 
-    if overwrite:
+    if overwrite and not offline:
         # Drop existing data before loading
         await delete_annotation(
             prefix_1=prefix_1,
@@ -184,11 +261,35 @@ async def load_annotation(prefix_1: ConceptPrefix,
         raise ValueError(f'Annotation module for {prefix_1} and {prefix_2} does not '
                          f'have a load_annotation_from_file function.')
 
-    result = load_func(
-        graph_db=graph_db,
-    )
+    active_graph_db = graph_db
+    if offline:
+        active_graph_db = _OfflineAnnotationGraphDB(
+            prefix_1=annotation_module.VOCABULARY_PREFIX_1,
+            prefix_2=annotation_module.VOCABULARY_PREFIX_2,
+            overwrite=overwrite,
+        )
+
+    try:
+        result = load_func(
+            graph_db=active_graph_db,
+        )
+    except NotImplementedError:
+        if not offline or not _offline_dump_already_exists(annotation_module):
+            raise
+        return
+
     if inspect.iscoroutine(result):
-        await result
+        try:
+            await result
+        except NotImplementedError:
+            if not offline or not _offline_dump_already_exists(annotation_module):
+                raise
+            return
+
+    if offline:
+        return
+
+    cache = get_active_cache()
 
     await cache.rotate_dataset_version()
 
@@ -246,3 +347,145 @@ async def get_annotation_status(prefix_1: ConceptPrefix,
     )
 
     return status
+
+
+def _infer_annotation_dump_prefixes(path: Path) -> tuple[str | None, str | None]:
+    """
+    Infer zero, one, or two fallback prefixes from an annotation dump filename, mirroring
+    `scripts/load_offline_annotations.py`'s `infer_prefixes`.
+    :param path: The annotation dump file path.
+    :return: The (source, target) prefix strings inferred from the filename, or None each if
+        the filename carries no prefix information (a bare `.annotation.dump`).
+    """
+    suffix = '.annotation.dump'
+    if not path.name.endswith(suffix):
+        raise ValueError(f'Annotation dump must end in {suffix}: {path}')
+    stem = path.name[:-len(suffix)]
+    if not stem:
+        return None, None
+    parts = stem.split('-')
+    if len(parts) == 1:
+        return parts[0], None
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    raise ValueError(
+        f'Cannot infer prefixes from {path.name!r}; use --source-prefix and --target-prefix.'
+    )
+
+
+def _canonical_annotation_prefix(value: str | ConceptPrefix | None) -> str | ConceptPrefix | None:
+    """
+    Normalise a prefix value to a `ConceptPrefix` where possible, or a lowercase string for
+    vocabularies not registered as a `ConceptPrefix` (e.g. an external vocabulary such as MeSH
+    appearing only in a cross-reference annotation), mirroring the original script's
+    `canonical_prefix`.
+    :param value: The raw prefix value (string or ConceptPrefix), or None.
+    :return: The normalised prefix, or None if `value` was None/blank.
+    """
+    if value is None or not str(value).strip():
+        return None
+    value = value.value if isinstance(value, ConceptPrefix) else str(value).strip()
+    try:
+        return ConceptPrefix(value.lower())
+    except ValueError:
+        return value.lower()
+
+
+async def restore_annotation(dump_path: str | os.PathLike,
+                             source_prefix: str | ConceptPrefix | None = None,
+                             target_prefix: str | ConceptPrefix | None = None,
+                             overwrite: bool = False,
+                             batch_size: int = 5000,
+                             cache: Cache = None,
+                             graph_db: GraphDatabase = None,
+                             ) -> int:
+    """
+    Restore an annotation dump file (produced by `load_annotation(..., offline=True)`, i.e.
+    `write_annotations_to_file`) into the live graph database.
+
+    Each row carries its own source/target prefix and CURIE columns, so -- like
+    `scripts/load_offline_annotations.py`, which this replaces -- restoring does not require
+    knowing the (prefix_1, prefix_2) annotation pair up front: `source_prefix`/`target_prefix`
+    (explicit, or inferred from the dump filename when omitted) are used only as a fallback for
+    rows where a prefix column is empty. This goes through `GraphDatabase.save_annotations`
+    (the same interface `load_annotation` itself uses when not offline) rather than talking to
+    Neo4j directly, so it works unmodified against the PostgreSQL graph driver too.
+    :param dump_path: Path to a `<prefix1>[-<prefix2>].annotation.dump` file.
+    :param source_prefix: Fallback source prefix, overriding filename inference.
+    :param target_prefix: Fallback target prefix, overriding filename inference.
+    :param overwrite: Whether to drop any existing annotations for the inferred/explicit pair
+        before restoring. Requires the pair to be resolvable and registered (from a known
+        `bioterms.annotation.<p1>_<p2>` module) -- there is no such pair to delete otherwise.
+    :param batch_size: Number of annotations written per `save_annotations` call.
+    :param cache: The cache instance.
+    :param graph_db: The graph database instance.
+    :return: The number of annotations restored.
+    """
+    dump_path = Path(dump_path)
+    if not dump_path.is_file():
+        raise ValueError(f'Annotation dump not found: {dump_path}')
+
+    inferred_source, inferred_target = _infer_annotation_dump_prefixes(dump_path)
+    source_fallback = _canonical_annotation_prefix(source_prefix) or _canonical_annotation_prefix(inferred_source)
+    target_fallback = _canonical_annotation_prefix(target_prefix) or _canonical_annotation_prefix(inferred_target)
+
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    if overwrite:
+        if source_fallback is None or target_fallback is None:
+            raise ValueError(
+                'Cannot determine the (source, target) prefix pair to overwrite from '
+                f'{dump_path.name!r}; pass --source-prefix/--target-prefix explicitly.'
+            )
+        await delete_annotation(prefix_1=source_fallback, prefix_2=target_fallback, graph_db=graph_db)
+
+    total = 0
+    batch: list[Annotation] = []
+
+    with dump_path.open(encoding='utf-8', newline='') as f:
+        for line_number, row in enumerate(csv.reader(f), 1):
+            if not row or not any(value.strip() for value in row):
+                continue
+            if len(row) < 6:
+                raise ValueError(f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6')
+
+            row_source_prefix, source_id, row_target_prefix, target_id, annotation_type, properties_text = row[:6]
+            source_curie = parse_annotation_curie(
+                _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
+            )
+            target_curie = parse_annotation_curie(
+                _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
+            )
+            source_curie_prefix, source_curie_id = source_curie.split(':', 1)
+            target_curie_prefix, target_curie_id = target_curie.split(':', 1)
+
+            try:
+                properties = json.loads(properties_text) if properties_text.strip() else None
+            except json.JSONDecodeError as exc:
+                raise ValueError(f'{dump_path}:{line_number} contains invalid properties JSON') from exc
+
+            batch.append(Annotation(
+                prefixFrom=source_curie_prefix,
+                conceptIdFrom=source_curie_id,
+                prefixTo=target_curie_prefix,
+                conceptIdTo=target_curie_id,
+                annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
+                properties=properties,
+            ))
+
+            if len(batch) >= batch_size:
+                await graph_db.save_annotations(batch)
+                total += len(batch)
+                batch = []
+
+    if batch:
+        await graph_db.save_annotations(batch)
+        total += len(batch)
+
+    if cache is None:
+        cache = get_active_cache()
+
+    await cache.rotate_dataset_version()
+
+    return total

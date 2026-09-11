@@ -16,6 +16,12 @@
                 data-csrf="{{ request.scope.csrftoken() }}">
           Rebuild Cache
         </button>
+        <button id="reload-graphql-btn"
+                class="btn btn-sm btn-outline-secondary ms-2"
+                data-endpoint="{{ request.url_for('reload_graphql_endpoint') }}"
+                data-csrf="{{ request.scope.csrftoken() }}">
+          Reload GraphQL API
+        </button>
       {% endif %}
     </div>
   </div>

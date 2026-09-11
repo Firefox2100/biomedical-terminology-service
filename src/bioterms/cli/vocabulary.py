@@ -5,7 +5,7 @@ import typer
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, embed_vocabulary, \
-    get_vocabulary_status
+    restore_vocabulary, restore_vocabulary_embeddings, get_vocabulary_status
 from .utils import CONSOLE, run_async
 
 
@@ -94,6 +94,79 @@ async def load_command(vocabulary: Annotated[
             CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value}: {e}[/red]')
+        traceback.print_exc()
+
+
+@app.command(name='restore', help='Restore a vocabulary from offline dump files into the database.')
+@run_async
+async def restore_command(vocabulary: Annotated[
+                              Optional[ConceptPrefix],
+                              typer.Argument(help='The vocabulary to restore.')
+                          ] = None,
+                          restore_all: Annotated[
+                              bool,
+                              typer.Option(
+                                  '--all',
+                                  '-a',
+                                  help='Restore all available vocabularies.'
+                              )
+                          ] = False,
+                          overwrite: Annotated[
+                              bool,
+                              typer.Option(
+                                 '--overwrite',
+                                 '-o',
+                                 help='Drop existing data for the vocabulary before restoring, instead of '
+                                      'upserting into whatever is already there.')
+                          ] = False,
+                          batch_size: Annotated[
+                              int,
+                              typer.Option(
+                                  '--batch-size',
+                                  '-b',
+                                  help='Number of concepts written to the database per request. Graph edge '
+                                       'writes use their own internal batching.',
+                              )
+                          ] = 5000,
+                          offline_dir: Annotated[
+                              Optional[str],
+                              typer.Option(
+                                  '--offline-dir',
+                                  help='Directory containing the offline dump files '
+                                       '(default: BTS_DATA_DIR/offline).',
+                              )
+                          ] = None,
+                          skip_embeddings: Annotated[
+                              bool,
+                              typer.Option(
+                                  '--skip-embeddings',
+                                  help='Do not restore the .embed.dump file, even if present.',
+                              )
+                          ] = False,
+                          ):
+    try:
+        if restore_all:
+            target_vocabularies = list(ConceptPrefix)
+        elif vocabulary:
+            target_vocabularies = [vocabulary]
+        else:
+            CONSOLE.print('[red]Either specify a vocabulary to restore or use the --all flag.[/red]')
+            return
+        for vocabulary in target_vocabularies:
+            summary = await restore_vocabulary(
+                vocabulary,
+                overwrite=overwrite,
+                batch_size=batch_size,
+                offline_dir=offline_dir,
+                restore_embeddings=not skip_embeddings,
+            )
+            CONSOLE.print(
+                f'[green]Successfully restored vocabulary {vocabulary.value}: '
+                f'{summary["conceptCount"]} concepts, {summary["edgeCount"]} edges, '
+                f'embeddings {"restored" if summary["embeddingsRestored"] else "skipped"}.[/green]'
+            )
+    except Exception as e:
+        CONSOLE.print(f'[red]Failed to restore vocabulary {vocabulary.value}: {e}[/red]')
         traceback.print_exc()
 
 

@@ -5,7 +5,7 @@ for things like typos, synonyms, or semantic similarity. For more advanced searc
 please use the search endpoints. These endpoints are optimised for speed and low latency.
 """
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -54,8 +54,8 @@ class AutoCompleteV2Concept(JsonModel):
 @auto_complete_router.get('/{prefix}/auto-complete/v1/query/{query_str}', response_model=List[str])
 async def auto_complete_v1(prefix: ConceptPrefix,
                            query_str: str,
-                           long: bool = Query(False, description='Whether to return more results.'),
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           long: Annotated[bool, Query(description='Whether to return more results.')] = False,
                            ):
     """
     Auto-complete search endpoint (v1). This endpoint is meant to support Cafe Variome V2
@@ -108,22 +108,26 @@ async def auto_complete_v1(prefix: ConceptPrefix,
 
 @auto_complete_router.get('/{prefix}/auto-complete/v2', response_model=List[AutoCompleteV2Concept])
 async def auto_complete_v2(prefix: ConceptPrefix,
-                           query: str = Query(
-                               ...,
-                               min_length=CONFIG.auto_complete_min_length,
-                               description='The search query string.'
-                           ),
-                           with_definition: bool = Query(
-                               False,
-                               description='Whether to include definition in the response.'
-                           ),
-                           result_threshold: int = Query(
-                               0,
-                               ge=0,
-                               description='The maximum number of terms to return in the response. '
-                                           '0 for no limit.'
-                           ),
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                           query: Annotated[
+                               str,
+                               Query(
+                                   min_length=CONFIG.auto_complete_min_length,
+                                   description='The search query string.'
+                               )
+                           ],
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           with_definition: Annotated[
+                               bool,
+                               Query(description='Whether to include definition in the response.')
+                           ] = False,
+                           result_threshold: Annotated[
+                               int,
+                               Query(
+                                   ge=0,
+                                   description='The maximum number of terms to return in the response. '
+                                               '0 for no limit.'
+                               )
+                           ] = 0,
                            ):
     """
     Auto-complete search endpoint (v2). This endpoint is compatible with Cafe Variome V3
@@ -165,16 +169,15 @@ async def auto_complete_v2(prefix: ConceptPrefix,
 
 @auto_complete_router.get('/{prefix}/auto-complete/v3', response_model=List[ConceptUnion])
 async def auto_complete_v3(prefix: ConceptPrefix,
-                           query: str = Query(
-                               ...,
-                               min_length=CONFIG.auto_complete_min_length,
-                               description='The search query string.'
-                           ),
-                           limit: int = Query(
-                               20,
-                               ge=0,
-                           ),
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                           query: Annotated[
+                               str,
+                               Query(
+                                   min_length=CONFIG.auto_complete_min_length,
+                                   description='The search query string.'
+                               )
+                           ],
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           limit: Annotated[int, Query(ge=0)] = 20,
                            ):
     """
     Auto-complete search endpoint (v3). This endpoint returns full Concept models, and uses

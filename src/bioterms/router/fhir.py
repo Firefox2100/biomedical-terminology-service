@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from fhir.resources.capabilitystatement import CapabilityStatement, CapabilityStatementRest, \
@@ -26,6 +26,89 @@ fhir_router = APIRouter(
 )
 
 
+def _build_concept_property_params(concept: ConceptUnion,
+                                   base_url: str,
+                                   ) -> dict[str, ParametersParameter | list[ParametersParameter] | None]:
+    """
+    Build the full set of possible FHIR lookup properties for a concept, keyed by property name.
+    Values are None when the concept has no data for that property.
+    :param concept: The concept to build properties for.
+    :param base_url: The FHIR canonical base URL.
+    :return: A mapping of property name to its ParametersParameter (a list, for 'designation').
+    """
+    return {
+        'name': ParametersParameter(
+            name='name',
+            valueString=concept.prefix.value,
+        ),
+        'code': ParametersParameter(
+            name='code',
+            valueCode=concept.concept_id,
+        ),
+        'system': ParametersParameter(
+            name='system',
+            valueUri=f'{base_url}/CodeSystem/{concept.prefix.value}',
+        ),
+        'display': ParametersParameter(
+            name='display',
+            valueString=concept.label,
+        ) if concept.label else None,
+        'inactive': ParametersParameter(
+            name='property',
+            part=[
+                ParametersParameter(
+                    name='code',
+                    valueCode='inactive',
+                ),
+                ParametersParameter(
+                    name='value',
+                    valueBoolean=concept.status == ConceptStatus.DEPRECATED,
+                ),
+            ]
+        ),
+        'designation': [
+            ParametersParameter(
+                name='designation',
+                part=[
+                    ParametersParameter(
+                        name='value',
+                        valueString=s,
+                    )
+                ],
+            ) for s in concept.synonyms
+        ] if concept.synonyms else None,
+        'definition': ParametersParameter(
+            name='definition',
+            valueString=concept.definition,
+        ) if concept.definition else None,
+    }
+
+
+def _select_concept_params(available_params: dict[str, ParametersParameter | list[ParametersParameter] | None],
+                           ordered_names: list[str],
+                           ) -> list[ParametersParameter]:
+    """
+    Select and flatten the requested properties, in the given order, skipping any the
+    concept has no data for.
+    :param available_params: The full mapping of property name to its built parameter(s).
+    :param ordered_names: The property names to include, in output order.
+    :return: The flattened list of ParametersParameter to attach to the response.
+    """
+    parameters = []
+
+    for name in ordered_names:
+        value = available_params[name]
+        if value is None:
+            continue
+
+        if isinstance(value, list):
+            parameters.extend(value)
+        else:
+            parameters.append(value)
+
+    return parameters
+
+
 def concept_to_parameters(concept: ConceptUnion,
                           properties: Optional[list[str]] = None,
                           ) -> Parameters:
@@ -36,84 +119,17 @@ def concept_to_parameters(concept: ConceptUnion,
     :return: The FHIR Parameters object.
     """
     base_url = CONFIG.fhir_canonical_url.strip('/')
-    name_param = ParametersParameter(
-        name='name',
-        valueString=concept.prefix.value,
-    )
-    code_param = ParametersParameter(
-        name='code',
-        valueCode=concept.concept_id,
-    )
-    system_param = ParametersParameter(
-        name='system',
-        valueUri=f'{base_url}/CodeSystem/{concept.prefix.value}',
-    )
-    display_param = ParametersParameter(
-        name='display',
-        valueString=concept.label,
-    ) if concept.label else None
-    deprecated_param = ParametersParameter(
-        name='property',
-        part=[
-            ParametersParameter(
-                name='code',
-                valueCode='inactive',
-            ),
-            ParametersParameter(
-                name='value',
-                valueBoolean=concept.status == ConceptStatus.DEPRECATED,
-            ),
-        ]
-    )
-    synonym_params = [
-        ParametersParameter(
-            name='designation',
-            part=[
-                ParametersParameter(
-                    name='value',
-                    valueString=s,
-                )
-            ],
-        ) for s in concept.synonyms
-    ] if concept.synonyms else None
-    definition_param = ParametersParameter(
-        name='definition',
-        valueString=concept.definition,
-    ) if concept.definition else None
+    available_params = _build_concept_property_params(concept, base_url)
 
     if properties:
-        parameters = []
-        if 'name' in properties:
-            parameters.append(name_param)
-        if 'code' in properties:
-            parameters.append(code_param)
-        if 'system' in properties:
-            parameters.append(system_param)
-        if 'display' in properties and display_param:
-            parameters.append(display_param)
-        if 'inactive' in properties:
-            parameters.append(deprecated_param)
-        if 'designation' in properties and synonym_params:
-            parameters.extend(synonym_params)
-        if 'definition' in properties and definition_param:
-            parameters.append(definition_param)
+        ordered_names = [
+            name for name in ('name', 'code', 'system', 'display', 'inactive', 'designation', 'definition')
+            if name in properties
+        ]
+        return Parameters(parameter=_select_concept_params(available_params, ordered_names))
 
-        return Parameters(parameter=parameters)
-
-    all_params = [
-        name_param,
-        code_param,
-        system_param,
-        deprecated_param
-    ]
-    if display_param:
-        all_params.append(display_param)
-    if synonym_params:
-        all_params.extend(synonym_params)
-    if definition_param:
-        all_params.append(definition_param)
-
-    return Parameters(parameter=all_params)
+    ordered_names = ['name', 'code', 'system', 'inactive', 'display', 'designation', 'definition']
+    return Parameters(parameter=_select_concept_params(available_params, ordered_names))
 
 
 async def _lookup_fhir_code(base_url: str,
@@ -350,8 +366,8 @@ async def get_fhir_metadata():
 
 
 @fhir_router.get('/CodeSystem', response_model=Bundle, response_model_exclude_none=True)
-async def get_fhir_code_systems(doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                                graph_db: GraphDatabase = Depends(get_active_graph_db),
+async def get_fhir_code_systems(doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                                 ):
     code_systems = []
     base_url = CONFIG.fhir_canonical_url.strip('/')
@@ -396,10 +412,13 @@ async def get_fhir_code_systems(doc_db: DocumentDatabase = Depends(get_active_do
     },
     response_model_exclude_none=True
 )
-async def lookup_fhir_code(system: str = Query(..., description='The code system to lookup in.'),
-                           code: str = Query(..., description='The code to lookup.'),
-                           property: Optional[list[str]] = Query(None, description='The properties to return.'),
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
+async def lookup_fhir_code(system: Annotated[str, Query(description='The code system to lookup in.')],
+                           code: Annotated[str, Query(description='The code to lookup.')],
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           property: Annotated[
+                               Optional[list[str]],
+                               Query(description='The properties to return.')
+                           ] = None,
                            ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     return await _lookup_fhir_code(
@@ -421,7 +440,7 @@ async def lookup_fhir_code(system: str = Query(..., description='The code system
     response_model_exclude_none=True
 )
 async def lookup_fhir_code_post(search_params: Parameters,
-                                doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                                 ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     coding = next((
@@ -489,8 +508,8 @@ async def lookup_fhir_code_post(search_params: Parameters,
     response_model_exclude_none=True
 )
 async def get_fhir_code_system(prefix: ConceptPrefix,
-                               doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                               graph_db: GraphDatabase = Depends(get_active_graph_db),
+                               doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                               graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                                ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     vocab_status = await get_vocabulary_status(
@@ -524,9 +543,9 @@ async def get_fhir_code_system(prefix: ConceptPrefix,
 
 
 @fhir_router.get('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
-async def validate_fhir_code(system: str = Query(..., description='The code system to validate against.'),
-                             code: str = Query(..., description='The code to validate.'),
-                             doc_db: DocumentDatabase = Depends(get_active_doc_db),
+async def validate_fhir_code(system: Annotated[str, Query(description='The code system to validate against.')],
+                             code: Annotated[str, Query(description='The code to validate.')],
+                             doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                              ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     return await _validate_fhir_code(
@@ -539,7 +558,7 @@ async def validate_fhir_code(system: str = Query(..., description='The code syst
 
 @fhir_router.post('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
 async def validate_fhir_code_post(search_params: Parameters,
-                                  doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                  doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                                   ):
     base_url = CONFIG.fhir_canonical_url.strip('/')
     coding = next((

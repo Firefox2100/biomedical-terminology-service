@@ -66,6 +66,39 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             pass
 
 
+def _build_ncit_concept(row,
+                        ncit_graph: nx.DiGraph,
+                        ) -> CONCEPT_CLASS:
+    """
+    Build a Concept for one NCIT thesaurus row and wire its is-a edges into the graph.
+    :param row: The row from the NCIT flat file dataframe.
+    :param ncit_graph: The NCIT graph to add is-a edges to.
+    :return: The built Concept instance.
+    """
+    synonyms = row['synonyms'].split('|')
+
+    concept = CONCEPT_CLASS(
+        prefix=VOCABULARY_PREFIX,
+        conceptId=row['code'],
+        label=synonyms[0],
+        synonyms=synonyms[1:] if len(synonyms) > 1 else None,
+        definition=row['definition'] if not pd.isna(row['definition']) else None,
+        status=ConceptStatus.DEPRECATED if row['concept_status'] == 'Obsolete_Concept' else ConceptStatus.ACTIVE,
+    )
+
+    ncit_graph.add_node(row['code'])
+
+    if not pd.isna(row['parents']):
+        for parent in row['parents'].split('|'):
+            ncit_graph.add_edge(
+                row['code'],
+                parent,
+                label=ConceptRelationshipType.IS_A
+            )
+
+    return concept
+
+
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
@@ -108,27 +141,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description='Processing NCIT concepts',
         total=len(ncit_df)
     ):
-        synonyms = row['synonyms'].split('|')
-
-        concept = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX,
-            conceptId=row['code'],
-            label=synonyms[0],
-            synonyms=synonyms[1:] if len(synonyms) > 1 else None,
-            definition=row['definition'] if not pd.isna(row['definition']) else None,
-            status=ConceptStatus.DEPRECATED if row['concept_status'] == 'Obsolete_Concept' else ConceptStatus.ACTIVE,
-        )
-
-        concepts.append(concept)
-        ncit_graph.add_node(row['code'])
-
-        if not pd.isna(row['parents']):
-            for parent in row['parents'].split('|'):
-                ncit_graph.add_edge(
-                    row['code'],
-                    parent,
-                    label=ConceptRelationshipType.IS_A
-                )
+        concepts.append(_build_ncit_concept(row, ncit_graph))
 
     verbose_print('NCIT concepts constructed, saving to databases...')
 

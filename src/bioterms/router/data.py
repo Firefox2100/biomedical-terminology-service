@@ -5,6 +5,7 @@ vocabulary status information.
 """
 
 import zlib
+from typing import Annotated, AsyncIterator
 from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
@@ -16,7 +17,7 @@ from bioterms.model.base import JsonModel
 from bioterms.model.concept import ConceptUnion
 from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.vocabulary import get_vocabulary_config, delete_vocabulary, get_vocabulary_license, \
-    get_vocabulary_status
+    get_vocabulary_status, ALL_VOCABULARIES
 from .utils import response_generator, api_key_required
 
 
@@ -67,11 +68,48 @@ class ConceptInfoResponse(JsonModel):
     )
 
 
+class VocabularyAvailability(JsonModel):
+    """Summary of whether a supported vocabulary is loaded."""
+
+    model_config = ConfigDict(
+        serialize_by_alias=True,
+        extra='forbid',
+    )
+
+    prefix: ConceptPrefix = Field(
+        ...,
+        description='The prefix of the vocabulary.',
+    )
+    loaded: bool = Field(
+        ...,
+        description='Indicates whether the vocabulary is loaded in the system.',
+    )
+
+
+@data_router.get('', response_model=list[VocabularyAvailability])
+async def get_vocabularies(
+    doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+):
+    """
+    Report which supported vocabularies are loaded.
+    \f
+    :param doc_db: The document database instance.
+    :return: A minimal availability summary for every supported vocabulary.
+    """
+    return [
+        VocabularyAvailability(
+            prefix=prefix,
+            loaded=await doc_db.count_terms(prefix) > 0,
+        )
+        for prefix in ALL_VOCABULARIES
+    ]
+
+
 @data_router.get('/{prefix}', response_model=VocabularyStatus)
 async def get_vocabulary_status_info(prefix: ConceptPrefix,
-                                     cache: Cache = Depends(get_active_cache),
-                                     doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                                     graph_db: GraphDatabase = Depends(get_active_graph_db),
+                                     cache: Annotated[Cache, Depends(get_active_cache)],
+                                     doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                     graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                                      ):
     """
     Get status about the specified vocabulary.
@@ -94,11 +132,11 @@ async def get_vocabulary_status_info(prefix: ConceptPrefix,
 
 @data_router.delete('/{prefix}')
 async def delete_vocabulary_data(prefix: ConceptPrefix,
-                                 cache: Cache = Depends(get_active_cache),
-                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                                 graph_db: GraphDatabase = Depends(get_active_graph_db),
-                                 vector_db: VectorDatabase = Depends(get_active_vector_db),
-                                 _: str = Depends(api_key_required),
+                                 cache: Annotated[Cache, Depends(get_active_cache)],
+                                 doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                 graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                                 vector_db: Annotated[VectorDatabase, Depends(get_active_vector_db)],
+                                 _: Annotated[str, Depends(api_key_required)],
                                  ):
     """
     Delete all documents/records for the specified vocabulary from the document database.
@@ -119,7 +157,11 @@ async def delete_vocabulary_data(prefix: ConceptPrefix,
     )
 
 
-@data_router.get('/{prefix}/license', response_class=Response)
+@data_router.get(
+    '/{prefix}/license',
+    response_class=Response,
+    responses={404: {'description': 'No license information found for the vocabulary.'}},
+)
 async def get_license(prefix: ConceptPrefix):
     """
     Get the licence information for the specified vocabulary.
@@ -142,13 +184,15 @@ async def get_license(prefix: ConceptPrefix):
 
 @data_router.get('/{prefix}/random', response_model=list[str])
 async def get_random_concept_ids(prefix: ConceptPrefix,
-                                 count: int = Query(
-                                     10,
-                                     description='Number of random concepts to return.',
-                                     ge=1,
-                                     le=100,
-                                 ),
-                                 doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                                 doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                                 count: Annotated[
+                                     int,
+                                     Query(
+                                         description='Number of random concepts to return.',
+                                         ge=1,
+                                         le=100,
+                                     )
+                                 ] = 10,
                                  ):
     """
     Get a list of random concept IDs from the specified vocabulary.
@@ -168,7 +212,7 @@ async def get_random_concept_ids(prefix: ConceptPrefix,
 
 @data_router.get('/{prefix}/documents')
 async def get_documents(prefix: ConceptPrefix,
-                        doc_db: DocumentDatabase = Depends(get_active_doc_db),
+                        doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                         ):
     """
     Download all documents from the specified vocabulary database as a JSON list.
@@ -194,11 +238,52 @@ async def get_documents(prefix: ConceptPrefix,
     )
 
 
-@data_router.post('/{prefix}/documents', response_model=IngestResponse)
+async def _iter_request_lines(request: Request,
+                              is_gz: bool,
+                              ) -> AsyncIterator[bytes]:
+    """
+    Decode a streamed request body (optionally gzip-compressed) into newline-delimited lines.
+    :param request: The FastAPI request object to stream from.
+    :param is_gz: Whether the request body is gzip-compressed.
+    :return: An async iterator yielding non-empty line bytes.
+    """
+    decomp = zlib.decompressobj(16 + zlib.MAX_WBITS) if is_gz else None
+    buffer: bytes = b''
+
+    async for chunk in request.stream():
+        if is_gz:
+            chunk = decomp.decompress(chunk)
+
+        buffer += chunk
+
+        while True:
+            nl = buffer.find(b'\n')
+            if nl < 0:
+                # No complete line yet
+                break
+
+            line, buffer = buffer[:nl], buffer[nl + 1:]
+            if line.strip():
+                yield line
+
+    if is_gz:
+        tail = decomp.flush()
+        if tail:
+            buffer += tail
+
+    if buffer.strip():
+        yield buffer
+
+
+@data_router.post(
+    '/{prefix}/documents',
+    response_model=IngestResponse,
+    responses={400: {'description': 'Failed to ingest one or more of the uploaded documents.'}},
+)
 async def ingest_documents(prefix: ConceptPrefix,
                            request: Request,
-                           doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                           _: str = Depends(api_key_required),
+                           doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           _: Annotated[str, Depends(api_key_required)],
                            ):
     """
     Ingest documents into the specified vocabulary database.
@@ -214,16 +299,13 @@ async def ingest_documents(prefix: ConceptPrefix,
     :return: An IngestResponse containing the total number of concepts after ingestion.
     """
     is_gz = request.headers.get('Content-Encoding', '') == 'gzip'
-    decomp = zlib.decompressobj(16 + zlib.MAX_WBITS) if is_gz else None
 
-    buffer: bytes = b''
     batch: list[ConceptUnion] = []
     batch_size = 1000
     vocabulary_config = get_vocabulary_config(prefix)
     concept_class: ConceptUnion = vocabulary_config['conceptClass']
 
     async def flush_batch():
-        nonlocal buffer
         if not batch:
             return
 
@@ -231,39 +313,12 @@ async def ingest_documents(prefix: ConceptPrefix,
         batch.clear()
 
     try:
-        async for chunk in request.stream():
-            if is_gz:
-                chunk = decomp.decompress(chunk)
-
-            buffer += chunk
-
-            while True:
-                nl = buffer.find(b'\n')
-                if nl < 0:
-                    # No complete line yet
-                    break
-
-                line, buffer = buffer[:nl], buffer[nl + 1:]
-                if not line.strip():
-                    # Empty line
-                    continue
-
-                obj = concept_class.model_validate_json(line)
-                batch.append(obj)
-
-                if len(batch) >= batch_size:
-                    await flush_batch()
-
-        # Flush remaining buffer
-        if is_gz:
-            tail = decomp.flush()
-
-            if tail:
-                buffer += tail
-
-        if buffer.strip():
-            obj = concept_class.model_validate_json(buffer)
+        async for line in _iter_request_lines(request, is_gz):
+            obj = concept_class.model_validate_json(line)
             batch.append(obj)
+
+            if len(batch) >= batch_size:
+                await flush_batch()
 
         await flush_batch()
     except Exception as e:
@@ -279,11 +334,15 @@ async def ingest_documents(prefix: ConceptPrefix,
     )
 
 
-@data_router.get('/{prefix}/{concept_id}', response_model=ConceptInfoResponse)
+@data_router.get(
+    '/{prefix}/{concept_id}',
+    response_model=ConceptInfoResponse,
+    responses={404: {'description': 'Concept not found in the specified vocabulary.'}},
+)
 async def get_concept(prefix: ConceptPrefix,
                       concept_id: str,
-                      doc_db: DocumentDatabase = Depends(get_active_doc_db),
-                      graph_db: GraphDatabase = Depends(get_active_graph_db),
+                      doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                      graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                       ):
     """
     Get a specific concept by its ID from the specified vocabulary.

@@ -5,6 +5,7 @@ robots.txt, favicon, and health checks.
 """
 
 from datetime import date
+from typing import Annotated
 from xml.etree.ElementTree import Element, SubElement, tostring
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import Response, PlainTextResponse, FileResponse
@@ -21,7 +22,7 @@ misc_router = APIRouter(
 
 @misc_router.get('/sitemap.xml', include_in_schema=False)
 async def sitemap(request: Request,
-                  cache: Cache = Depends(get_active_cache),
+                  cache: Annotated[Cache, Depends(get_active_cache)],
                   ):
     """
     Serve the sitemap.xml file.

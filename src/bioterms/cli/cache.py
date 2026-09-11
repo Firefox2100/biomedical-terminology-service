@@ -1,8 +1,6 @@
 import traceback
 import typer
 
-from bioterms.database import get_active_cache
-from bioterms.app import rebuild_cache
 from .utils import CONSOLE, run_async
 
 
@@ -13,6 +11,8 @@ app = typer.Typer(help='Manage data cache.')
 @run_async
 async def purge_cache():
     try:
+        from bioterms.database import get_active_cache
+
         cache = get_active_cache()
         await cache.purge()
         CONSOLE.print('[green]Successfully purged all cached data.[/green]')
@@ -25,6 +25,8 @@ async def purge_cache():
 @run_async
 async def rebuild_cache_command():
     try:
+        from bioterms.app import rebuild_cache
+
         await rebuild_cache()
         CONSOLE.print('[green]Successfully rebuilt the cache.[/green]')
     except Exception as e:

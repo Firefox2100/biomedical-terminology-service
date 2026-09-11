@@ -2,7 +2,7 @@ name: bts
 services:
   # Neo4j as the graph database
   neo4j:
-    image: neo4j:2026.04.0
+    image: neo4j:2026.06.0
     restart: unless-stopped
     container_name: neo4j
     healthcheck:
@@ -23,7 +23,7 @@ services:
 
   # MongoDB as the primary document database
   mongodb:
-    image: mongo:8.2.9
+    image: mongo:8.3.4
     restart: unless-stopped
     container_name: mongodb
     healthcheck:
@@ -34,9 +34,33 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  # PostgreSQL (with pgvector), an optional alternative to MongoDB/Qdrant/Neo4j for
+  # BTS_DOC_DATABASE_DRIVER=sql, BTS_VECTOR_DATABASE_DRIVER=postgresql, and/or
+  # BTS_GRAPH_DATABASE_DRIVER=postgresql. Opt-in only: gated behind the "postgres" compose
+  # profile, not started by a plain `docker compose up`. Bring it up with
+  # `docker compose --profile postgres up`; see docs/source/build-database.rst. The
+  # pgvector/pgvector image is a normal PostgreSQL image with the pgvector extension bundled, so
+  # it works equally well as a plain document/graph-only Postgres if you don't need vectors.
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    restart: unless-stopped
+    container_name: postgres
+    profiles: ["postgres"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bts"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    environment:
+      - POSTGRES_USER=bts
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=bts
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   # Redis as the caching layer
   redis:
-    image: redis:8.6
+    image: redis:8.8
     restart: unless-stopped
     container_name: redis
     healthcheck:
@@ -61,6 +85,108 @@ services:
         target: /qdrant/config/production.yaml
     volumes:
       - qdrant_data:/qdrant/storage
+
+  # MongoDB Community Search (mongot), an optional alternative to Qdrant for
+  # BTS_VECTOR_DATABASE_DRIVER=mongodb. Opt-in only: these four services are gated behind the
+  # "mongodb-search" compose profile and are not started by a plain `docker compose up`. Bring
+  # them up with `docker compose --profile mongodb-search up`, and point the bioterms service's
+  # BTS_MONGODB_* environment at "mongodb-search" (see docs/source/build-database.rst) instead of
+  # the plain "mongodb" service above, since vectors are stored directly on the document store's
+  # concept documents. mongot is licensed under the SSPL - the same source-available license as
+  # MongoDB Community Server itself - unlike the mongodb/mongodb-atlas-local image, which is only
+  # licensed for local Atlas emulation/evaluation use.
+  mongodb-search-keyfile-init:
+    image: mongodb/mongodb-community-server:8.3.8-ubi8
+    container_name: mongodb-search-keyfile-init
+    profiles: ["mongodb-search"]
+    user: "0:0"
+    volumes:
+      - mongodb_search_shared:/shared
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ ! -f /shared/keyfile ]; then
+          head -c 756 /dev/urandom | base64 -w 0 > /shared/keyfile
+        fi
+        chmod 400 /shared/keyfile
+        chown 1000:1000 /shared/keyfile
+        printf "mongotpassword" > /shared/passwordFile
+        chmod 400 /shared/passwordFile
+        chown 1000:1000 /shared/passwordFile
+
+  mongodb-search:
+    image: mongodb/mongodb-community-server:8.3.8-ubi8
+    restart: unless-stopped
+    container_name: mongodb-search
+    hostname: mongodb-search
+    profiles: ["mongodb-search"]
+    depends_on:
+      mongodb-search-keyfile-init:
+        condition: service_completed_successfully
+    environment:
+      - MONGODB_INITDB_ROOT_USERNAME=root
+      - MONGODB_INITDB_ROOT_PASSWORD=rootpass
+    command: ["--config", "/etc/mongod.conf"]
+    healthcheck:
+      test: ["CMD", "mongosh", "-u", "root", "-p", "rootpass", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    configs:
+      - source: mongodb_search_config
+        target: /etc/mongod.conf
+    volumes:
+      - mongodb_search_data:/data/db
+      - mongodb_search_shared:/shared
+
+  # One-shot job: initiates the replica set mongot requires and creates the searchCoordinator
+  # user mongot authenticates as. Exits once done.
+  mongodb-search-init-rs:
+    image: mongodb/mongodb-community-server:8.3.8-ubi8
+    container_name: mongodb-search-init-rs
+    profiles: ["mongodb-search"]
+    depends_on:
+      mongodb-search:
+        condition: service_healthy
+    volumes:
+      - mongodb_search_shared:/shared
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mongosh --host mongodb-search -u root -p rootpass --eval '
+          try { rs.status() } catch (e) {
+            rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-search:27017" }] });
+          }
+        '
+        mongosh --host mongodb-search -u root -p rootpass --eval '
+          while (!db.hello().isWritablePrimary) { sleep(500); }
+        '
+        mongosh --host mongodb-search -u root -p rootpass --eval '
+          const admin = db.getSiblingDB("admin");
+          if (!admin.getUser("mongot")) {
+            admin.createUser({ user: "mongot", pwd: "mongotpassword", roles: ["searchCoordinator"] });
+          }
+        '
+
+  mongot:
+    image: mongodb/mongodb-community-search:1.70.3
+    restart: unless-stopped
+    container_name: mongot
+    hostname: mongot
+    profiles: ["mongodb-search"]
+    depends_on:
+      mongodb-search-init-rs:
+        condition: service_completed_successfully
+    configs:
+      - source: mongot_config
+        target: /mongot-community/config.default.yml
+    volumes:
+      - mongot_data:/data/mongot
+      - mongodb_search_shared:/shared
 
   # Primary service
   bioterms:
@@ -91,18 +217,23 @@ services:
     ports:
       - "5000:5000"
     environment:
-      # Any of the following environment variables can be adjusted as needed
-      # Or can be loaded from docker secrets for better security in production
       - BTS_PROCESS_LIMIT=4
+      - BTS_AUTO_COMPLETE_MIN_LENGTH=3
       - BTS_LOGGING_LEVEL=INFO
       - BTS_SECRET_KEY=secret-key
       - BTS_SERVER_HMAC_KEY=your-hmac-key
       - BTS_USE_HTTPS=false
       - BTS_ENABLE_METRICS=true
+      - BTS_ENABLE_ERROR_REPORTING=false
+      - BTS_ENABLE_PROFILING=false
+      - BTS_SENTRY_DSN=
+      - BTS_GOOGLE_SITE_VERIFICATION_ID=
+      - BTS_DATA_DIR=/app/data
       - BTS_SERVICE_ROOT_PATH=
       - BTS_OPENAPI_URL=/openapi.json
       - BTS_DOCS_URL=/docs
       - BTS_REDOC_URL=/redoc
+      - BTS_FHIR_CANONICAL_URL=https://your.deployment.com/fhir
       - BTS_ENVIRONMENT=dev
       - BTS_CELERY_BROKER=redis://redis:6379/1
       - BTS_CELERY_BACKEND=redis://redis:6379/2
@@ -110,20 +241,27 @@ services:
       - BTS_MONGODB_HOST=mongodb
       - BTS_MONGODB_PORT=27017
       - BTS_MONGODB_DB_NAME=bts
-      - BTS_MONGODB_USERNAME= # Leave blank if not using authentication
-      - BTS_MONGODB_PASSWORD= # Leave blank if not using authentication
+      - BTS_MONGODB_USERNAME=
+      - BTS_MONGODB_PASSWORD=
+      - BTS_MONGODB_AUTH_SOURCE=admin
       - BTS_GRAPH_DATABASE_DRIVER=neo4j
       - BTS_NEO4J_URI=neo4j://neo4j:7687
       - BTS_NEO4J_DB_NAME=neo4j
       - BTS_NEO4J_USERNAME=neo4j
       - BTS_NEO4J_PASSWORD=password
+      - BTS_NEO4J_DELETE_BATCH_SIZE=2000
       - BTS_CACHE_DRIVER=redis
       - BTS_REDIS_HOST=redis
       - BTS_REDIS_PORT=6379
       - BTS_REDIS_DB=0
+      - BTS_CACHE_HARD_TTL_MULTIPLIER=7
+      - BTS_CACHE_REBUILD_LOCK_TTL=3600
       - BTS_BIOPORTAL_API_KEY=your-bioportal-api-key
       - BTS_NHS_TRUD_API_KEY=your-nhs-trud-api-key
+      - BTS_NIH_UMLS_API_KEY=your-nih-umls-api-key
       - BTS_TRANSFORMER_MODEL_NAME=BAAI/bge-base-en-v1.5
+      - BTS_EMBEDDING_PROCESS_LIMIT=1
+      - BTS_EMBEDDING_BATCH_SIZE=32
       - BTS_TORCH_DEVICE=cpu
       - BTS_GNN_EPOCHS=100
       - BTS_GNN_HIDDEN_DIM=256
@@ -131,6 +269,8 @@ services:
       - BTS_GNN_LEARNING_RATE=0.001
       - BTS_VECTOR_DATABASE_DRIVER=qdrant
       - BTS_QDRANT_LOCATION=http://qdrant:6333
+      - BTS_VERBOSE_PRINT=false
+      - BTS_DISABLE_PROGRESS_BAR=false
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -140,7 +280,7 @@ services:
   bioterms-worker:
     image: firefox2100/biomedical-terminology-service:latest
     restart: unless-stopped
-    container_name: bioterms
+    container_name: bioterms-worker
     command: >
       worker --loglevel=INFO
     # This section enables GPU support; remove if not needed
@@ -162,15 +302,22 @@ services:
         condition: service_started
     environment:
       - BTS_PROCESS_LIMIT=4
+      - BTS_AUTO_COMPLETE_MIN_LENGTH=3
       - BTS_LOGGING_LEVEL=INFO
       - BTS_SECRET_KEY=secret-key
       - BTS_SERVER_HMAC_KEY=your-hmac-key
       - BTS_USE_HTTPS=false
       - BTS_ENABLE_METRICS=true
+      - BTS_ENABLE_ERROR_REPORTING=false
+      - BTS_ENABLE_PROFILING=false
+      - BTS_SENTRY_DSN=
+      - BTS_GOOGLE_SITE_VERIFICATION_ID=
+      - BTS_DATA_DIR=/app/data
       - BTS_SERVICE_ROOT_PATH=
       - BTS_OPENAPI_URL=/openapi.json
       - BTS_DOCS_URL=/docs
       - BTS_REDOC_URL=/redoc
+      - BTS_FHIR_CANONICAL_URL=https://your.deployment.com/fhir
       - BTS_ENVIRONMENT=dev
       - BTS_CELERY_BROKER=redis://redis:6379/1
       - BTS_CELERY_BACKEND=redis://redis:6379/2
@@ -178,20 +325,29 @@ services:
       - BTS_MONGODB_HOST=mongodb
       - BTS_MONGODB_PORT=27017
       - BTS_MONGODB_DB_NAME=bts
-      - BTS_MONGODB_USERNAME= # Leave blank if not using authentication
-      - BTS_MONGODB_PASSWORD= # Leave blank if not using authentication
+      - BTS_MONGODB_USERNAME=
+      - BTS_MONGODB_PASSWORD=
+      - BTS_MONGODB_AUTH_SOURCE=admin
+      - BTS_SQL_DB_URL=sqlite+aiosqlite:///./bts.sqlite3
+      - BTS_SQL_BATCH_SIZE=5000
       - BTS_GRAPH_DATABASE_DRIVER=neo4j
       - BTS_NEO4J_URI=neo4j://neo4j:7687
       - BTS_NEO4J_DB_NAME=neo4j
       - BTS_NEO4J_USERNAME=neo4j
       - BTS_NEO4J_PASSWORD=password
+      - BTS_NEO4J_DELETE_BATCH_SIZE=2000
       - BTS_CACHE_DRIVER=redis
       - BTS_REDIS_HOST=redis
       - BTS_REDIS_PORT=6379
       - BTS_REDIS_DB=0
+      - BTS_CACHE_HARD_TTL_MULTIPLIER=7
+      - BTS_CACHE_REBUILD_LOCK_TTL=3600
       - BTS_BIOPORTAL_API_KEY=your-bioportal-api-key
       - BTS_NHS_TRUD_API_KEY=your-nhs-trud-api-key
+      - BTS_NIH_UMLS_API_KEY=your-nih-umls-api-key
       - BTS_TRANSFORMER_MODEL_NAME=BAAI/bge-base-en-v1.5
+      - BTS_EMBEDDING_PROCESS_LIMIT=1
+      - BTS_EMBEDDING_BATCH_SIZE=32
       - BTS_TORCH_DEVICE=cpu
       - BTS_GNN_EPOCHS=100
       - BTS_GNN_HIDDEN_DIM=256
@@ -199,6 +355,8 @@ services:
       - BTS_GNN_LEARNING_RATE=0.001
       - BTS_VECTOR_DATABASE_DRIVER=qdrant
       - BTS_QDRANT_LOCATION=http://qdrant:6333
+      - BTS_VERBOSE_PRINT=false
+      - BTS_DISABLE_PROGRESS_BAR=false
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -207,6 +365,49 @@ configs:
   qdrant_config:
     content: |
       log_level: INFO
+  mongodb_search_config:
+    content: |
+      net:
+        port: 27017
+        bindIpAll: true
+      replication:
+        replSetName: rs0
+      setParameter:
+        mongotHost: mongot:27028
+        searchIndexManagementHostAndPort: mongot:27028
+        skipAuthenticationToSearchIndexManagementServer: false
+        useGrpcForSearch: true
+        searchTLSMode: disabled
+      security:
+        authorization: enabled
+        keyFile: /shared/keyfile
+  mongot_config:
+    content: |
+      syncSource:
+        replicaSet:
+          hostAndPort: "mongodb-search:27017"
+          scramAuth:
+            username: "mongot"
+            authSource: "admin"
+            passwordFile: "/shared/passwordFile"
+            tls:
+              enabled: false
+        replicationReader:
+          readPreference: primaryPreferred
+      storage:
+        dataPath: "/data/mongot"
+      server:
+        grpc:
+          address: "mongot:27028"
+          tls:
+            mode: "disabled"
+      metrics:
+        enabled: true
+        address: "mongot:9946"
+      healthCheck:
+        address: "mongot:8080"
+      logging:
+        verbosity: INFO
 
 volumes:
   neo4j_data:
@@ -214,3 +415,7 @@ volumes:
   mongo_data:
   redis_data:
   qdrant_data:
+  mongodb_search_data:
+  mongodb_search_shared:
+  mongot_data:
+  postgres_data:

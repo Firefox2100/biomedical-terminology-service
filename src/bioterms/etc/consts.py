@@ -8,7 +8,7 @@ import secrets
 import importlib.resources as pkg_resources
 from typing import Optional, Literal
 from argon2 import PasswordHasher
-from httpx import AsyncClient
+from httpx import AsyncClient, Timeout
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -144,6 +144,20 @@ class Settings(BaseSettings):
         'admin',
         description='Authentication source database for MongoDB',
     )
+    mongodb_direct_connection: bool = Field(
+        False,
+        description='Directly connect to the specified domain, ignoring the replica set discovery. '
+                    'This may be necessary if using a docker internal domain for the set.'
+    )
+    mongodb_text_index_name: str = Field(
+        'text_autocomplete_index',
+        description='Name of the MongoDB Atlas/mongot `$search` autocomplete index created on '
+                    'the "conceptId"/"label"/"synonyms" fields of each vocabulary collection, '
+                    'used by auto-complete search when BTS_DOC_DATABASE_DRIVER=mongo and the '
+                    'connected deployment has Atlas Search/mongot support (e.g. the '
+                    '`mongodb-search` compose profile). Falls back to the legacy "nGrams" '
+                    'field/index automatically when unsupported.',
+    )
     sql_db_url: str = Field(
         'sqlite+aiosqlite:///./bts.sqlite3',
         description='Database URL for the SQL database',
@@ -172,6 +186,28 @@ class Settings(BaseSettings):
     neo4j_password: str = Field(
         'password',
         description='Password for the Neo4j database',
+    )
+    neo4j_delete_batch_size: int = Field(
+        2000,
+        description='Number of rows (relationships/nodes) committed per transaction when '
+                    'batch-deleting from Neo4j. Lower values reduce peak transaction memory '
+                    'usage at the cost of speed, which matters for large vocabularies on '
+                    'memory-constrained Neo4j instances.',
+    )
+    postgres_graph_db_url: str = Field(
+        'postgresql+asyncpg://localhost:5432/bts',
+        description='SQLAlchemy async URL for the PostgreSQL graph database, used when '
+                    'BTS_GRAPH_DATABASE_DRIVER=postgresql. Graph tables live under their own '
+                    '"graph_*" names, so this can safely be the same database as BTS_SQL_DB_URL '
+                    'and/or BTS_POSTGRES_VECTOR_DB_URL to run the document, vector, and graph '
+                    'stores on one PostgreSQL instance.',
+    )
+    postgres_graph_closure_max_depth: int = Field(
+        500,
+        description='Safety bound on recursion depth when materialising each vocabulary\'s '
+                    'ancestor/descendant closure table (see build-database.rst). Guards against '
+                    'runaway recursion on a malformed/cyclic hierarchy; real ontologies are far '
+                    'shallower than this.',
     )
 
     cache_driver: CacheDriverType = Field(
@@ -218,6 +254,15 @@ class Settings(BaseSettings):
         'BAAI/bge-base-en-v1.5',
         description='Name of the transformer model to use for embeddings',
     )
+    embedding_process_limit: int = Field(
+        1,
+        description='Number of worker processes used for embedding generation. '
+                    'Set to 1 to disable multiprocessing.',
+    )
+    embedding_batch_size: int = Field(
+        32,
+        description='Batch size used when generating concept embeddings.',
+    )
     torch_device: str = Field(
         'cpu',
         description='Torch device to use for model inference (e.g., "cpu", "cuda")',
@@ -246,6 +291,27 @@ class Settings(BaseSettings):
         'http://localhost:6333',
         description='Location of the Qdrant vector database',
     )
+    mongodb_vector_index_name: str = Field(
+        'vector_index',
+        description='Name of the MongoDB Atlas/mongot vector search index created on the '
+                    '"vector" field of each vocabulary collection, when '
+                    'BTS_VECTOR_DATABASE_DRIVER=mongodb.',
+    )
+    mongodb_vector_num_candidates_multiplier: int = Field(
+        10,
+        description='Multiplier applied to the requested result limit to determine the '
+                    'numCandidates parameter of $vectorSearch queries, when '
+                    'BTS_VECTOR_DATABASE_DRIVER=mongodb.',
+    )
+    postgres_vector_db_url: str = Field(
+        'postgresql+asyncpg://localhost:5432/bts',
+        description='SQLAlchemy async URL for the PostgreSQL/pgvector vector database, used '
+                    'when BTS_VECTOR_DATABASE_DRIVER=postgresql. When this is equal to '
+                    'BTS_SQL_DB_URL (i.e. the document database is also PostgreSQL, via '
+                    'BTS_DOC_DATABASE_DRIVER=sql), vectors are stored as an extra column on '
+                    'the same concept tables the SQL document database driver already uses, '
+                    'instead of a separate set of vector-only tables.',
+    )
 
     verbose_print: bool = Field(
         False,
@@ -254,6 +320,35 @@ class Settings(BaseSettings):
     disable_progress_bar: bool = Field(
         False,
         description='Disable progress bars for operations',
+    )
+
+    download_connect_timeout_seconds: float = Field(
+        30.0,
+        description='Connect/write/pool timeout for DOWNLOAD_CLIENT (large vocabulary file '
+                    'downloads, e.g. UniProt\'s 100GB+ TrEMBL release). Kept short relative to '
+                    'the read timeout below so an unreachable host fails fast.',
+    )
+    download_read_timeout_seconds: float = Field(
+        120.0,
+        description='Per-chunk read timeout for DOWNLOAD_CLIENT. httpx\'s own default is 5 '
+                    'seconds, which is too aggressive for a multi-GB/multi-hour streamed '
+                    'download -- ordinary network jitter or brief server-side pacing on a '
+                    'single chunk read was enough to abort the whole transfer '
+                    '(httpx.ReadTimeout). This is deliberately more generous, not unbounded.',
+    )
+    download_max_retries: int = Field(
+        5,
+        description='Maximum attempts for download_file() before giving up. Each retry after '
+                    'the first resumes via an HTTP Range request from the partially-downloaded '
+                    'file already on disk (see download_file docstring), rather than '
+                    'restarting from byte zero -- important at UniProt scale, where restarting '
+                    'a 100GB+ download from scratch on every transient network blip would be '
+                    'impractical.',
+    )
+    download_retry_backoff_seconds: float = Field(
+        5.0,
+        description='Base backoff between download_file() retries; multiplied by the attempt '
+                    'number (5s, 10s, 15s, ...).',
     )
 
 
@@ -274,7 +369,14 @@ if not LOGGER.hasHandlers():
     LOGGER.addHandler(console_handler)
 
 
-DOWNLOAD_CLIENT = AsyncClient()
+DOWNLOAD_CLIENT = AsyncClient(
+    timeout=Timeout(
+        connect=CONFIG.download_connect_timeout_seconds,
+        read=CONFIG.download_read_timeout_seconds,
+        write=CONFIG.download_connect_timeout_seconds,
+        pool=CONFIG.download_connect_timeout_seconds,
+    ),
+)
 QUERY_CLIENT = AsyncClient()
 
 PH = PasswordHasher()

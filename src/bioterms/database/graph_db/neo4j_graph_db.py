@@ -5,11 +5,12 @@ import networkx as nx
 from neo4j import AsyncDriver, AsyncSession
 from neo4j.exceptions import TransientError
 
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
 from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress, edge_iter
 from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
     GRAPHDB_OP_RETRYS, EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept_path import NodeInPath, ConceptPath
 from bioterms.model.related_term import RelatedTerm
@@ -443,13 +444,17 @@ class Neo4jGraphDatabase(GraphDatabase):
                     WITH concept, coalesce(concept.conceptTypes, []) AS types
                     MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
 
-                    WITH n, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
+                    WITH n, concept, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
                     SET n:$(labels)
+                    WITH n, concept,
+                        [k IN $extraProperties WHERE concept[k] IS NOT NULL] AS presentKeys
+                    FOREACH (k IN presentKeys | SET n[k] = concept[k])
                     RETURN count(n) AS upserted
                     """,
                     session=session,
                     parameters={
                         'concepts': [concept.model_dump() for concept in concept_batch],
+                        'extraProperties': GRAPH_NODE_EXTRA_PROPERTIES,
                     },
                 )
 
@@ -464,15 +469,22 @@ class Neo4jGraphDatabase(GraphDatabase):
                     WITH source, target, edge,
                         coalesce(edge[2], 'related_to') as rel_label,
                         edge[3] AS rel_key
-                    CALL apoc.merge.relationship(source, rel_label, {}, {}, target) YIELD rel
+                    MERGE (source)-[rel:$(rel_label)]->(target)
                     WITH rel, rel_key
                     FOREACH (_ IN CASE WHEN rel_key IS NULL THEN [] ELSE [1] END |
-                        SET rel.label = coll.distinct(
+                        SET rel.label = reduce(
+                            unique_labels = [],
+                            item IN (
+                                CASE
+                                    WHEN rel.label IS NULL THEN []
+                                    WHEN rel.label IS TYPED LIST<ANY> THEN rel.label
+                                    ELSE [rel.label]
+                                END + [rel_key]
+                            ) |
                             CASE
-                                WHEN rel.label IS NULL THEN []
-                                WHEN rel.label IS TYPED LIST<ANY> THEN rel.label
-                                ELSE [rel.label]
-                            END + [rel_key]
+                                WHEN item IN unique_labels THEN unique_labels
+                                ELSE unique_labels + item
+                            END
                         )
                     )
                     RETURN count(rel) AS created
@@ -599,35 +611,33 @@ class Neo4jGraphDatabase(GraphDatabase):
         Delete the vocabulary graph from the graph database.
         :param prefix: The node prefix of the vocabulary to delete.
         """
-        async with self._client.session() as session:
-            # Separate batched delete to handle similarity connections
-            await _execute_query_with_retry(
-                query="""
-                CALL apoc.periodic.commit(
-                    'MATCH (:Concept {prefix: $prefix})-[r]-()
-                    WITH r LIMIT $limit
-                    DELETE r
-                    RETURN count(r)',
-                    {limit: 50000, prefix: $prefix}
-                );
-                """,
-                session=session,
-                parameters={'prefix': prefix.value},
-            )
+        batch_size = CONFIG.neo4j_delete_batch_size
 
-            await _execute_query_with_retry(
-                query="""
-                CALL apoc.periodic.commit(
-                    'MATCH (n:Concept {prefix: $prefix})
-                    WITH n LIMIT $limit
-                    DELETE n
-                    RETURN count(n)',
-                    {limit: 50000, prefix: $prefix}
-                );
-                """,
-                session=session,
-                parameters={'prefix': prefix.value},
-            )
+        # Neither a single CALL {} IN TRANSACTIONS OF N ROWS nor apoc.periodic.commit
+        # kept this bounded on constrained instances -- both still hold the *entire*
+        # driving MATCH's state open (directly or via APOC's own iteration) across the
+        # whole delete. Looping client-side instead, re-issuing a small bounded query
+        # as its own fresh auto-commit transaction every round trip, means no state at
+        # all is carried between iterations -- peak transaction memory is bounded by
+        # one batch of nodes (and their relationships) no matter how large the
+        # vocabulary is. DETACH DELETE removes a node's relationships together with it,
+        # so this replaces the old two-pass (relationships, then nodes) query, and with
+        # it the need to special-case internal (same-prefix-on-both-ends) relationships
+        # being matched twice by an undirected pattern.
+        async with self._client.session() as session:
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WITH n LIMIT $batch_size
+                    DETACH DELETE n
+                    RETURN count(n) AS deleted
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value, 'batch_size': batch_size},
+                )
+                if (await result.single())['deleted'] == 0:
+                    break
 
     async def count_terms(self,
                           prefix: ConceptPrefix,
@@ -662,6 +672,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                WHERE type(r) <> 'similar_to'
                 RETURN count(r) AS relationship_count
                 """,
                 session=session,
@@ -740,7 +751,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                         target,
                         coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
                         coalesce(annotation.properties, {}) AS props
-                    CALL apoc.merge.relationship(source, rel_type, {}, props, target) YIELD rel
+                    MERGE (source)-[rel:$(rel_type)]->(target)
+                    SET rel += props
                     RETURN count(rel) AS created
                     """,
                     session=session,
@@ -811,18 +823,29 @@ class Neo4jGraphDatabase(GraphDatabase):
         :param prefix_1: The first vocabulary prefix.
         :param prefix_2: The second vocabulary prefix.
         """
+        batch_size = CONFIG.neo4j_delete_batch_size
+
+        # See delete_vocabulary_graph: looping a small bounded query client-side, each
+        # iteration its own fresh auto-commit transaction, rather than a single
+        # CALL {} IN TRANSACTIONS, keeps peak transaction memory bounded to one batch.
         async with self._client.session() as session:
-            await _execute_query_with_retry(
-                query="""
-                MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
-                DELETE r
-                """,
-                session=session,
-                parameters={
-                    'prefix_1': prefix_1.value,
-                    'prefix_2': prefix_2.value,
-                },
-            )
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (:Concept {prefix: $prefix_1})-[r]->(:Concept {prefix: $prefix_2})
+                    WITH r LIMIT $batch_size
+                    DELETE r
+                    RETURN count(r) AS deleted
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix_1': prefix_1.value,
+                        'prefix_2': prefix_2.value,
+                        'batch_size': batch_size,
+                    },
+                )
+                if (await result.single())['deleted'] == 0:
+                    break
 
     async def count_annotations(self,
                                 prefix_1: ConceptPrefix,
@@ -884,13 +907,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     MATCH (source:Concept {id: sim.concept_from, prefix: $prefix_from})
                     MATCH (target:Concept {id: sim.concept_to, prefix: $prefix_to})
                     WITH source, target, sim.similarity AS sim_score, $similarity_property AS similarity_property
-                    CALL apoc.merge.relationship(
-                        source,
-                        'similar_to',
-                        {},
-                        {},
-                        target
-                    ) YIELD rel
+                    MERGE (source)-[rel:similar_to]->(target)
                     SET rel[similarity_property] = sim_score
                     RETURN count(rel) AS created
                     """,
@@ -901,7 +918,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'prefix_to': prefix_to.value,
                         'similarity_property': (
                             f'{similarity_method.value}:{corpus_prefix.value}'
-                            if corpus_prefix else similarity_method
+                            if corpus_prefix else similarity_method.value
                         ),
                     },
                 )
@@ -935,6 +952,19 @@ class Neo4jGraphDatabase(GraphDatabase):
                 """,
                 session=session,
             )
+            # GRAPH_NODE_EXTRA_PROPERTIES fields exist specifically to be filtered on (e.g.
+            # scoping UniProt's full, multi-organism release down to organismTaxId='9606')
+            # -- at UniProt's scale (250M+ nodes) an unindexed equality filter on these is a
+            # full node scan, so each one gets its own index alongside prefix/id above.
+            for property_name in GRAPH_NODE_EXTRA_PROPERTIES:
+                await _execute_query_with_retry(
+                    query=f"""
+                          CREATE INDEX concept_{property_name}_index IF NOT EXISTS
+                              FOR (n:Concept)
+                              ON (n.{property_name})
+                          """,
+                    session=session,
+                )
 
     async def trace_ancestors_iter(self,
                                    prefix: ConceptPrefix,
@@ -978,22 +1008,15 @@ class Neo4jGraphDatabase(GraphDatabase):
                     },
                 )
             else:
+                # Variable-length relationship bounds must be literal at parse time in native
+                # Cypher (unlike APOC's expandConfig, which accepted maxLevel as a runtime map
+                # value), so max_depth is interpolated rather than passed as a parameter.
                 result = await _execute_query_with_retry(
-                    query="""
-                    MATCH (n:Concept {prefix: $prefix})
+                    query=f"""
+                    MATCH (n:Concept {{prefix: $prefix}})
                     WHERE n.id IN $concept_ids
-                    CALL apoc.path.expandConfig(
-                        n,
-                        {
-                            relationshipFilter: 'is_a|part_of>',
-                            labelFilter: '+Concept',
-                            minLevel: 1,
-                            maxLevel: $depth,
-                            bfs: true,
-                            uniqueness: 'NODE_GLOBAL'
-                        }
-                    ) YIELD path
-                    WITH n, [a IN collect(DISTINCT last(nodes(path)).id) WHERE a IS NOT NULL] AS all_anc
+                    OPTIONAL MATCH (n)-[:is_a|part_of*1..{int(max_depth)}]->(ancestor:Concept)
+                    WITH n, [a IN collect(DISTINCT ancestor.id) WHERE a IS NOT NULL] AS all_anc
                     WITH n,
                         CASE
                             WHEN $limit IS NULL THEN all_anc
@@ -1006,7 +1029,6 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'prefix': prefix.value,
                         'concept_ids': concept_ids,
                         'limit': limit,
-                        'depth': max_depth,
                     },
                 )
 
@@ -1064,22 +1086,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                         },
                     )
                 else:
+                    # See trace_ancestors_iter: variable-length bounds must be literal, so
+                    # max_depth is interpolated rather than passed as a query parameter.
                     result = await _execute_query_with_retry(
-                        query="""
-                        MATCH (n:Concept {prefix: $prefix})
+                        query=f"""
+                        MATCH (n:Concept {{prefix: $prefix}})
                         WHERE n.id IN $concept_ids
-                        CALL apoc.path.expandConfig(
-                            n,
-                            {
-                                relationshipFilter: 'is_a<|part_of<',
-                                labelFilter: '+Concept',
-                                minLevel: 1,
-                                maxLevel: $depth,
-                                bfs: true,
-                                uniqueness: 'NODE_GLOBAL'
-                            }
-                        ) YIELD path
-                        WITH n, [d IN collect(DISTINCT last(nodes(path)).id) WHERE d IS NOT NULL] AS all_desc
+                        OPTIONAL MATCH (n)<-[:is_a|part_of*1..{int(max_depth)}]-(descendant:Concept)
+                        WITH n, [d IN collect(DISTINCT descendant.id) WHERE d IS NOT NULL] AS all_desc
                         WITH n,
                             CASE
                                 WHEN $limit IS NULL THEN all_desc
@@ -1092,7 +1106,6 @@ class Neo4jGraphDatabase(GraphDatabase):
                             'prefix': prefix.value,
                             'concept_ids': concept_ids,
                             'limit': limit,
-                            'depth': max_depth,
                         },
                     )
 
@@ -1228,34 +1241,29 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         try:
             async with self._client.session() as session:
+                # Binding the target prefix directly on the pattern's end node (rather than
+                # filtering after an unconstrained expansion, as apoc.path.expandConfig did)
+                # lets the planner prune the traversal towards matching nodes instead of a
+                # blind BFS over every Concept type. This also means the old APOC-side
+                # NODE_GLOBAL uniqueness (which could silently miss a valid longer mapping if
+                # a shorter path already "claimed" one of its intermediate nodes) no longer
+                # applies -- results are now complete relative to the max_hops/limit/ordering
+                # constraints, which matches the intent of "nearest mappings first" better.
                 result = await _execute_query_with_retry(
-                    query="""
-                    MATCH (src:Concept {prefix: $prefix})
+                    query=f"""
+                    MATCH (src:Concept {{prefix: $prefix}})
                     WHERE src.id IN $concept_ids
-                    CALL {
-                        WITH src
-                        CALL apoc.path.expandConfig(
-                            src,
-                            {
-                                relationshipFilter: 'annotated_with|has_symbol|exact|broad|narrow|related',
-                                labelFilter: '+Concept',
-                                minLevel: 1,
-                                maxLevel: $max_hops,
-                                bfs: true,
-                                uniqueness: 'NODE_GLOBAL'
-                            }
-                        ) YIELD path
-                        WITH src, path, last(nodes(path)) AS tgt, nodes(path) AS ns
-                        WHERE tgt.prefix = $target_prefix
-                            AND ALL(rel IN relationships(path) WHERE startNode(rel).prefix <> endNode(rel).prefix)
-                        WITH src, tgt, [n IN ns | n.prefix] AS prefixes, path
-                        WHERE size(prefixes) = size(apoc.coll.toSet(prefixes))
+                    CALL (src) {{
+                        MATCH path = (src)-[:annotated_with|has_symbol|exact|broad|narrow|related*1..{int(max_hops)}]-(tgt:Concept {{prefix: $target_prefix}})
+                        WHERE ALL(rel IN relationships(path) WHERE startNode(rel).prefix <> endNode(rel).prefix)
+                        WITH src, tgt, path, [n IN nodes(path) | n.prefix] AS prefixes
+                        WHERE all(i IN range(0, size(prefixes) - 1) WHERE NOT prefixes[i] IN prefixes[(i + 1)..])
                             AND ALL(n IN nodes(path)[1..-2] WHERE n.prefix <> src.prefix AND n.prefix <> $target_prefix)
                         WITH src, tgt, path
                         ORDER BY length(path) ASC
                         LIMIT COALESCE($limit, 1000000)
                         RETURN src.id AS source_id, collect(DISTINCT tgt.id) AS mapped_terms
-                    }
+                    }}
                     RETURN source_id AS concept_id, mapped_terms
                     """,
                     session=session,
@@ -1263,7 +1271,6 @@ class Neo4jGraphDatabase(GraphDatabase):
                         'prefix': prefix.value,
                         'target_prefix': target_prefix.value,
                         'concept_ids': concept_ids,
-                        'max_hops': max_hops,
                         'limit': limit,
                     },
                 )
@@ -1342,66 +1349,61 @@ class Neo4jGraphDatabase(GraphDatabase):
         :return: An asynchronous iterator yielding ConceptPath instances.
         """
         rel_type = relationship_type.value
-        if forward is True:
-            rel_filter = f'{rel_type}>'
-        elif forward is False:
-            rel_filter = f'<{rel_type}'
-        else:
-            rel_filter = f'{rel_type}'
+        # Quantified relationship bounds must be literal at parse time, so max_depth is
+        # interpolated into the pattern. The relationship type itself stays a genuine query
+        # parameter via Cypher's dynamic relationship type syntax -- note the expression inside
+        # $(...) must be `$rel_type` (a parameter reference), not the bare name `rel_type`: that
+        # would be parsed as a reference to an already-bound Cypher *variable* of that name
+        # (there isn't one here), not a query parameter, and fails with "Variable not defined".
+        max_depth_int = int(max_depth)
 
         if forward is None:
             # Special query, only return one shortest path
-            query = """
-            MATCH (start:Concept {prefix: $prefix_start, id: $id_start})
-            MATCH (end:Concept   {prefix: $prefix_end,   id: $id_end})
-            CALL apoc.path.expandConfig(start, {
-                relationshipFilter: $rel_filter,
-                endNodes: [end],
-                terminatorNodes: [end],
-                maxLevel: $max_depth,
-                uniqueness: "NODE_PATH",
-                bfs: true,
-                limit: 1
-            }) YIELD path
+            query = f"""
+            MATCH (start:Concept {{prefix: $prefix_start, id: $id_start}})
+            MATCH (end:Concept   {{prefix: $prefix_end,   id: $id_end}})
+            MATCH p = SHORTEST 1 (start)-[:$($rel_type)*1..{max_depth_int}]-(end)
             RETURN
                 $id_start AS startConceptId,
                 $id_end   AS endConceptId,
                 $prefix_start AS startPrefix,
                 $prefix_end   AS endPrefix,
-                size(nodes(path)) AS length,
-                [n IN nodes(path) | {conceptId: n.id, prefix: n.prefix}] AS nodes
+                size(nodes(p)) AS length,
+                [n IN nodes(p) | {{conceptId: n.id, prefix: n.prefix}}] AS nodes
             """
         else:
-            query = """
-            MATCH (start:Concept {prefix: $prefix_start, id: $id_start})
-            MATCH (end:Concept   {prefix: $prefix_end,   id: $id_end})
+            arrow_pattern = (
+                f'(start)-[:$($rel_type)*1..{max_depth_int}]->(end)' if forward
+                else f'(start)<-[:$($rel_type)*1..{max_depth_int}]-(end)'
+            )
 
-            CALL {
-                WITH start, end
-                CALL apoc.path.expandConfig(start, {
-                    relationshipFilter: $rel_filter,
-                    endNodes: [end],
-                    terminatorNodes: [end],
-                    maxLevel: $max_depth,
-                    uniqueness: "NODE_PATH"
-                }) YIELD path
-                RETURN collect(path) AS paths
-            }
+            query = f"""
+            MATCH (start:Concept {{prefix: $prefix_start, id: $id_start}})
+            MATCH (end:Concept   {{prefix: $prefix_end,   id: $id_end}})
+
+            MATCH p = {arrow_pattern}
+
+            WITH collect(p) AS paths
 
             WITH [p IN paths WHERE
                 NOT any(q IN paths WHERE
                     q <> p
                     AND length(q) < length(p)
-                    AND reduce(st = {ok: true, idx: 0}, n IN nodes(q) |
+                    AND reduce(st = {{ok: true, idx: 0}}, n IN nodes(q) |
                         CASE
                             WHEN st.ok = false
                                 THEN st
                             ELSE
                                 CASE
-                                    WHEN apoc.coll.indexOf(nodes(p)[st.idx..], n) < 0
-                                        THEN {ok: false, idx: st.idx}
+                                    WHEN head([i IN range(0, size(nodes(p)) - st.idx - 1)
+                                        WHERE nodes(p)[st.idx + i] = n | i]) IS NULL
+                                        THEN {{ok: false, idx: st.idx}}
                                     ELSE
-                                        {ok: true, idx: st.idx + apoc.coll.indexOf(nodes(p)[st.idx..], n) + 1}
+                                        {{
+                                            ok: true,
+                                            idx: st.idx + head([i IN range(0, size(nodes(p)) - st.idx - 1)
+                                                WHERE nodes(p)[st.idx + i] = n | i]) + 1
+                                        }}
                                 END
                         END
                     ).ok
@@ -1415,7 +1417,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 $prefix_start AS startPrefix,
                 $prefix_end   AS endPrefix,
                 size(nodes(p)) AS length,
-                [n IN nodes(p) | {conceptId: n.id, prefix: n.prefix}] AS nodes
+                [n IN nodes(p) | {{conceptId: n.id, prefix: n.prefix}}] AS nodes
             ORDER BY length ASC, size(nodes(p)) ASC
             """
 
@@ -1428,8 +1430,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     'prefix_end': prefix_end.value,
                     'id_start': id_start,
                     'id_end': id_end,
-                    'rel_filter': rel_filter,
-                    'max_depth': max_depth,
+                    'rel_type': rel_type,
                 }
             )
 
@@ -1471,94 +1472,81 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         prepared = []
         for (prefix_start, id_start, prefix_end, id_end, relationship_type, forward, max_depth) in trace_queries:
-            rel_type = relationship_type.value
-
-            if forward is True:
-                rel_filter = f'{rel_type}>'
-            elif forward is False:
-                rel_filter = f'<{rel_type}'
-            else:
-                rel_filter = f'{rel_type}'
-
             prepared.append({
                 'prefix_start': prefix_start.value,
                 'id_start': id_start,
                 'prefix_end': prefix_end.value,
                 'id_end': id_end,
-                'rel_filter': rel_filter,
+                'rel_type': relationship_type.value,
                 'forward': forward,
                 'max_depth': max_depth,
             })
 
-        query = """
-            UNWIND $queries AS q
-            MATCH (start:Concept {prefix: q.prefix_start, id: q.id_start})
-            MATCH (end:Concept   {prefix: q.prefix_end,   id: q.id_end})
-            WITH q, start, end
+        # Quantified relationship bounds must be literal at parse time, so every row in the
+        # batch shares one match-time depth cap (the largest max_depth requested); each row's
+        # own, possibly smaller, max_depth is still enforced with a WHERE length(p) <= q.max_depth
+        # filter. The relationship type stays a genuine per-row parameter via dynamic
+        # relationship type syntax (:$(q.rel_type)).
+        max_depth_cap = max(int(q['max_depth']) for q in prepared)
 
-            CALL apoc.do.when(
-              q.forward IS NULL,
-
-              // --- directionless: BFS + LIMIT 1 (single shortest path) ---
-              '
-              CALL apoc.path.expandConfig($start, {
-                relationshipFilter: $rel_filter,
-                endNodes: [$end],
-                terminatorNodes: [$end],
-                maxLevel: $max_depth,
-                uniqueness: "NODE_PATH",
-                bfs: true,
-                limit: 1
-              }) YIELD path
-              RETURN collect(path) AS paths
-              ',
-
-              // --- directed/bidirectional: enumerate, then remove detours ---
-              '
-              CALL {
-                WITH $start AS start, $end AS end, $rel_filter AS rel_filter, $max_depth AS max_depth
-                CALL apoc.path.expandConfig(start, {
-                  relationshipFilter: rel_filter,
-                  endNodes: [end],
-                  terminatorNodes: [end],
-                  maxLevel: max_depth,
-                  uniqueness: "NODE_PATH"
-                }) YIELD path
-                RETURN collect(path) AS paths
-              }
-              WITH paths
-              WITH [p IN paths WHERE
-                NOT any(q2 IN paths WHERE
-                  q2 <> p
-                  AND length(q2) < length(p)
-                  AND reduce(st = {ok: true, idx: 0}, n IN nodes(q2) |
+        detour_filter = """
+              WITH collect(p) AS all_paths
+              WITH [p IN all_paths WHERE
+                NOT any(alt IN all_paths WHERE
+                  alt <> p
+                  AND length(alt) < length(p)
+                  AND reduce(st = {ok: true, idx: 0}, n IN nodes(alt) |
                     CASE
                       WHEN st.ok = false THEN st
                       ELSE
                         CASE
-                          WHEN apoc.coll.indexOf(nodes(p)[st.idx..], n) < 0
+                          WHEN head([i IN range(0, size(nodes(p)) - st.idx - 1)
+                              WHERE nodes(p)[st.idx + i] = n | i]) IS NULL
                             THEN {ok: false, idx: st.idx}
                           ELSE
-                            {ok: true, idx: st.idx + apoc.coll.indexOf(nodes(p)[st.idx..], n) + 1}
+                            {
+                              ok: true,
+                              idx: st.idx + head([i IN range(0, size(nodes(p)) - st.idx - 1)
+                                  WHERE nodes(p)[st.idx + i] = n | i]) + 1
+                            }
                         END
                     END
                   ).ok
                 )
-              ] AS filtered
-              RETURN filtered AS paths
-              ',
+              ] AS paths
+              RETURN paths"""
 
-              {start: start, end: end, rel_filter: q.rel_filter, max_depth: q.max_depth}
-            ) YIELD value
+        query = f"""
+            UNWIND $queries AS q
+            MATCH (start:Concept {{prefix: q.prefix_start, id: q.id_start}})
+            MATCH (end:Concept   {{prefix: q.prefix_end,   id: q.id_end}})
+            WITH q, start, end
 
-            UNWIND value.paths AS p
+            CALL (q, start, end) {{
+              WHEN q.forward IS NULL THEN {{
+                MATCH p = SHORTEST 1 (start)-[:$(q.rel_type)*1..{max_depth_cap}]-(end)
+                RETURN collect(p) AS paths
+              }}
+              WHEN q.forward = true THEN {{
+                MATCH p = (start)-[:$(q.rel_type)*1..{max_depth_cap}]->(end)
+                WHERE length(p) <= q.max_depth
+                {detour_filter}
+              }}
+              ELSE {{
+                MATCH p = (start)<-[:$(q.rel_type)*1..{max_depth_cap}]-(end)
+                WHERE length(p) <= q.max_depth
+                {detour_filter}
+              }}
+            }}
+
+            UNWIND paths AS p
             RETURN
               q.id_start      AS startConceptId,
               q.id_end        AS endConceptId,
               q.prefix_start  AS startPrefix,
               q.prefix_end    AS endPrefix,
               size(nodes(p))  AS length,
-              [n IN nodes(p) | {conceptId: n.id, prefix: n.prefix}] AS nodes
+              [n IN nodes(p) | {{conceptId: n.id, prefix: n.prefix}}] AS nodes
             ORDER BY startPrefix, startConceptId, endPrefix, endConceptId, length ASC
             """
 
@@ -1606,7 +1594,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 UNWIND $similarity_queries AS sim_query
                 MATCH (n:Concept {prefix: $prefix, id: sim_query.concept_id})
                 MATCH (n)-[r:similar_to]-(m:Concept {prefix: $prefix})
-                WITH n, m, apoc.convert.toMap(r) AS props, sim_query.threshold AS threshold
+                WITH n, m, properties(r) AS props, sim_query.threshold AS threshold
                 WITH
                     n,
                     m,
@@ -1615,7 +1603,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 WITH
                     n,
                     m,
-                    apoc.coll.max(scores) AS highest_score
+                    reduce(best = scores[0], s IN scores[1..] | CASE WHEN s > best THEN s ELSE best END) AS highest_score
                 ORDER BY n.id, highest_score DESC
                 WITH
                     n,
@@ -1654,6 +1642,65 @@ class Neo4jGraphDatabase(GraphDatabase):
                     conceptId=concept_id,
                     similarConcepts=similar_concepts,
                 )
+
+    @staticmethod
+    def _build_similar_term_record(record,
+                                   ) -> tuple[str, SimilarTermByPrefix, int]:
+        """
+        Parse one query result record into a (concept_id, group, group_size) tuple.
+        :param record: The raw Neo4j result record.
+        :return: A tuple of the concept ID, the SimilarTermByPrefix group for this record, and
+            the number of similar concepts in the group.
+        """
+        concept_id: str = record['concept_id']
+        similar_prefix = ConceptPrefix(record['similar_prefix'])
+        similar_concepts_data: list[dict] = record['similar_concepts'] or []
+
+        similar_concepts: list[SimilarTermWithScores] = [
+            SimilarTermWithScores(
+                conceptId=sim['id'],
+                similarity_scores=dict(sim['score_pairs']),
+            )
+            for sim in similar_concepts_data
+        ]
+
+        group = SimilarTermByPrefix(
+            prefix=similar_prefix,
+            similarConcepts=similar_concepts,
+        )
+
+        return concept_id, group, len(similar_concepts_data)
+
+    @staticmethod
+    def _observe_and_build_similar_term(prefix: ConceptPrefix,
+                                        variant: str,
+                                        concept_id: str,
+                                        groups: list[SimilarTermByPrefix],
+                                        total: int,
+                                        ) -> SimilarTerm:
+        """
+        Record grouping metrics for a completed concept's similar-term groups and build the
+        SimilarTerm result to yield.
+        :param prefix: The prefix of the concepts the similar terms were found for.
+        :param variant: The 'same_prefix'/'cross_prefix' metric label variant.
+        :param concept_id: The concept ID the groups belong to.
+        :param groups: The completed list of SimilarTermByPrefix groups for this concept.
+        :param total: The total number of similar concepts across all groups.
+        :return: The built SimilarTerm instance.
+        """
+        SIM_GROUPS.labels(
+            prefix=prefix.value,
+            variant=variant,
+        ).observe(len(groups))
+        SIM_TOTAL.labels(
+            prefix=prefix.value,
+            variant=variant,
+        ).observe(total)
+
+        return SimilarTerm(
+            conceptId=concept_id,
+            similarGroups=groups,
+        )
 
     async def get_similar_terms_iter(self,
                                      prefix: ConceptPrefix,
@@ -1694,7 +1741,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     WHERE n.id IN $concept_ids
                     MATCH (n)-[r:similar_to]-(m:Concept)
                     WHERE m.prefix IN $target_prefixes
-                    WITH n, m, apoc.convert.toMap(r) AS props
+                    WITH n, m, properties(r) AS props
                     WITH
                         n,
                         m,
@@ -1713,15 +1760,16 @@ class Neo4jGraphDatabase(GraphDatabase):
                     WITH
                         n,
                         m,
-                        apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
-                        apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
+                        [k IN valid_keys | [k, props[k]]] AS score_pairs,
+                        reduce(best = props[valid_keys[0]], k IN valid_keys[1..] |
+                            CASE WHEN props[k] > best THEN props[k] ELSE best END) AS max_score
                     ORDER BY n.id, max_score DESC
                     WITH
                         n,
                         collect({
                             id: m.id,
                             prefix: m.prefix,
-                            similarity_scores: similarity_scores
+                            score_pairs: score_pairs
                         }) AS sims
                     WITH
                         n,
@@ -1739,7 +1787,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                         similar_prefix,
                         collect({
                             id: sim.id,
-                            similarity_scores: sim.similarity_scores
+                            score_pairs: sim.score_pairs
                         }) AS similar_concepts
                     RETURN
                         n.id AS concept_id,
@@ -1767,29 +1815,14 @@ class Neo4jGraphDatabase(GraphDatabase):
                     if first is None:
                         first = time.perf_counter()
 
-                    concept_id: str = record['concept_id']
-                    similar_prefix = ConceptPrefix(record['similar_prefix'])
-                    similar_concepts_data: list[dict] = record['similar_concepts'] or []
+                    concept_id, group, group_size = self._build_similar_term_record(record)
 
                     SIM_PER_GROUP.labels(
                         prefix=prefix.value,
                         variant=variant,
-                    ).observe(len(similar_concepts_data))
+                    ).observe(group_size)
 
-                    similar_concepts: list[SimilarTermWithScores] = [
-                        SimilarTermWithScores(
-                            conceptId=sim['id'],
-                            similarity_scores=sim['similarity_scores'],
-                        )
-                        for sim in similar_concepts_data
-                    ]
-
-                    group = SimilarTermByPrefix(
-                        prefix=similar_prefix,
-                        similarConcepts=similar_concepts,
-                    )
-
-                    current_total += len(similar_concepts)
+                    current_total += group_size
 
                     if current_concept_id is None:
                         current_concept_id = concept_id
@@ -1797,36 +1830,16 @@ class Neo4jGraphDatabase(GraphDatabase):
                     elif current_concept_id == concept_id:
                         current_groups.append(group)
                     else:
-                        SIM_GROUPS.labels(
-                            prefix=prefix.value,
-                            variant=variant,
-                        ).observe(len(current_groups))
-                        SIM_TOTAL.labels(
-                            prefix=prefix.value,
-                            variant=variant,
-                        ).observe(current_total)
-
-                        yield SimilarTerm(
-                            conceptId=current_concept_id,
-                            similarGroups=current_groups,
+                        yield self._observe_and_build_similar_term(
+                            prefix, variant, current_concept_id, current_groups, current_total,
                         )
                         current_concept_id = concept_id
                         current_groups = [group]
-                        current_total = len(similar_concepts_data)
+                        current_total = group_size
 
                 if current_concept_id is not None:
-                    SIM_GROUPS.labels(
-                        prefix=prefix.value,
-                        variant=variant,
-                    ).observe(len(current_groups))
-                    SIM_TOTAL.labels(
-                        prefix=prefix.value,
-                        variant=variant,
-                    ).observe(current_total)
-
-                    yield SimilarTerm(
-                        conceptId=current_concept_id,
-                        similarGroups=current_groups,
+                    yield self._observe_and_build_similar_term(
+                        prefix, variant, current_concept_id, current_groups, current_total,
                     )
         except asyncio.CancelledError:
             result_label = 'cancelled'
@@ -1886,7 +1899,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                 MATCH (n)-[r:similar_to]-(m:Concept {prefix: constraint_prefix})
                 WHERE m.id IN $constraint_ids[constraint_prefix]
 
-                WITH n, m, apoc.convert.toMap(r) AS props
+                WITH n, m, properties(r) AS props
                 WITH
                     n,
                     m,
@@ -1896,8 +1909,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 WITH
                     n,
                     m,
-                    apoc.map.fromPairs([k IN valid_keys | [k, props[k]]]) AS similarity_scores,
-                    apoc.coll.max([k IN valid_keys | props[k]]) AS max_score
+                    reduce(best = props[valid_keys[0]], k IN valid_keys[1..] |
+                        CASE WHEN props[k] > best THEN props[k] ELSE best END) AS max_score
                 ORDER BY n.id, max_score DESC
 
                 WITH
@@ -1905,7 +1918,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     collect({
                         id: m.id,
                         prefix: m.prefix,
-                        max_score: max_score,
+                        max_score: max_score
                     }) AS sims
                 WITH
                     n,
@@ -1915,6 +1928,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     END AS limited_sims
                 UNWIND limited_sims AS sim
                 RETURN
+                    n.id AS original_id,
                     sim.id AS translated_id,
                     sim.prefix AS translated_prefix,
                     sim.max_score AS similarity_score

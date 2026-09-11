@@ -21,9 +21,11 @@ class NoOpMetrics:
         return self
 
     def observe(self, value):
+        # No-op: metrics are disabled.
         pass
 
     def inc(self, amount=1):
+        # No-op: metrics are disabled.
         pass
 
 

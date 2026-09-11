@@ -2,7 +2,7 @@ name: bts-dependencies
 services:
   # Neo4j as the graph database
   neo4j:
-    image: neo4j:2026.04.0
+    image: neo4j:2026.06.0
     restart: unless-stopped
     container_name: bts-neo4j
     healthcheck:
@@ -14,34 +14,62 @@ services:
       - "8901:7474"   # HTTP
       - "8902:7687"   # Bolt
     environment:
-      # The full APOC plugin is required for advanced query and dynamic insertion capabilities
+      # The full APOC plugin is no longer used in most query paths in favour of cypher 25, but kept for
+      # edge cases and batching
       - NEO4J_AUTH=neo4j/password
       - NEO4J_apoc_export_file_enabled=true
       - NEO4J_apoc_import_file_enabled=true
       - NEO4J_apoc_import_file_use__neo4j__config=true
       - NEO4J_PLUGINS=["apoc", "graph-data-science"]
     volumes:
-      - neo4j_data:/data
-      - neo4j_plugins:/plugins
+      - ${BTS_DATABASE_PATH:-../data/database}/neo4j/data:/data
+      - ${BTS_DATABASE_PATH:-../data/database}/neo4j/plugins:/plugins
 
   # MongoDB as the primary document database
   mongodb:
-    image: mongo:8.2.9
+    image: mongo:8.3.4
     restart: unless-stopped
     container_name: bts-mongodb
+    environment:
+      GLIBC_TUNABLES: glibc.pthread.rseq=1
     healthcheck:
       test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
       interval: 30s
       timeout: 10s
       retries: 5
     ports:
-      - "8903:27017"
+      - "8311:27017"
     volumes:
-      - mongo_data:/data/db
+      - ${BTS_DATABASE_PATH:-../data/database}/mongodb/data/db:/data/db
+
+  # PostgreSQL (with pgvector), an optional alternative to MongoDB/Qdrant/Neo4j for
+  # BTS_DOC_DATABASE_DRIVER=sql, BTS_VECTOR_DATABASE_DRIVER=postgresql, and/or
+  # BTS_GRAPH_DATABASE_DRIVER=postgresql. Opt-in only: gated behind the "postgres" compose
+  # profile. The pgvector/pgvector image is a normal PostgreSQL image with the pgvector
+  # extension bundled, so it works equally well as a plain document/graph-only Postgres if you
+  # don't need vectors.
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    restart: unless-stopped
+    container_name: bts-postgres
+    profiles: ["postgres"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bts"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    environment:
+      - POSTGRES_USER=bts
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=bts
+    ports:
+      - "8911:5432"
+    volumes:
+      - ${BTS_DATABASE_PATH:-../data/database}/postgres/data:/var/lib/postgresql/data
 
   # Redis as the caching layer
   redis:
-    image: redis:8.6
+    image: redis:8.8
     restart: unless-stopped
     container_name: bts-redis
     healthcheck:
@@ -53,7 +81,7 @@ services:
       - "8904:6379"
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     volumes:
-      - redis_data:/data
+      - ${BTS_DATABASE_PATH:-../data/database}/redis/data:/data
 
   # Qdrant as the vector database
   qdrant:
@@ -70,16 +98,9 @@ services:
       - source: qdrant_config
         target: /qdrant/config/production.yaml
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ${BTS_DATABASE_PATH:-../data/database}/qdrant/storage:/qdrant/storage
 
 configs:
   qdrant_config:
     content: |
       log_level: INFO
-
-volumes:
-  neo4j_data:
-  neo4j_plugins:
-  mongo_data:
-  redis_data:
-  qdrant_data:

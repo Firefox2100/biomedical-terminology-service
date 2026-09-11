@@ -2,6 +2,7 @@
 Utility functions for GraphQL resolvers.
 """
 
+import asyncio
 from ariadne import QueryType
 
 from bioterms.etc.enums import ConceptPrefix
@@ -95,18 +96,18 @@ async def resolve_loaded_prefixes(_, info) -> list[str]:
     doc_db = info.context['doc_db']
     graph_db = info.context['graph_db']
 
-    loaded_prefixes = []
+    # Cache/DB lookups per prefix are independent, so fetch them concurrently rather than
+    # paying for one sequential round-trip per vocabulary.
+    statuses = await asyncio.gather(*(
+        get_vocabulary_status(prefix, doc_db=doc_db, graph_db=graph_db)
+        for prefix in ConceptPrefix
+    ))
 
-    for prefix in ConceptPrefix:
-        vocab_status = await get_vocabulary_status(
-            prefix,
-            doc_db=doc_db,
-            graph_db=graph_db,
-        )
-        if vocab_status.loaded:
-            loaded_prefixes.append(prefix.value)
-
-    return loaded_prefixes
+    return [
+        prefix.value
+        for prefix, status in zip(ConceptPrefix, statuses)
+        if status.loaded
+    ]
 
 
 async def resolve_concept_info_fields(obj,

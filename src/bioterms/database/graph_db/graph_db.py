@@ -728,6 +728,16 @@ def get_active_graph_db() -> GraphDatabase:
         _active_graph_db = Neo4jGraphDatabase()
         return _active_graph_db
 
+    if CONFIG.graph_database_driver == GraphDatabaseDriverType.POSTGRESQL:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from .postgres_graph_db import PostgresGraphDatabase
+
+        pg_engine = create_async_engine(CONFIG.postgres_graph_db_url)
+        PostgresGraphDatabase.set_engine(pg_engine)
+
+        _active_graph_db = PostgresGraphDatabase()
+        return _active_graph_db
+
     raise ValueError(
-        f'Unsupported graph database driver type: {CONFIG.graph_db.driver_type}'
+        f'Unsupported graph database driver type: {CONFIG.graph_database_driver}'
     )

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix
+from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix, DocDatabaseDriverType
 from bioterms.model.concept import Concept
 
 
@@ -156,6 +156,42 @@ def get_active_vector_db() -> VectorDatabase:
         QdrantVectorDatabase.set_client(qdrant_client)
 
         _active_vector_db = QdrantVectorDatabase()
+
+        return _active_vector_db
+
+    if CONFIG.vector_database_driver == VectorDatabaseDriverType.MONGODB:
+        from pymongo import AsyncMongoClient
+        from .mongo_vector_db import MongoVectorDatabase
+
+        mongo_client = AsyncMongoClient(
+            host=CONFIG.mongodb_host,
+            port=CONFIG.mongodb_port,
+            username=CONFIG.mongodb_username,
+            password=CONFIG.mongodb_password,
+            authSource=CONFIG.mongodb_auth_source,
+        )
+
+        MongoVectorDatabase.set_client(mongo_client)
+
+        _active_vector_db = MongoVectorDatabase()
+
+        return _active_vector_db
+
+    if CONFIG.vector_database_driver == VectorDatabaseDriverType.POSTGRESQL:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from .postgres_vector_db import PostgresVectorDatabase
+
+        pg_engine = create_async_engine(CONFIG.postgres_vector_db_url)
+        PostgresVectorDatabase.set_engine(pg_engine)
+
+        # If the document database is also PostgreSQL and pointed at this same database, share
+        # its concept tables (one column added) instead of maintaining separate vector-only ones.
+        shared_with_doc_db = (
+            CONFIG.doc_database_driver == DocDatabaseDriverType.SQL
+            and CONFIG.sql_db_url == CONFIG.postgres_vector_db_url
+        )
+
+        _active_vector_db = PostgresVectorDatabase(shared_with_doc_db=shared_with_doc_db)
 
         return _active_vector_db
 

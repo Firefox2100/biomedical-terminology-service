@@ -172,6 +172,49 @@ class EmbeddingContainerFileV1(EmbeddingContainerFile):
         await f.write(self._BLK_HDR_STRUCT.pack(len(payload)))
         await f.write(payload)
 
+    @staticmethod
+    def _read_row(mv: memoryview,
+                 offset: int,
+                 dim: int,
+                 vec_bytes: int,
+                 ) -> tuple[EmbeddingContainerV1, int]:
+        """
+        Parse a single embedding row from a block payload starting at the given offset.
+        :param mv: The memoryview over the block payload.
+        :param offset: The byte offset to start reading the row from.
+        :param dim: The dimensionality of the embedding vector.
+        :param vec_bytes: The number of bytes used to encode the embedding vector.
+        :return: A tuple of the parsed EmbeddingContainerV1 and the offset after this row.
+        """
+        if offset + 2 > len(mv):
+            raise EOFError('Unexpected EOF while reading concept_id length')
+        l1 = struct.unpack_from('<H', mv, offset)[0]
+        offset += 2
+        if offset + l1 > len(mv):
+            raise EOFError('Unexpected EOF while reading concept_id')
+        concept_id = bytes(mv[offset:offset + l1]).decode()
+        offset += l1
+
+        if offset + 16 > len(mv):
+            raise EOFError('Unexpected EOF while reading vector_id')
+        vector_id = UUID(bytes=bytes(mv[offset:offset + 16]))
+        offset += 16
+
+        if offset + vec_bytes > len(mv):
+            raise EOFError('Unexpected EOF while reading vector')
+        vec = np.frombuffer(
+            mv[offset:offset + vec_bytes],
+            dtype=np.float32,
+            count=dim,
+        ).copy()
+        offset += vec_bytes
+
+        return EmbeddingContainerV1(
+            concept_id=concept_id,
+            vector_id=vector_id,
+            vector=vec,
+        ), offset
+
     async def read(self) -> AsyncIterator[EmbeddingContainerV1]:
         """
         Read embedding containers from the file.
@@ -212,34 +255,8 @@ class EmbeddingContainerFileV1(EmbeddingContainerFile):
                 offset = 4
 
                 for _ in range(n):
-                    if offset + 2 > len(mv):
-                        raise EOFError('Unexpected EOF while reading concept_id length')
-                    l1 = struct.unpack_from('<H', mv, offset)[0]
-                    offset += 2
-                    if offset + l1 > len(mv):
-                        raise EOFError('Unexpected EOF while reading concept_id')
-                    concept_id = bytes(mv[offset:offset + l1]).decode()
-                    offset += l1
-
-                    if offset + 16 > len(mv):
-                        raise EOFError('Unexpected EOF while reading vector_id')
-                    vector_id = UUID(bytes=bytes(mv[offset:offset + 16]))
-                    offset += 16
-
-                    if offset + vec_bytes > len(mv):
-                        raise EOFError('Unexpected EOF while reading vector')
-                    vec = np.frombuffer(
-                        mv[offset:offset + vec_bytes],
-                        dtype=np.float32,
-                        count=self.dim,
-                    ).copy()
-                    offset += vec_bytes
-
-                    yield EmbeddingContainerV1(
-                        concept_id=concept_id,
-                        vector_id=vector_id,
-                        vector=vec,
-                    )
+                    container, offset = self._read_row(mv, offset, self.dim, vec_bytes)
+                    yield container
 
     async def write(self,
                     containers: Iterable[EmbeddingContainerV1] | \

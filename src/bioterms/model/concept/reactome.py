@@ -10,7 +10,6 @@ class ReactomeConcept(Concept):
     """
 
     model_config = ConfigDict(
-        extra='forbid',
         serialize_by_alias=True,
     )
 

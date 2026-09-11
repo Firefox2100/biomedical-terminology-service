@@ -91,7 +91,7 @@ RUN mkdir -p /app/conf && \
     cp -r /app/conf.defaults/. /app/conf/ && \
     pip install --upgrade pip && \
     pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu126 && \
-    pip install .[all] && \
+    pip install ".[all,cuda]" && \
     chown -R appuser:appgroup /app
 
 USER appuser
