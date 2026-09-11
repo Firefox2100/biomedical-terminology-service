@@ -18,12 +18,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
 
@@ -36,15 +36,17 @@ jobs:
         continue-on-error: true
         run: |
           export PYTHONPATH=./src:$PYTHONPATH
-          pytest --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html
+          pytest --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html || TEST_FAILED=1
 
       - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: test-results.xml
 
       - name: Upload coverage report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
@@ -56,7 +58,8 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
+        if: always()
+        uses: SonarSource/sonarqube-scan-action@v8.2.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
@@ -64,7 +67,7 @@ jobs:
             -Dsonar.projectVersion=${{ env.VERSION }}
 
       - name: Publish test results
-        uses: mikepenz/action-junit-report@v5
         if: always()
+        uses: mikepenz/action-junit-report@v6.5.0
         with:
           report_paths: "test-results.xml"

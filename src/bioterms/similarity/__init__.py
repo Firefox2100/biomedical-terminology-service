@@ -485,5 +485,3 @@ async def restore_similarity(target_prefix: ConceptPrefix,
     await cache.rotate_dataset_version()
 
     return total
-
-    return status
