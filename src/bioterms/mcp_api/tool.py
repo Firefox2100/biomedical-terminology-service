@@ -10,6 +10,7 @@ from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
 from bioterms.vocabulary import get_vocabulary_config
+from bioterms.search import hybrid_search
 from .app import mcp
 
 
@@ -162,8 +163,9 @@ async def search_vocabulary(vocabulary: ConceptPrefix,
     """
     Search the specified vocabulary for the given query.
 
-    It will return the top-k results sorted by relevance. The search is performed using embedding-based
-    similarity, so the results may not contain the exact query string but will be similar.
+    It will return the top-k results sorted by relevance. The search fuses lexical keyword
+    matching with alias and definition embedding similarity, so results may include exact
+    term matches as well as semantically related concepts that don't share the query's words.
     :param vocabulary: The vocabulary to search.
     :param query: The search query.
     :param limit: The maximum number of results to return.
@@ -173,16 +175,13 @@ async def search_vocabulary(vocabulary: ConceptPrefix,
     """
     config = get_vocabulary_config(vocabulary)
 
-    concept_ids = await vector_db.search_concepts(
+    concepts_iter = hybrid_search(
         query=query,
         prefix=vocabulary,
+        doc_db=doc_db,
+        vector_db=vector_db,
+        model_class=config['conceptClass'],
         limit=limit or 10,
-    )
-
-    concepts_iter = doc_db.get_terms_by_ids_iter(
-        prefix=vocabulary,
-        concept_ids=concept_ids,
-        model_class=config['conceptClass']
     )
 
     return [concept async for concept in concepts_iter]

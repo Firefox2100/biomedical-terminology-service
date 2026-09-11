@@ -176,15 +176,49 @@ class DocumentDatabase(ABC):
         """
 
     @abstractmethod
-    async def update_vector_mapping(self,
-                                    prefix: ConceptPrefix,
-                                    mapping: dict[str, str],
-                                    ):
+    def lexical_search_iter(self,
+                            prefix: ConceptPrefix,
+                            query: str,
+                            limit: int = 10,
+                            ) -> AsyncIterator[tuple[str, float]]:
         """
-        Update the vector mapping for concepts in the document database.
-        :param prefix: The vocabulary prefix to update the vector mapping for.
-        :param mapping: A dictionary mapping concept IDs to vector IDs.
+        Run a scored lexical/keyword search (BM25 or native full-text ranking where the
+        backend supports it, an n-gram-overlap count otherwise) against a vocabulary's
+        concept_id/label/synonyms text (the same text `auto_complete_iter` matches against --
+        definitions are covered separately by the definition-embedding recall arm, not here),
+        and return matching concept IDs ranked best-first. This is the lexical recall arm fed
+        into the RRF fusion in
+        `bioterms.search.hybrid` -- unlike `auto_complete_iter`, it is meant for relevance
+        ranking of a full query rather than substring/prefix completion, so it does not
+        require every query word to match.
+
+        The returned score's absolute scale is backend-specific and not comparable across
+        prefixes or drivers -- only its ordering within this one call matters, since RRF
+        fuses recall lists by rank, not by score magnitude.
+        :param prefix: The vocabulary prefix to search within.
+        :param query: The search query string.
+        :param limit: The top number of concepts to return.
+        :return: An async iterator of (concept_id, score) tuples, best match first.
         """
+
+    async def lexical_search(self,
+                             prefix: ConceptPrefix,
+                             query: str,
+                             limit: int = 10,
+                             ) -> list[tuple[str, float]]:
+        """
+        Run a scored lexical/keyword search and return matching concept IDs ranked best-first.
+        :param prefix: The vocabulary prefix to search within.
+        :param query: The search query string.
+        :param limit: The top number of concepts to return.
+        :return: A list of (concept_id, score) tuples, best match first.
+        """
+        results: list[tuple[str, float]] = []
+
+        async for concept_id, score in self.lexical_search_iter(prefix=prefix, query=query, limit=limit):
+            results.append((concept_id, score))
+
+        return results
 
     @abstractmethod
     def auto_complete_iter(self,

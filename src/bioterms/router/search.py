@@ -1,7 +1,7 @@
 """
 API router for searching terms within vocabularies. This is a more advanced search
-endpoint that utilizes embedding-based search to find relevant terms based on the input
-query.
+endpoint that fuses lexical and embedding-based recall (see `bioterms.search.hybrid`) to
+find relevant terms based on the input query.
 """
 
 from typing import Annotated, List, Optional
@@ -14,6 +14,7 @@ from bioterms.database import DocumentDatabase, VectorDatabase, get_active_doc_d
     get_active_vector_db
 from bioterms.vocabulary import get_vocabulary_config
 from bioterms.model.concept import Concept
+from bioterms.search import hybrid_search
 from .utils import response_generator
 
 
@@ -39,8 +40,8 @@ async def search_terms_v1(prefix: ConceptPrefix,
     """
     Search for terms matching the query within the specified vocabulary prefix.
 
-    This method uses embedding-based search to find relevant terms. The input query is
-    converted into an embedding vector, and the vector database is queried to find terms
+    This method fuses lexical, alias-embedding, and definition-embedding recall (see
+    `bioterms.search.hybrid`) via Reciprocal Rank Fusion, with exact matches bypassing fusion.
     \f
     :param prefix: The vocabulary prefix to search within.
     :param query: The search query string.
@@ -54,21 +55,23 @@ async def search_terms_v1(prefix: ConceptPrefix,
 
     config = get_vocabulary_config(prefix)
 
-    concept_ids = await vector_db.search_concepts(
+    concepts_iter = hybrid_search(
         query=query,
         prefix=prefix,
+        doc_db=doc_db,
+        vector_db=vector_db,
+        model_class=config['conceptClass'],
         limit=limit or 10,
     )
 
-    SEARCH_ITEMS.labels(prefix=prefix.value).observe(len(concept_ids))
-
-    concepts_iter = doc_db.get_terms_by_ids_iter(
-        prefix=prefix,
-        concept_ids=concept_ids,
-        model_class=config['conceptClass']
-    )
+    async def counting_generator():
+        items = 0
+        async for concept in concepts_iter:
+            items += 1
+            yield concept
+        SEARCH_ITEMS.labels(prefix=prefix.value).observe(items)
 
     return StreamingResponse(
-        response_generator(concepts_iter),
+        response_generator(counting_generator()),
         media_type='application/json'
     )

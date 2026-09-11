@@ -22,20 +22,6 @@ ANNOTATIONS = [
 ]
 SIMILARITY_METHODS = []
 
-# The complete UniProtKB release (Swiss-Prot + TrEMBL), not a subset scoped to any other
-# vocabulary's cross-references -- a partial UniProt is not something bts can claim to
-# "support" as a first-class vocabulary, and any consumer other than the one it happened to
-# be scoped to would find it silently incomplete. This is unscoped by organism too (not
-# just human): organism_tax_id/organism_name are stamped as node properties instead (see
-# GRAPH_NODE_EXTRA_PROPERTIES) so a human-only view is a query-time filter, not a
-# load-time restriction baked permanently into what the vocabulary contains.
-#
-# Disk cost is real and accepted: TrEMBL alone is ~110GB compressed at the time this was
-# written. Both files stay gzip-compressed on disk -- they are streamed and decompressed
-# on the fly while parsing (see _iter_dat_records), never fully materialized decompressed,
-# so the on-disk footprint stays close to the FTP download size rather than several times
-# larger. Sequence data is parsed out and discarded immediately (see _iter_dat_records) --
-# it is the single largest field per entry and this vocabulary has no use for it.
 FILE_PATHS = [
     'uniprot/uniprot_sprot.dat.gz',
     'uniprot/uniprot_trembl.dat.gz',
@@ -45,9 +31,6 @@ CONCEPT_CLASS = UniProtConcept
 
 UNIPROT_FTP_BASE = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete'
 
-# Batch size for streaming parse/load: bounds peak memory regardless of total release size
-# (TrEMBL alone is on the order of 250M+ entries) -- every write path (doc db, graph db,
-# offline dump files) is called once per batch rather than once for the whole vocabulary.
 BATCH_SIZE = 100000
 
 _ID_LINE = re.compile(r'^ID\s+\S+\s+(Reviewed|Unreviewed);')

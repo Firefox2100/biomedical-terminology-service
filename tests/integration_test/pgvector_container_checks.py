@@ -2,8 +2,8 @@
 Integration test suite for PostgresVectorDatabase, run against a real, ephemeral PostgreSQL +
 pgvector container via testcontainers -- as opposed to mocking the engine/connection outright.
 This validates the pgvector-specific SQL (the "vector" column type, HNSW index creation,
-cosine-distance ordering, and -- for shared mode -- sharing physical tables with
-SqlDocumentDatabase without corrupting its rows) against a real server.
+cosine-distance ordering, and running as a vector store alongside a PostgreSQL document
+database on the same instance without corrupting its rows) against a real server.
 
 Like tests/load_test and the other tests/integration_test modules, this tier is intentionally
 NOT named test_*.py/*_test.py, so a bare `pytest` run does not pick it up (starting a container
@@ -27,7 +27,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from bioterms.database.doc_db.sql_doc_db import SqlDocumentDatabase
 from bioterms.database.vector_db.postgres_vector_db import PostgresVectorDatabase
-from bioterms.etc.enums import ConceptPrefix
+from bioterms.database.vector_db.vector_db import EmbeddingItemVector
+from bioterms.etc.enums import ConceptPrefix, EmbeddingKind
 from bioterms.model.concept import Concept
 
 # The plain postgres image does not bundle the pgvector extension; pgvector/pgvector does, and
@@ -61,6 +62,10 @@ class FakeTextTransformer:
     """
     def __init__(self, *args, **kwargs):
         pass
+
+    @property
+    def dimension(self):
+        return EMBEDDING_DIMENSION
 
     def embed_strings(self, texts):
         return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
@@ -97,83 +102,98 @@ def make_concept(concept_id: str, label: str) -> Concept:
     return Concept(prefix=ConceptPrefix.HPO, conceptId=concept_id, label=label)
 
 
-async def _embeddings_iter(items):
-    for concept_id, vector_id, vector in items:
-        yield concept_id, vector_id, vector
+async def _items_iter(items):
+    for item in items:
+        yield item
+
+
+def item(item_id: str, concept_id: str, kind: EmbeddingKind, text_: str, vector: list[float]) -> EmbeddingItemVector:
+    return EmbeddingItemVector(item_id=item_id, concept_id=concept_id, kind=kind, text=text_, vector=vector)
 
 
 @pytest.mark.asyncio
-async def test_standalone_load_embeddings_and_count(clean_engine):
-    vector_db = PostgresVectorDatabase(
-        engine=clean_engine, embedding_dimension=EMBEDDING_DIMENSION, shared_with_doc_db=False,
-    )
-
-    id_map = await vector_db.load_embeddings(
-        prefix=ConceptPrefix.HPO,
-        embeddings=_embeddings_iter([
-            ('HP:1', 'HP:1', [1.0, 0.0, 0.0, 0.0]),
-            ('HP:2', 'HP:2', [0.0, 1.0, 0.0, 0.0]),
-        ]),
-    )
-
-    assert id_map == {'HP:1': 'HP:1', 'HP:2': 'HP:2'}
-    assert await vector_db.count_vectors(ConceptPrefix.HPO) == 2
-
-    vectors = await vector_db.get_vectors_for_prefix(ConceptPrefix.HPO)
-    assert vectors['HP:1'] == pytest.approx([1.0, 0.0, 0.0, 0.0])
-    assert vectors['HP:2'] == pytest.approx([0.0, 1.0, 0.0, 0.0])
-
-
-@pytest.mark.asyncio
-async def test_standalone_load_embeddings_upserts(clean_engine):
-    vector_db = PostgresVectorDatabase(
-        engine=clean_engine, embedding_dimension=EMBEDDING_DIMENSION, shared_with_doc_db=False,
-    )
-
-    await vector_db.load_embeddings(
-        prefix=ConceptPrefix.HPO,
-        embeddings=_embeddings_iter([('HP:1', 'HP:1', [1.0, 0.0, 0.0, 0.0])]),
-    )
-    await vector_db.load_embeddings(
-        prefix=ConceptPrefix.HPO,
-        embeddings=_embeddings_iter([('HP:1', 'HP:1', [0.0, 0.0, 1.0, 0.0])]),
-    )
-
-    assert await vector_db.count_vectors(ConceptPrefix.HPO) == 1
-    vectors = await vector_db.get_vectors_for_prefix(ConceptPrefix.HPO)
-    assert vectors['HP:1'] == pytest.approx([0.0, 0.0, 1.0, 0.0])
-
-
-@pytest.mark.asyncio
-async def test_standalone_search_concepts_orders_by_cosine_distance(clean_engine, monkeypatch):
+async def test_load_embedding_items_and_count(clean_engine, monkeypatch):
     monkeypatch.setattr(
         'bioterms.database.vector_db.postgres_vector_db.TextTransformer',
         FakeTextTransformer,
     )
+    vector_db = PostgresVectorDatabase(engine=clean_engine)
 
-    vector_db = PostgresVectorDatabase(
-        engine=clean_engine, embedding_dimension=EMBEDDING_DIMENSION, shared_with_doc_db=False,
-    )
-    await vector_db.load_embeddings(
-        prefix=ConceptPrefix.SNOMED,
-        embeddings=_embeddings_iter([
-            ('123', '123', [1.0, 0.0, 0.0, 0.0]),   # identical to the (fake) query embedding
-            ('456', '456', [0.0, 1.0, 0.0, 0.0]),   # orthogonal
+    written = await vector_db.load_embedding_items(
+        prefix=ConceptPrefix.HPO,
+        items=_items_iter([
+            item('HP:1:alias:0', 'HP:1', EmbeddingKind.ALIAS, 'foo', [1.0, 0.0, 0.0, 0.0]),
+            item('HP:2:alias:0', 'HP:2', EmbeddingKind.ALIAS, 'bar', [0.0, 1.0, 0.0, 0.0]),
         ]),
     )
 
-    concept_ids = await vector_db.search_concepts(query='diabetes', prefix=ConceptPrefix.SNOMED, limit=2)
-    assert concept_ids == ['123', '456']
+    assert written == 2
+    assert await vector_db.count_vectors(ConceptPrefix.HPO) == 2
 
 
 @pytest.mark.asyncio
-async def test_standalone_delete_vectors_for_prefix_drops_table(clean_engine):
-    vector_db = PostgresVectorDatabase(
-        engine=clean_engine, embedding_dimension=EMBEDDING_DIMENSION, shared_with_doc_db=False,
+async def test_load_embedding_items_upserts_by_item_id(clean_engine, monkeypatch):
+    monkeypatch.setattr(
+        'bioterms.database.vector_db.postgres_vector_db.TextTransformer',
+        FakeTextTransformer,
     )
-    await vector_db.load_embeddings(
+    vector_db = PostgresVectorDatabase(engine=clean_engine)
+
+    await vector_db.load_embedding_items(
         prefix=ConceptPrefix.HPO,
-        embeddings=_embeddings_iter([('HP:1', 'HP:1', [1.0, 0.0, 0.0, 0.0])]),
+        items=_items_iter([item('HP:1:alias:0', 'HP:1', EmbeddingKind.ALIAS, 'foo', [1.0, 0.0, 0.0, 0.0])]),
+    )
+    await vector_db.load_embedding_items(
+        prefix=ConceptPrefix.HPO,
+        items=_items_iter([item('HP:1:alias:0', 'HP:1', EmbeddingKind.ALIAS, 'foo v2', [0.0, 0.0, 1.0, 0.0])]),
+    )
+
+    # Same item_id upserts in place rather than accumulating a second row.
+    assert await vector_db.count_vectors(ConceptPrefix.HPO) == 1
+
+    hits = await vector_db.search_items(
+        query_vector=[0.0, 0.0, 1.0, 0.0], prefix=ConceptPrefix.HPO, kind=EmbeddingKind.ALIAS, limit=1,
+    )
+    assert hits[0][1] == 'foo v2'
+
+
+@pytest.mark.asyncio
+async def test_search_items_orders_by_cosine_distance_and_filters_by_kind(clean_engine, monkeypatch):
+    monkeypatch.setattr(
+        'bioterms.database.vector_db.postgres_vector_db.TextTransformer',
+        FakeTextTransformer,
+    )
+    vector_db = PostgresVectorDatabase(engine=clean_engine)
+    await vector_db.load_embedding_items(
+        prefix=ConceptPrefix.SNOMED,
+        items=_items_iter([
+            item('123:alias:0', '123', EmbeddingKind.ALIAS, 'diabetes', [1.0, 0.0, 0.0, 0.0]),  # identical
+            item('456:alias:0', '456', EmbeddingKind.ALIAS, 'other', [0.0, 1.0, 0.0, 0.0]),  # orthogonal
+            item('789:definition:0', '789', EmbeddingKind.DEFINITION, 'a disease', [1.0, 0.0, 0.0, 0.0]),
+        ]),
+    )
+
+    alias_hits = await vector_db.search_items(
+        query_vector=[1.0, 0.0, 0.0, 0.0], prefix=ConceptPrefix.SNOMED, kind=EmbeddingKind.ALIAS, limit=2,
+    )
+    assert [concept_id for concept_id, _text, _score in alias_hits] == ['123', '456']
+
+    definition_hits = await vector_db.search_items(
+        query_vector=[1.0, 0.0, 0.0, 0.0], prefix=ConceptPrefix.SNOMED, kind=EmbeddingKind.DEFINITION, limit=2,
+    )
+    assert [concept_id for concept_id, _text, _score in definition_hits] == ['789']
+
+
+@pytest.mark.asyncio
+async def test_delete_vectors_for_prefix_drops_table(clean_engine, monkeypatch):
+    monkeypatch.setattr(
+        'bioterms.database.vector_db.postgres_vector_db.TextTransformer',
+        FakeTextTransformer,
+    )
+    vector_db = PostgresVectorDatabase(engine=clean_engine)
+    await vector_db.load_embedding_items(
+        prefix=ConceptPrefix.HPO,
+        items=_items_iter([item('HP:1:alias:0', 'HP:1', EmbeddingKind.ALIAS, 'foo', [1.0, 0.0, 0.0, 0.0])]),
     )
 
     await vector_db.delete_vectors_for_prefix(ConceptPrefix.HPO)
@@ -184,61 +204,44 @@ async def test_standalone_delete_vectors_for_prefix_drops_table(clean_engine):
 
 
 @pytest.mark.asyncio
-async def test_shared_mode_stores_vector_on_doc_db_table_without_corrupting_it(clean_engine):
+async def test_vector_store_coexists_with_doc_db_on_same_postgres_instance(clean_engine, monkeypatch):
+    """
+    When an admin points both BTS_SQL_DB_URL and BTS_POSTGRES_VECTOR_DB_URL at the same
+    PostgreSQL instance, the vector-item table must sit alongside the document database's own
+    `concept_<prefix>` table without touching it -- there is no more "shared column" mode.
+    """
+    monkeypatch.setattr(
+        'bioterms.database.vector_db.postgres_vector_db.TextTransformer',
+        FakeTextTransformer,
+    )
+
     doc_db = SqlDocumentDatabase(clean_engine, batch_size=10)
     await doc_db.initialize()
     await doc_db.save_terms([make_concept('HP:1', 'Foo bar'), make_concept('HP:2', 'Baz qux')])
 
-    vector_db = PostgresVectorDatabase(
-        engine=clean_engine, embedding_dimension=EMBEDDING_DIMENSION, shared_with_doc_db=True,
-    )
-    await vector_db.load_embeddings(
+    vector_db = PostgresVectorDatabase(engine=clean_engine)
+    await vector_db.load_embedding_items(
         prefix=ConceptPrefix.HPO,
-        embeddings=_embeddings_iter([('HP:1', 'HP:1', [1.0, 0.0, 0.0, 0.0])]),
+        items=_items_iter([item('HP:1:alias:0', 'HP:1', EmbeddingKind.ALIAS, 'foo', [1.0, 0.0, 0.0, 0.0])]),
     )
 
-    # Visible through the vector store...
     assert await vector_db.count_vectors(ConceptPrefix.HPO) == 1
-    vectors = await vector_db.get_vectors_for_prefix(ConceptPrefix.HPO)
-    assert vectors['HP:1'] == pytest.approx([1.0, 0.0, 0.0, 0.0])
 
-    # ...and the underlying concept row is untouched other than gaining the vector.
+    # The document rows are untouched, including HP:2 which was never embedded.
     terms = {t.concept_id: t for t in await doc_db.get_terms(ConceptPrefix.HPO)}
     assert terms['HP:1'].label == 'Foo bar'
     assert terms['HP:2'].label == 'Baz qux'
-    # HP:2 was never embedded, so it must not have picked up a vector from anywhere.
-    assert 'HP:2' not in vectors
 
-    # No second, separate vector-only table was created.
     async with clean_engine.connect() as conn:
         result = await conn.execute(text(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE '%vector%'"
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE '%vector_item%'"
         ))
-        assert result.fetchall() == []
-
-    await doc_db.close()
-
-
-@pytest.mark.asyncio
-async def test_shared_mode_delete_clears_column_not_rows(clean_engine):
-    doc_db = SqlDocumentDatabase(clean_engine, batch_size=10)
-    await doc_db.initialize()
-    await doc_db.save_terms([make_concept('HP:1', 'Foo bar')])
-
-    vector_db = PostgresVectorDatabase(
-        engine=clean_engine, embedding_dimension=EMBEDDING_DIMENSION, shared_with_doc_db=True,
-    )
-    await vector_db.load_embeddings(
-        prefix=ConceptPrefix.HPO,
-        embeddings=_embeddings_iter([('HP:1', 'HP:1', [1.0, 0.0, 0.0, 0.0])]),
-    )
+        assert [row[0] for row in result.fetchall()] == ['concept_hpo_vector_item']
 
     await vector_db.delete_vectors_for_prefix(ConceptPrefix.HPO)
-
     assert await vector_db.count_vectors(ConceptPrefix.HPO) == 0
-    # The concept document itself must still be there.
-    terms = await doc_db.get_terms(ConceptPrefix.HPO)
-    assert [t.concept_id for t in terms] == ['HP:1']
-    assert terms[0].label == 'Foo bar'
+    # Dropping the vector-item table must not touch the document table.
+    terms_after = {t.concept_id: t for t in await doc_db.get_terms(ConceptPrefix.HPO)}
+    assert terms_after['HP:1'].label == 'Foo bar'
 
     await doc_db.close()

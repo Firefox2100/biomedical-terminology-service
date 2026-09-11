@@ -17,7 +17,7 @@ from pymongo.operations import SearchIndexModel
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
-from bioterms.etc.utils import batch_iterable, iter_progress
+from bioterms.etc.utils import batch_iterable
 from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, \
     AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
@@ -621,37 +621,64 @@ class MongoDocumentDatabase(DocumentDatabase):
         # Recreate the collection to ensure it exists
         await self.db.create_collection(str(prefix.value))
 
-    async def update_vector_mapping(self,
-                                    prefix: ConceptPrefix,
-                                    mapping: dict[str, str],
-                                    ):
+    async def lexical_search_iter(self,
+                                  prefix: ConceptPrefix,
+                                  query: str,
+                                  limit: int = 10,
+                                  ) -> AsyncIterator[tuple[str, float]]:
         """
-        Update the vector mapping for concepts in the document database.
-        :param prefix: The vocabulary prefix to update the vector mapping for.
-        :param mapping: A dictionary mapping concept IDs to vector IDs.
+        Run a scored lexical/keyword search against a vocabulary's concept_id/label/synonyms,
+        and return matching concept IDs ranked best-first.
+        :param prefix: The vocabulary prefix to search within.
+        :param query: The search query string.
+        :param limit: The top number of concepts to return.
+        :return: An async iterator of (concept_id, score) tuples, best match first.
         """
+        clean_query = re.sub(r'[()"\']', '', query.lower())
+        words = [word for word in clean_query.split() if len(word) > 2] or [clean_query]
+
         collection = self.db[str(prefix.value)]
+        native = await self._supports_native_text_search(collection)
 
-        # Batch update with default overwrite behaviour
-        operations = []
-        for concept_id, vector_id in iter_progress(
-            mapping.items(),
-            description='Updating vector mappings',
-            total=len(mapping),
-        ):
-            operations.append(
-                UpdateOne(
-                    {'conceptId': concept_id},
-                    {'$set': {'vectorId': vector_id}}
-                )
-            )
+        if native:
+            await self._ensure_text_index(collection)
+            pipeline = [
+                {
+                    '$search': {
+                        'index': CONFIG.mongodb_text_index_name,
+                        'compound': {
+                            'should': [
+                                {
+                                    'autocomplete': {
+                                        'query': word,
+                                        'path': ['conceptId', 'label', 'synonyms'],
+                                    }
+                                }
+                                for word in words
+                            ],
+                            'minimumShouldMatch': 1,
+                        },
+                    },
+                },
+                {'$addFields': {'score': {'$meta': 'searchScore'}}},
+                {'$sort': {'score': -1}},
+                {'$limit': limit},
+                {'$project': {'_id': 0, 'conceptId': 1, 'score': 1}},
+            ]
+        else:
+            pipeline = [
+                {'$match': {'nGrams': {'$in': words}}},
+                {'$addFields': {'score': {'$size': {'$setIntersection': ['$nGrams', words]}}}},
+                {'$sort': {'score': -1}},
+                {'$limit': limit},
+                {'$project': {'_id': 0, 'conceptId': 1, 'score': 1}},
+            ]
 
-            if len(operations) >= 1000:
-                await collection.bulk_write(operations)
-                operations = []
-
-        if operations:
-            await collection.bulk_write(operations)
+        cursor = await collection.aggregate(pipeline)
+        async for doc in cursor:
+            concept_id = doc.get('conceptId')
+            if concept_id is not None:
+                yield concept_id, float(doc.get('score', 0.0))
 
     @staticmethod
     def _build_legacy_auto_complete_pipeline(n_gram_query: list[str],

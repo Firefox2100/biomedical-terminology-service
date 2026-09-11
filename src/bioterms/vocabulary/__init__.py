@@ -280,15 +280,10 @@ async def _embed_vocabulary_online(prefix: ConceptPrefix,
         model_class=config['conceptClass'],
     )
 
-    id_map = await vector_db.insert_concepts(
+    await vector_db.insert_concepts(
         concepts=concept_iter,
         prefix=prefix,
         total_concepts=status.concept_count,
-    )
-
-    await doc_db.update_vector_mapping(
-        prefix=prefix,
-        mapping=id_map,
     )
 
 
@@ -300,7 +295,8 @@ async def _embed_vocabulary_offline(prefix: ConceptPrefix,
     :param prefix: The prefix of the vocabulary to embed.
     :param config: The vocabulary configuration dictionary.
     """
-    from bioterms.embedding import ConceptTransformer, EmbeddingContainerV1, EmbeddingContainerFileV1
+    from bioterms.embedding import ConceptTransformer, TextTransformer, EmbeddingContainerV2, \
+        EmbeddingContainerFileV2
 
     offline_concept_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.doc.dump')
     if not os.path.exists(offline_concept_path):
@@ -317,16 +313,19 @@ async def _embed_vocabulary_offline(prefix: ConceptPrefix,
         async for batch in transformer.embed_concepts(
             concepts=concept_iter(),
         ):
-            for concept_id, vector in batch:
+            for item, vector in batch:
                 # Convert the vector to np array
                 vector = np.array(vector, dtype=np.float32)
 
-                yield EmbeddingContainerV1(
-                    concept_id=concept_id,
+                yield EmbeddingContainerV2(
+                    item_id=item.item_id,
+                    concept_id=item.concept_id,
+                    kind=item.kind,
+                    text=item.text,
                     vector=vector,
                 )
 
-    embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
+    embedding_file = EmbeddingContainerFileV2(offline_embedding_path, dim=TextTransformer().dimension)
     await embedding_file.write(embed_iter())
 
 
@@ -396,24 +395,28 @@ async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
     if drop_existing:
         await vector_db.delete_vectors_for_prefix(prefix=prefix)
 
-    from bioterms.embedding import EmbeddingContainerFileV1
+    from bioterms.embedding import EmbeddingContainerFileV2
+    from bioterms.database.vector_db import EmbeddingItemVector
 
     offline_dir = str(offline_dir) if offline_dir is not None else os.path.join(CONFIG.data_dir, 'offline')
     offline_embedding_path = os.path.join(offline_dir, f'{prefix.value}.embed.dump')
-    embedding_file = EmbeddingContainerFileV1(offline_embedding_path)
+    # dim is a placeholder here -- reading a file overwrites it with the value from the file
+    # header, which is what `EmbeddingContainerFileV2.read()` actually uses.
+    embedding_file = EmbeddingContainerFileV2(offline_embedding_path, dim=1)
 
-    async def embed_iter():
+    async def item_iter():
         async for container in embedding_file.read():
-            yield container.concept_id, str(container.vector_id), container.vector.tolist()
+            yield EmbeddingItemVector(
+                item_id=container.item_id,
+                concept_id=container.concept_id,
+                kind=container.kind,
+                text=container.text,
+                vector=container.vector.tolist(),
+            )
 
-    id_map = await vector_db.load_embeddings(
+    await vector_db.load_embedding_items(
         prefix=prefix,
-        embeddings=embed_iter(),
-    )
-
-    await doc_db.update_vector_mapping(
-        prefix=prefix,
-        mapping=id_map,
+        items=item_iter(),
     )
 
     await cache.rotate_dataset_version()

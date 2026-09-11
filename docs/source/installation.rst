@@ -27,8 +27,9 @@ The following software must be installed on your system before proceeding with t
 * A **cache** for hot data and inter-process communication. Only Redis is supported.
 * A **vector database** for storing and searching vector embeddings. Qdrant is recommended and used
   throughout this guide. MongoDB (with Atlas Search / mongot support) and PostgreSQL (with the
-  pgvector extension) are also supported as alternatives - the latter can share the same
-  PostgreSQL instance as the document database, avoiding a separate vector store entirely.
+  pgvector extension) are also supported as alternatives - the latter can run on the same
+  PostgreSQL instance as the document database, in its own set of tables, avoiding a separate
+  database system entirely.
 
 Resource requirements:
 
@@ -61,9 +62,9 @@ There are different tags available for different use cases:
 * A specific version tag (e.g., ``v1.2.3``) - corresponds to a specific release. Recommended for
   production where stability is crucial.
 * ``-cpu`` suffix - CPU-only installation. Suitable for systems without a compatible GPU. GPU is
-  only needed for embedding and GNN training, not for serving queries.
+  only needed for embedding generation, not for serving queries.
 * Default image (no ``-cpu`` suffix) - includes GPU support (CUDA torch). Recommended if you have
-  an NVIDIA GPU for faster embedding and training. These images are significantly larger
+  an NVIDIA GPU for faster embedding generation. These images are significantly larger
   (10 GB or more) due to CUDA libraries.
 
 Choose the appropriate tag based on your system capabilities and requirements.
@@ -93,10 +94,10 @@ Both compose files also define two further opt-in `Compose profiles
   self-hosted, SSPL-licensed alternative to Qdrant for ``BTS_VECTOR_DATABASE_DRIVER=mongodb``.
 * ``postgres`` - a PostgreSQL+pgvector container, usable as the document database
   (``BTS_DOC_DATABASE_DRIVER=sql``), the vector database (``BTS_VECTOR_DATABASE_DRIVER=postgresql``),
-  the graph database (``BTS_GRAPH_DATABASE_DRIVER=postgresql``), or all three at once - the document
-  and vector stores share the same tables, and the graph store's own ``graph_*``-named tables live
-  alongside them, so one PostgreSQL instance can replace MongoDB/SQL, Qdrant/MongoDB, and Neo4j
-  simultaneously.
+  the graph database (``BTS_GRAPH_DATABASE_DRIVER=postgresql``), or all three at once - each role
+  gets its own set of tables (``concept_*`` for documents, ``concept_*_vector_item`` for embedding
+  items, ``graph_*`` for the graph), so one PostgreSQL instance can replace MongoDB/SQL,
+  Qdrant/MongoDB, and Neo4j simultaneously without the roles' tables colliding.
 
 Pass ``--profile <name>`` to include one. See :doc:`build-database` for details.
 
@@ -126,7 +127,7 @@ From Source Code
 ================
 
 First install the project with the ``all`` extra, which includes every optional dependency
-(SQLAlchemy drivers, GNN support, etc.):
+(SQLAlchemy drivers, etc.):
 
 .. code-block:: bash
 
@@ -475,10 +476,10 @@ External API Keys (Optional)
      - yes
      - NIH UMLS API key. Needed for SNOMED-ORDO mappings.
 
-Embedding & GNN Settings
-------------------------
+Embedding & Search Settings
+---------------------------
 
-.. list-table:: Embedding & GNN
+.. list-table:: Embedding & Search
    :header-rows: 1
    :widths: 55 15 5 25
 
@@ -487,7 +488,7 @@ Embedding & GNN Settings
      - Sec
      - Description
    * - ``BTS_TRANSFORMER_MODEL_NAME``
-     - ``BAAI/bge-base-en-v1.5``
+     - ``FremyCompany/BioLORD-2023``
      - no
      - HuggingFace model name for concept embedding generation
    * - ``BTS_EMBEDDING_PROCESS_LIMIT``
@@ -497,27 +498,16 @@ Embedding & GNN Settings
    * - ``BTS_EMBEDDING_BATCH_SIZE``
      - ``32``
      - no
-     - Number of concepts to embed per batch
+     - Number of embedding items to embed per batch
    * - ``BTS_TORCH_DEVICE``
      - ``cpu``
      - no
      - PyTorch device (``cpu`` or ``cuda``)
-   * - ``BTS_GNN_EPOCHS``
-     - ``100``
+   * - ``BTS_SEARCH_RRF_K``
+     - ``60``
      - no
-     - Number of training epochs for the GNN model
-   * - ``BTS_GNN_HIDDEN_DIM``
-     - ``256``
-     - no
-     - Hidden dimension size for the GNN model
-   * - ``BTS_GNN_OUTPUT_DIM``
-     - ``256``
-     - no
-     - Output (embedding) dimension of the GNN model
-   * - ``BTS_GNN_LEARNING_RATE``
-     - ``0.001``
-     - no
-     - Learning rate for GNN training
+     - Reciprocal Rank Fusion "k" constant used to combine ``/search``'s lexical, alias-embedding,
+       and definition-embedding recall lists
 
 CLI Output Settings
 -------------------

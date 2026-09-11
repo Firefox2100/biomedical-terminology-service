@@ -3,17 +3,40 @@ Abstract base class for vector databases.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from collections.abc import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix, DocDatabaseDriverType
+from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix, EmbeddingKind
 from bioterms.model.concept import Concept
+
+
+@dataclass(frozen=True)
+class EmbeddingItemVector:
+    """
+    An embedding item paired with its computed vector -- the unit of storage and retrieval
+    for `VectorDatabase`. See `Concept.embedding_items` for how items are derived from a
+    concept (one per distinct label/synonym, plus one for the definition when present).
+    """
+    item_id: str
+    concept_id: str
+    kind: EmbeddingKind
+    text: str
+    vector: list[float]
 
 
 class VectorDatabase(ABC):
     """
     Abstract base class for vector databases.
+
+    Storage is item-level, not concept-level: a concept with a label, three synonyms, and a
+    definition contributes five separate embedding items/vectors, each individually indexed
+    and searchable, rather than one vector for a concatenation of all of them. `kind` (ALIAS
+    vs DEFINITION) lets callers search each recall arm independently -- this is what the
+    hybrid search fusion in `bioterms.search.hybrid` relies on to keep alias-embedding and
+    definition-embedding recall as separate ranked lists before combining them.
     """
+
     @abstractmethod
     async def close(self) -> None:
         """
@@ -21,115 +44,121 @@ class VectorDatabase(ABC):
         """
 
     @abstractmethod
-    async def load_embeddings(self,
-                              prefix: ConceptPrefix,
-                              embeddings: AsyncIterator[tuple[str, str, list[float]]],
-                              total_embeddings: int | None = None,
-                              ) -> dict[str, str]:
+    async def load_embedding_items(self,
+                                   prefix: ConceptPrefix,
+                                   items: AsyncIterator[EmbeddingItemVector],
+                                   total_items: int | None = None,
+                                   ) -> int:
         """
-        Load precomputed embeddings into the Qdrant collection.
-        :param prefix: The vocabulary prefix of the embeddings
-        :param embeddings: An async iterator of tuples containing (concept_id, text, embedding_vector)
-        :param total_embeddings: Optional total number of embeddings, used for progress tracking
-        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
+        Load precomputed embedding items into the vector database.
+        :param prefix: The vocabulary prefix of the embedding items.
+        :param items: An async iterator of EmbeddingItemVector instances.
+        :param total_items: Optional total number of items, used for progress tracking.
+        :return: The number of embedding items written.
         """
 
-    @abstractmethod
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
                               prefix: ConceptPrefix,
                               total_concepts: int | None = None,
-                              ) -> dict[str, str]:
+                              ) -> int:
         """
-        Insert concepts into the Qdrant collection.
-        :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
-        :param prefix: The prefix of the concepts being inserted
-        :param total_concepts: Optional total number of concepts, used for progress tracking
-        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
+        Embed every concept's embedding items (see `Concept.embedding_items`) and write them
+        into the vector database. This is a thin, driver-independent wrapper around
+        `load_embedding_items` built on the base class, so concrete drivers only need to
+        implement storage, not the embedding call.
+        :param concepts: A list of Concept instances to insert, or an async iterator of them.
+        :param prefix: The prefix of the concepts being inserted.
+        :param total_concepts: Optional total number of concepts, used for progress tracking.
+        :return: The number of embedding items written.
         """
+        from bioterms.embedding import ConceptTransformer
+
+        if isinstance(concepts, list) and not concepts:
+            return 0
+
+        transformer = ConceptTransformer()
+
+        async def item_iter() -> AsyncIterator[EmbeddingItemVector]:
+            async for embedded_batch in transformer.embed_concepts(concepts, total_concepts=total_concepts):
+                for item, vector in embedded_batch:
+                    yield EmbeddingItemVector(
+                        item_id=item.item_id,
+                        concept_id=item.concept_id,
+                        kind=item.kind,
+                        text=item.text,
+                        vector=vector,
+                    )
+
+        return await self.load_embedding_items(prefix=prefix, items=item_iter())
 
     @abstractmethod
     async def count_vectors(self,
                             prefix: ConceptPrefix,
                             ) -> int:
         """
-        Count the number of concept vectors for a given prefix in the vector database.
-        :param prefix: The vocabulary prefix to count vectors for.
-        :return: The number of vectors as an integer.
+        Count the number of embedding items stored for a given prefix in the vector database.
+        Note this counts individual embedding items (aliases + definitions), not concepts --
+        a single concept with several synonyms contributes several items.
+        :param prefix: The vocabulary prefix to count embedding items for.
+        :return: The number of embedding items as an integer.
         """
 
     @abstractmethod
-    def get_vectors_for_prefix_iter(self,
-                                    prefix: ConceptPrefix,
-                                    ) -> AsyncIterator[tuple[str, list[float]]]:
+    def search_items_iter(self,
+                          query_vector: list[float],
+                          prefix: ConceptPrefix,
+                          kind: EmbeddingKind,
+                          limit: int = 10,
+                          ) -> AsyncIterator[tuple[str, str, float]]:
         """
-        Get all vectors for a given prefix from the vector database as an async iterator.
-        :param prefix: The vocabulary prefix to get vectors for.
-        :return: An asynchronous iterator yielding tuples of concept IDs and their embedding vectors.
+        Search for embedding items of the given kind whose vector is closest to
+        `query_vector`, within the specified vocabulary prefix.
+        :param query_vector: The already-embedded query vector (embedding the query text is
+            the caller's responsibility, so it is only embedded once regardless of how many
+            kinds/prefixes it is searched against).
+        :param prefix: The vocabulary prefix to search within.
+        :param kind: Which embedding items to search (ALIAS or DEFINITION).
+        :param limit: The top number of items to return.
+        :return: An async iterator of (concept_id, item_text, score) tuples, best match first.
+            Multiple items can belong to the same concept; callers that need one rank per
+            concept are responsible for collapsing duplicates (see `bioterms.search.hybrid`).
         """
 
-    async def get_vectors_for_prefix(self,
-                                     prefix: ConceptPrefix,
-                                     ) -> dict[str, list[float]]:
+    async def search_items(self,
+                           query_vector: list[float],
+                           prefix: ConceptPrefix,
+                           kind: EmbeddingKind,
+                           limit: int = 10,
+                           ) -> list[tuple[str, str, float]]:
         """
-        Get all vectors for a given prefix from the vector database.
-        :param prefix: The vocabulary prefix to get vectors for.
-        :return: A dictionary mapping concept IDs to their embedding vectors.
+        Search for embedding items of the given kind whose vector is closest to
+        `query_vector`, within the specified vocabulary prefix.
+        :param query_vector: The already-embedded query vector.
+        :param prefix: The vocabulary prefix to search within.
+        :param kind: Which embedding items to search (ALIAS or DEFINITION).
+        :param limit: The top number of items to return.
+        :return: A list of (concept_id, item_text, score) tuples, best match first.
         """
-        vector_iter = self.get_vectors_for_prefix_iter(prefix)
+        results: list[tuple[str, str, float]] = []
 
-        results: dict[str, list[float]] = {}
-        async for concept_id, vector in vector_iter:
-            results[concept_id] = vector
+        async for concept_id, text, score in self.search_items_iter(
+            query_vector=query_vector,
+            prefix=prefix,
+            kind=kind,
+            limit=limit,
+        ):
+            results.append((concept_id, text, score))
 
         return results
-
-    @abstractmethod
-    def search_concepts_iter(self,
-                             query: str,
-                             prefix: ConceptPrefix,
-                             limit: int = 10,
-                             ) -> AsyncIterator[str]:
-        """
-        Search for concepts matching the query within the specified vocabulary prefix, and
-        return an async iterator of matching concept IDs.
-        :param query: The search query string.
-        :param prefix: The vocabulary prefix to search within.
-        :param limit: The top number of concepts to return.
-        :return: A list of matching Concept instances.
-        """
-
-    async def search_concepts(self,
-                              query: str,
-                              prefix: ConceptPrefix,
-                              limit: int = 10,
-                              ) -> list[str]:
-        """
-        Search for concepts matching the query within the specified vocabulary prefix.
-        :param query: The search query string.
-        :param prefix: The vocabulary prefix to search within.
-        :param limit: The top number of concepts to return.
-        :return: A list of matching Concept instances.
-        """
-        concept_ids = []
-        concept_iter = self.search_concepts_iter(
-            query=query,
-            prefix=prefix,
-            limit=limit,
-        )
-
-        async for concept_id in concept_iter:
-            concept_ids.append(concept_id)
-
-        return concept_ids
 
     @abstractmethod
     async def delete_vectors_for_prefix(self,
                                         prefix: ConceptPrefix,
                                         ) -> None:
         """
-        Delete all vectors for a given prefix from the vector database.
-        :param prefix: The vocabulary prefix to delete vectors for.
+        Delete all embedding items for a given prefix from the vector database.
+        :param prefix: The vocabulary prefix to delete embedding items for.
         """
 
 
@@ -184,14 +213,7 @@ def get_active_vector_db() -> VectorDatabase:
         pg_engine = create_async_engine(CONFIG.postgres_vector_db_url)
         PostgresVectorDatabase.set_engine(pg_engine)
 
-        # If the document database is also PostgreSQL and pointed at this same database, share
-        # its concept tables (one column added) instead of maintaining separate vector-only ones.
-        shared_with_doc_db = (
-            CONFIG.doc_database_driver == DocDatabaseDriverType.SQL
-            and CONFIG.sql_db_url == CONFIG.postgres_vector_db_url
-        )
-
-        _active_vector_db = PostgresVectorDatabase(shared_with_doc_db=shared_with_doc_db)
+        _active_vector_db = PostgresVectorDatabase()
 
         return _active_vector_db
 

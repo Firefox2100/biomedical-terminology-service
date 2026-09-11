@@ -108,12 +108,16 @@ async def test_save_terms_upserts_via_native_on_conflict(doc_db):
 
 
 @pytest.mark.asyncio
-async def test_update_vector_mapping_is_visible_on_read(doc_db):
-    await doc_db.save_terms([make_concept('HP:1', 'Foo bar')])
-    await doc_db.update_vector_mapping(ConceptPrefix.HPO, {'HP:1': 'vec-1'})
+async def test_lexical_search_uses_native_ranking(doc_db):
+    await doc_db.save_terms([
+        make_concept('HP:1', 'diabetes mellitus'),
+        make_concept('HP:2', 'unrelated condition'),
+    ])
 
-    terms = await doc_db.get_terms(ConceptPrefix.HPO)
-    assert terms[0].vector_id == 'vec-1'
+    results = await doc_db.lexical_search(ConceptPrefix.HPO, query='diabetes', limit=10)
+    ranked_ids = [concept_id for concept_id, _score in results]
+
+    assert ranked_ids == ['HP:1']
 
 
 @pytest.mark.asyncio

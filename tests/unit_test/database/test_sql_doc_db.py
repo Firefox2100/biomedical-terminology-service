@@ -61,19 +61,22 @@ async def test_save_terms_no_upsert_does_plain_insert(doc_db):
 
 
 @pytest.mark.asyncio
-async def test_update_vector_mapping_is_visible_on_every_read_path(doc_db):
-    await doc_db.save_terms([make_concept('HP:1', 'Foo bar'), make_concept('HP:2', 'Baz qux')])
-    await doc_db.update_vector_mapping(ConceptPrefix.HPO, {'HP:1': 'vec-1', 'HP:2': 'vec-2'})
+async def test_lexical_search_ranks_more_overlap_first(doc_db):
+    # SQLite has no native trigram/ngram full-text feature this driver detects (it looks for
+    # the FTS5 "trigram" tokenizer, not FTS5 itself), so this exercises the fallback n-gram
+    # overlap-count scoring path.
+    await doc_db.save_terms([
+        make_concept('HP:1', 'diabetes mellitus'),
+        make_concept('HP:2', 'diabetes insipidus'),
+        make_concept('HP:3', 'unrelated condition'),
+    ])
 
-    by_get_terms = {t.concept_id: t for t in await doc_db.get_terms(ConceptPrefix.HPO)}
-    assert by_get_terms['HP:1'].vector_id == 'vec-1'
-    assert by_get_terms['HP:2'].vector_id == 'vec-2'
+    results = await doc_db.lexical_search(ConceptPrefix.HPO, query='diabetes mellitus', limit=10)
+    ranked_ids = [concept_id for concept_id, _score in results]
 
-    by_ids = await doc_db.get_terms_by_ids(ConceptPrefix.HPO, ['HP:1'])
-    assert by_ids[0].vector_id == 'vec-1'
-
-    by_autocomplete = await doc_db.auto_complete_search(ConceptPrefix.HPO, query='foo')
-    assert by_autocomplete[0].vector_id == 'vec-1'
+    # 'HP:1' shares both query words with the label; 'HP:2' shares only one; 'HP:3' shares none.
+    assert ranked_ids[0] == 'HP:1'
+    assert 'HP:3' not in ranked_ids
 
 
 @pytest.mark.asyncio

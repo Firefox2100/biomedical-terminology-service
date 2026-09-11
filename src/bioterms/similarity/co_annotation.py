@@ -61,7 +61,7 @@ def _score_pairs_cpu(row_ptr, annotation_ids, lhs, rhs, total_annotation_count, 
                 output[k] = np.nan
                 continue
             denom = math.log(total_annotation_count / inter)
-            npmi = 1.0 if denom == 0.0 else (1.0 + math.log(numerator) / denom) / 2.0
+            npmi = 1.0 if math.isclose(denom, 0.0) else (1.0 + math.log(numerator) / denom) / 2.0
         similarity = npmi * jaccard
         output[k] = similarity if similarity >= threshold and similarity >= 0.0 else np.nan
     return output
@@ -91,7 +91,7 @@ void score(const long long* row_ptr, const unsigned int* ids,
         double numerator=((double)inter*(double)total)/((double)l1*(double)l2);
         if (!(numerator>0.0) || !isfinite(numerator)) { out[k]=NAN; return; }
         double denom=log((double)total/(double)inter);
-        npmi = denom==0.0 ? 1.0 : (1.0 + log(numerator)/denom)/2.0;
+        npmi = fabs(denom) <= 1e-12 ? 1.0 : (1.0 + log(numerator)/denom)/2.0;
     }
     double s=npmi*j;
     out[k]=(s>=threshold && s>=0.0) ? s : NAN;

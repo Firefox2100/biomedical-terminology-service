@@ -1,36 +1,34 @@
-from uuid import uuid4
 from typing import AsyncIterator
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, \
+    PayloadSchemaType
 from qdrant_client.http.models import HnswConfigDiff
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from bioterms.etc.enums import ConceptPrefix
-from bioterms.model.concept import Concept
-from bioterms.embedding import ConceptTransformer, TextTransformer
-from .vector_db import VectorDatabase
+from bioterms.etc.enums import ConceptPrefix, EmbeddingKind
+from bioterms.embedding import TextTransformer
+from .vector_db import VectorDatabase, EmbeddingItemVector
 
 
 class QdrantVectorDatabase(VectorDatabase):
     """
-    Qdrant vector database implementation.
+    Qdrant vector database implementation. Each vocabulary prefix gets its own collection,
+    with one point per embedding item (not per concept) -- a concept's label, each of its
+    synonyms, and its definition are all separate points, distinguished by the payload's
+    "kind" field so alias and definition items can be searched independently.
     """
 
     _client: AsyncQdrantClient | None = None
 
     def __init__(self,
                  client: AsyncQdrantClient | None = None,
-                 embedding_dimension: int = 768,
                  ):
         """
         Initialise the Qdrant vector database.
         :param client: Optional Qdrant client instance or None to use class variable
-        :param embedding_dimension: Dimension of the embedding vectors, defaults to 768 (for BGE)
         """
         if client is not None:
             self._client = client
-
-        self._embedding_dimension = embedding_dimension
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -66,16 +64,25 @@ class QdrantVectorDatabase(VectorDatabase):
                                 distance: Distance = Distance.COSINE,
                                 ):
         """
-        Create a Qdrant collection with the specified name and distance metric.
+        Create a Qdrant collection with the specified name and distance metric, sized to the
+        currently configured embedding model's output dimension, and index the "kind" payload
+        field so alias/definition searches can filter efficiently.
         :param collection_name: The name of the collection to create
         :param distance: The distance metric to use for the collection
         """
+        dimension = TextTransformer().dimension
+
         await self.client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(
-                size=self._embedding_dimension,
+                size=dimension,
                 distance=distance,
             )
+        )
+        await self.client.create_payload_index(
+            collection_name=collection_name,
+            field_name='kind',
+            field_schema=PayloadSchemaType.KEYWORD,
         )
 
     async def delete_collection(self,
@@ -87,20 +94,27 @@ class QdrantVectorDatabase(VectorDatabase):
         """
         await self.client.delete_collection(collection_name=collection_name)
 
-    async def load_embeddings(self,
-                              prefix: ConceptPrefix,
-                              embeddings: AsyncIterator[tuple[str, str, list[float]]],
-                              total_embeddings: int | None = None,
-                              ) -> dict[str, str]:
+    async def load_embedding_items(self,
+                                   prefix: ConceptPrefix,
+                                   items: AsyncIterator[EmbeddingItemVector],
+                                   total_items: int | None = None,
+                                   ) -> int:
         """
-        Load precomputed embeddings into the Qdrant collection.
-        :param prefix: The vocabulary prefix of the embeddings
-        :param embeddings: An async iterator of tuples containing (concept_id, text, embedding_vector)
-        :param total_embeddings: Optional total number of embeddings, used for progress tracking
-        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
+        Load precomputed embedding items into the Qdrant collection.
+        :param prefix: The vocabulary prefix of the embedding items
+        :param items: An async iterator of EmbeddingItemVector instances
+        :param total_items: Optional total number of items, used for progress tracking (unused
+            by this driver, kept for interface compatibility)
+        :return: The number of embedding items written
         """
-        # Disable HNSW indexing for faster bulk inserts
         collection_name = prefix.value
+
+        collection_list = await self.client.get_collections()
+        existing = [c.name for c in collection_list.collections]
+        if collection_name not in existing:
+            await self.create_collection(collection_name=collection_name)
+
+        # Disable HNSW indexing for faster bulk inserts
         await self.client.update_collection(
             collection_name=collection_name,
             hnsw_config=HnswConfigDiff(
@@ -109,15 +123,19 @@ class QdrantVectorDatabase(VectorDatabase):
         )
 
         points = []
-        id_map = {}
-        async for concept_id, vector_id, vector in embeddings:
+        written = 0
+        async for item in items:
             points.append(PointStruct(
-                id=vector_id,
-                vector=vector,
-                payload={'conceptId': concept_id}
+                id=str(_stable_uuid(item.item_id)),
+                vector=item.vector,
+                payload={
+                    'itemId': item.item_id,
+                    'conceptId': item.concept_id,
+                    'kind': item.kind.value,
+                    'text': item.text,
+                },
             ))
-
-            id_map[concept_id] = vector_id
+            written += 1
 
             if len(points) > 1000:
                 await self.client.upsert(
@@ -142,56 +160,15 @@ class QdrantVectorDatabase(VectorDatabase):
             )
         )
 
-        return id_map
-
-    async def insert_concepts(self,
-                              concepts: list[Concept] | AsyncIterator[Concept],
-                              prefix: ConceptPrefix,
-                              total_concepts: int | None = None,
-                              ) -> dict[str, str]:
-        """
-        Insert concepts into the Qdrant collection.
-        :param concepts: list of Concept instances to insert, or an async iterator of Concept instances
-        :param prefix: The prefix of the concepts being inserted
-        :param total_concepts: Optional total number of concepts, used for progress tracking
-        :return: A mapping of concept IDs to their assigned point IDs in Qdrant
-        """
-        if not concepts:
-            return {}
-
-        collection_name = prefix.value
-
-        # Check if the collection exists
-        collection_list = await self.client.get_collections()
-        existing = [c.name for c in collection_list.collections]
-        if collection_name not in existing:
-            await self.create_collection(collection_name=collection_name)
-
-        if isinstance(concepts, list):
-            total_concepts: int = len(concepts)
-
-        transformer = ConceptTransformer()
-        async def embedding_iter():
-            async for embedded_batch in transformer.embed_concepts(concepts, total_concepts=total_concepts):
-                for concept_id, vector in embedded_batch:
-                    vector_id = str(uuid4())
-                    yield concept_id, vector_id, vector
-
-        id_map = await self.load_embeddings(
-            prefix=prefix,
-            embeddings=embedding_iter(),
-            total_embeddings=total_concepts,
-        )
-
-        return id_map
+        return written
 
     async def count_vectors(self,
                             prefix: ConceptPrefix,
                             ) -> int:
         """
-        Count the number of concept vectors for a given prefix in the vector database.
-        :param prefix: The vocabulary prefix to count vectors for.
-        :return: The number of vectors as an integer.
+        Count the number of embedding items for a given prefix in the vector database.
+        :param prefix: The vocabulary prefix to count embedding items for.
+        :return: The number of embedding items as an integer.
         """
         collection_name = prefix.value
 
@@ -204,82 +181,47 @@ class QdrantVectorDatabase(VectorDatabase):
         except UnexpectedResponse:
             return 0
 
-    async def get_vectors_for_prefix_iter(self,
-                                          prefix: ConceptPrefix,
-                                          ) -> AsyncIterator[tuple[str, list[float]]]:
+    async def search_items_iter(self,
+                                query_vector: list[float],
+                                prefix: ConceptPrefix,
+                                kind: EmbeddingKind,
+                                limit: int = 10,
+                                ) -> AsyncIterator[tuple[str, str, float]]:
         """
-        Get all vectors for a given prefix from the vector database as an async iterator.
-        :param prefix: The vocabulary prefix to get vectors for.
-        :return: An asynchronous iterator yielding tuples of concept IDs and their embedding vectors.
-        """
-        collection_name = prefix.value
-
-        # Check if the collection exists
-        collection_list = await self.client.get_collections()
-        existing = [c.name for c in collection_list.collections]
-        if collection_name not in existing:
-            raise ValueError(f'Vocabulary prefix {prefix} does not exist in Qdrant.')
-
-        offset = None
-        limit = 100
-
-        while True:
-            points, new_offset = await self.client.scroll(
-                collection_name=collection_name,
-                with_vectors=True,
-                limit=limit,
-                offset=offset
-            )
-
-            if not points:
-                break
-
-            for point in points:
-                concept_id = point.payload.get('conceptId')
-                if concept_id is not None:
-                    yield concept_id, point.vector
-
-            if new_offset is None or new_offset == offset:
-                break
-
-            offset = new_offset
-
-    async def search_concepts_iter(self,
-                                   query: str,
-                                   prefix: ConceptPrefix,
-                                   limit: int = 10,
-                                   ) -> AsyncIterator[str]:
-        """
-        Search for concepts matching the query within the specified vocabulary prefix, and
-        return an async iterator of matching concept IDs.
-        :param query: The search query string.
+        Search for embedding items of the given kind whose vector is closest to
+        `query_vector`, within the specified vocabulary prefix.
+        :param query_vector: The already-embedded query vector.
         :param prefix: The vocabulary prefix to search within.
-        :param limit: The top number of concepts to return.
-        :return: A list of matching Concept instances.
+        :param kind: Which embedding items to search (ALIAS or DEFINITION).
+        :param limit: The top number of items to return.
+        :return: An async iterator of (concept_id, item_text, score) tuples, best match first.
         """
         collection_name = prefix.value
-        text_transformer = TextTransformer()
 
-        query_vector = text_transformer.embed_strings([query])[0]
-
-        response = await self.client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            limit=limit,
-            with_payload=True,
-        )
+        try:
+            response = await self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=Filter(
+                    must=[FieldCondition(key='kind', match=MatchValue(value=kind.value))],
+                ),
+                limit=limit,
+                with_payload=True,
+            )
+        except UnexpectedResponse:
+            return
 
         for p in response.points:
             concept_id = p.payload.get('conceptId')
             if concept_id is not None:
-                yield concept_id
+                yield concept_id, p.payload.get('text', ''), p.score
 
     async def delete_vectors_for_prefix(self,
                                         prefix: ConceptPrefix,
                                         ) -> None:
         """
-        Delete all vectors for a given prefix from the vector database.
-        :param prefix: The vocabulary prefix to delete vectors for.
+        Delete all embedding items for a given prefix from the vector database.
+        :param prefix: The vocabulary prefix to delete embedding items for.
         """
         collection_name = prefix.value
 
@@ -290,3 +232,15 @@ class QdrantVectorDatabase(VectorDatabase):
             return
 
         await self.delete_collection(collection_name=collection_name)
+
+
+def _stable_uuid(item_id: str):
+    """
+    Deterministically derive a UUID from an embedding item id, so re-embedding the same
+    concept/synonym/definition (e.g. after a partial restore) upserts the same Qdrant point
+    instead of accumulating duplicates.
+    :param item_id: The EmbeddingItem.item_id to derive a UUID from.
+    :return: A UUID5 derived from `item_id`.
+    """
+    from uuid import uuid5, NAMESPACE_URL
+    return uuid5(NAMESPACE_URL, item_id)
