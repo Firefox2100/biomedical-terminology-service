@@ -5,6 +5,7 @@ Utility functions for data management, downloading, extraction, and processing.
 import asyncio
 import os
 import io
+import itertools
 import zipfile
 import uuid
 import tempfile
@@ -162,15 +163,50 @@ def batch_iterable(seq: Iterable[T] | list[T],
     yield from _batch_general_iterable(seq, batch_size)
 
 
-def edge_iter(graph: nx.DiGraph | nx.MultiDiGraph) -> Iterator[tuple[str, str, Optional[str], Optional[str]]]:
+def peek_first(items: Iterable[T]) -> tuple[Optional[T], Iterable[T]]:
+    """
+    Return the first item of `items` (or None if empty) alongside an iterable that still
+    yields every item, including that first one -- so a caller can inspect the first element
+    (e.g. to read a `prefix` shared by every item) without forcing the rest into memory.
+
+    A `MutableSequence` (e.g. a list) is indexed and returned unchanged, so a downstream
+    `batch_iterable` call still sees a real sequence and can show a determinate progress bar.
+    Any other (single-pass) iterable, such as a generator streaming an offline dump file, is
+    peeked via its iterator and re-assembled with `itertools.chain` so nothing already pulled
+    off it is lost.
+    :param items: The iterable to peek into.
+    :return: A `(first_item, full_iterable)` tuple.
+    """
+    if isinstance(items, MutableSequence):
+        return (items[0] if items else None), items
+
+    it = iter(items)
+    first = next(it, None)
+    if first is None:
+        return None, it
+    return first, itertools.chain([first], it)
+
+
+def edge_iter(graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Optional[str], Optional[str]]],
+             ) -> Iterator[tuple[str, str, Optional[str], Optional[str]]]:
+    """
+    Yield `(source_id, target_id, relationship_type, relationship_key)` tuples for a graph.
+
+    Also accepts an already-tuple-shaped iterable directly (e.g. streamed from an offline
+    `.graph.dump` file one CSV row at a time) and yields it through unchanged, so callers can
+    stream edges into `GraphDatabase.save_vocabulary_graph` without ever materialising a full
+    in-memory `nx.Graph`.
+    """
     if isinstance(graph, nx.MultiDiGraph):
         for source, target, key, data in graph.edges(data=True, keys=True):
             yield str(source), str(target), data['label'].value if data.get('label') else None, key
     elif isinstance(graph, nx.DiGraph):
         for source, target, data in graph.edges(data=True):
             yield str(source), str(target), data['label'].value if data.get('label') else None, None
+    elif isinstance(graph, Iterable):
+        yield from graph
     else:
-        raise TypeError('Graph must be a DiGraph or MultiDiGraph instance.')
+        raise TypeError('Graph must be a DiGraph, MultiDiGraph, or an iterable of edge tuples.')
 
 
 async def download_file(url: str,

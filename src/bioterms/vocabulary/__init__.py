@@ -1,12 +1,13 @@
+import ast
 import csv
 import os
 import importlib
 import importlib.resources
 import inspect
 from datetime import datetime, timezone
+from typing import Iterator, Optional
 import aiofiles
 import aiofiles.os
-import networkx as nx
 import numpy as np
 
 from bioterms.etc.consts import CONFIG
@@ -14,7 +15,7 @@ from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import check_files_exist
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
-from bioterms.model.concept import Concept
+from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
 from .utils import ALL_VOCABULARIES, get_vocabulary_module, get_vocabulary_status
 
 
@@ -424,15 +425,18 @@ async def _restore_documents(prefix: ConceptPrefix,
                              doc_db: DocumentDatabase,
                              batch_size: int,
                              no_upsert: bool,
-                             ) -> list[Concept]:
+                             ) -> int:
     """
     Stream the offline document dump (JSON lines, produced by `write_concepts_to_file`) into
     the document database in `batch_size`-sized chunks via `doc_db.save_terms`, so this
     automatically goes through whichever concrete document database driver is configured --
     including the native-vs-fallback auto-complete search indexing chosen per backend.
 
-    Every parsed concept is also collected and returned, since `GraphDatabase.save_vocabulary_graph`
-    reads node properties from the concepts list rather than from a separate node dump file.
+    Concepts are written batch-by-batch and never accumulated beyond that -- only a running
+    count is kept, so this stays memory-bounded regardless of how large the dump file is.
+    Graph node properties come from `_iter_offline_node_ids` instead (see there), not from
+    this function's output, so a masked/partial restore with an empty `.doc.dump` still
+    restores the graph correctly.
     :param prefix: The vocabulary prefix being restored.
     :param doc_path: Path to the `<prefix>.doc.dump` file.
     :param concept_class: The vocabulary's Concept subclass, for typed deserialisation.
@@ -440,9 +444,9 @@ async def _restore_documents(prefix: ConceptPrefix,
     :param batch_size: Number of concepts written per `save_terms` call.
     :param no_upsert: Passed through to `save_terms` -- True is faster but requires the
         destination to already be free of this vocabulary's data (see `overwrite`).
-    :return: Every concept parsed from the dump file.
+    :return: The number of concepts parsed and written from the dump file.
     """
-    concepts: list[Concept] = []
+    concept_count = 0
     batch: list[Concept] = []
 
     async with aiofiles.open(doc_path, encoding='utf-8') as f:
@@ -455,7 +459,7 @@ async def _restore_documents(prefix: ConceptPrefix,
                 raise ValueError(
                     f'{doc_path} contains a document for prefix {concept.prefix!r}, expected {prefix!r}'
                 )
-            concepts.append(concept)
+            concept_count += 1
             batch.append(concept)
             if len(batch) >= batch_size:
                 await doc_db.save_terms(batch, no_upsert=no_upsert)
@@ -464,20 +468,22 @@ async def _restore_documents(prefix: ConceptPrefix,
     if batch:
         await doc_db.save_terms(batch, no_upsert=no_upsert)
 
-    return concepts
+    return concept_count
 
 
-def _read_offline_graph(graph_path: str) -> nx.MultiDiGraph:
+def _iter_offline_graph_edges(graph_path: str,
+                              ) -> Iterator[tuple[str, str, Optional[str], Optional[str]]]:
     """
-    Rebuild the vocabulary's internal relationship graph from its offline `<prefix>.graph.dump`
-    file (CSV rows of `source_id,target_id,relationship_type,relationship_key`, written by
-    `write_graph_to_file`/`edge_iter`), for use with `GraphDatabase.save_vocabulary_graph`.
-    Node properties are not part of this file -- see `_restore_documents`.
+    Stream the vocabulary's internal relationships from its offline `<prefix>.graph.dump` file
+    (CSV rows of `source_id,target_id,relationship_type,relationship_key`, written by
+    `write_graph_to_file`/`edge_iter`) as `(source_id, target_id, relationship_type,
+    relationship_key)` tuples, one CSV row at a time, for use with
+    `GraphDatabase.save_vocabulary_graph` -- without ever materialising the full edge set as an
+    in-memory `nx.Graph`, which for a large vocabulary's edge dump can be sizeable.
+    Node properties are not part of this file -- see `_iter_offline_node_ids`.
     :param graph_path: Path to the `<prefix>.graph.dump` file.
-    :return: The reconstructed graph.
+    :return: A generator of edge tuples, in the same shape `bioterms.etc.utils.edge_iter` yields.
     """
-    graph = nx.MultiDiGraph()
-
     with open(graph_path, encoding='utf-8', newline='') as f:
         for row in csv.reader(f):
             if not row or not any(value.strip() for value in row):
@@ -488,9 +494,49 @@ def _read_offline_graph(graph_path: str) -> nx.MultiDiGraph:
             rel_type = row[2] if len(row) > 2 else ''
             rel_key = row[3] if len(row) > 3 and row[3] else None
             label = ConceptRelationshipType(rel_type) if rel_type else None
-            graph.add_edge(source, target, key=rel_key, label=label)
+            yield source, target, label.value if label else None, rel_key
 
-    return graph
+
+def _iter_offline_node_ids(node_id_path: str,
+                           prefix: ConceptPrefix,
+                           concept_class: type[Concept],
+                           ) -> Iterator[Concept]:
+    """
+    Stream the vocabulary's graph node list from its offline `<prefix>.node_ids.dump` file
+    (CSV rows of `concept_id,concept_types,*extra_properties`, written by
+    `write_graph_to_file`), one CSV row at a time, for use with
+    `GraphDatabase.save_vocabulary_graph`.
+
+    This is read independently of `<prefix>.doc.dump`: `save_vocabulary_graph` needs a
+    non-empty concepts iterable to know which prefix/properties to write graph nodes under, and
+    an empty `.doc.dump` (e.g. a masked/partial restore that only needs to rebuild the graph
+    half) must not silently drop the graph nodes (as the PostgreSQL driver does when handed an
+    empty iterable) or mis-prefix them (as the Neo4j driver does by falling back to an
+    empty-string prefix). Node dump rows carry no `prefix` column of their own -- it is
+    supplied by the caller, since a single dump file only ever covers one vocabulary.
+    :param node_id_path: Path to the `<prefix>.node_ids.dump` file.
+    :param prefix: The vocabulary prefix being restored.
+    :param concept_class: The vocabulary's Concept subclass, for typed deserialisation of the
+        extra properties columns.
+    :return: A generator of one concept instance per graph node, carrying only the fields the
+        graph database stores (id, types, extra properties).
+    """
+    with open(node_id_path, encoding='utf-8', newline='') as f:
+        for row in csv.reader(f):
+            if not row or not any(value.strip() for value in row):
+                continue
+            if len(row) < 2:
+                raise ValueError(f'Malformed node row in {node_id_path}: {row!r}')
+
+            concept_id, types_repr = row[0], row[1]
+            concept_types = ast.literal_eval(types_repr) if types_repr else []
+
+            payload = {'prefix': prefix, 'conceptId': concept_id, 'conceptTypes': concept_types}
+            for i, prop in enumerate(GRAPH_NODE_EXTRA_PROPERTIES):
+                if len(row) > 2 + i and row[2 + i] != '':
+                    payload[prop] = row[2 + i]
+
+            yield concept_class.model_validate(payload)
 
 
 async def restore_vocabulary(prefix: ConceptPrefix,
@@ -520,6 +566,12 @@ async def restore_vocabulary(prefix: ConceptPrefix,
     is not part of a vocabulary's core data (it may not exist yet, may be recomputed with a
     different method later, and is keyed by target vocabulary rather than owned by it the way
     documents/graph edges are), so it gets its own CLI command rather than a flag here.
+
+    Restoring proceeds in three independent steps -- documents (`.doc.dump`), then graph nodes
+    (`.node_ids.dump`), then graph edges (`.graph.dump`) -- deliberately not short-circuited by
+    one another, so a masked/partial restore where one dump is empty (e.g. rebuilding only the
+    graph half, with an empty `.doc.dump`) still restores whichever dumps do have content
+    instead of silently dropping or mis-prefixing the graph nodes.
     :param prefix: The prefix of the vocabulary to restore.
     :param overwrite: Whether to drop any existing data for this vocabulary before restoring.
         When False (default), documents/graph edges/embeddings are safely upserted into
@@ -539,10 +591,11 @@ async def restore_vocabulary(prefix: ConceptPrefix,
     offline_dir = str(offline_dir) if offline_dir is not None else os.path.join(CONFIG.data_dir, 'offline')
 
     doc_path = os.path.join(offline_dir, f'{prefix.value}.doc.dump')
+    node_id_path = os.path.join(offline_dir, f'{prefix.value}.node_ids.dump')
     graph_path = os.path.join(offline_dir, f'{prefix.value}.graph.dump')
     embed_path = os.path.join(offline_dir, f'{prefix.value}.embed.dump')
 
-    missing = [path for path in (doc_path, graph_path) if not os.path.isfile(path)]
+    missing = [path for path in (doc_path, node_id_path, graph_path) if not os.path.isfile(path)]
     if missing:
         raise ValueError(f'Missing required offline dump file(s): {", ".join(missing)}')
 
@@ -558,7 +611,7 @@ async def restore_vocabulary(prefix: ConceptPrefix,
     # indexes) exist before documents are written, same as a normal load_vocabulary() call.
     await create_indexes(prefix=prefix, doc_db=doc_db, graph_db=graph_db)
 
-    concepts = await _restore_documents(
+    concept_count = await _restore_documents(
         prefix=prefix,
         doc_path=doc_path,
         concept_class=config['conceptClass'],
@@ -566,11 +619,29 @@ async def restore_vocabulary(prefix: ConceptPrefix,
         batch_size=batch_size,
         no_upsert=overwrite,
     )
-    concept_count = len(concepts)
 
-    graph = _read_offline_graph(graph_path)
-    edge_count = graph.number_of_edges()
-    await graph_db.save_vocabulary_graph(concepts, graph, consume_concepts=True)
+    # Streamed independently of the documents above: graph nodes are sourced from
+    # `.node_ids.dump` rather than the just-restored documents, so an empty `.doc.dump` (a
+    # masked restore that only needs to rebuild the graph) doesn't hand `save_vocabulary_graph`
+    # an empty concepts iterable -- which the PostgreSQL driver silently no-ops on, and the
+    # Neo4j driver falls back to writing under a blank prefix for. Both `nodes` and the edges
+    # passed below are generators reading their dump file row-by-row, so `save_vocabulary_graph`
+    # only ever holds one batch in memory instead of the whole vocabulary's graph.
+    nodes = _iter_offline_node_ids(
+        node_id_path=node_id_path,
+        prefix=prefix,
+        concept_class=config['conceptClass'],
+    )
+
+    edge_count = 0
+
+    def _counted_edges() -> Iterator[tuple[str, str, Optional[str], Optional[str]]]:
+        nonlocal edge_count
+        for edge in _iter_offline_graph_edges(graph_path):
+            edge_count += 1
+            yield edge
+
+    await graph_db.save_vocabulary_graph(nodes, _counted_edges(), consume_concepts=True)
 
     embeddings_restored = False
     if restore_embeddings and os.path.isfile(embed_path):

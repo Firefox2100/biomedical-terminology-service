@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import AsyncIterator, Iterable, Optional
 import networkx as nx
 
 from bioterms.etc.consts import CONFIG
@@ -142,17 +142,22 @@ class GraphDatabase(ABC):
 
     @abstractmethod
     async def save_vocabulary_graph(self,
-                                    concepts: list[Concept],
-                                    graph: nx.DiGraph | nx.MultiDiGraph,
+                                    concepts: list[Concept] | Iterable[Concept],
+                                    graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Optional[str], Optional[str]]],
                                     consume_concepts: bool = False,
                                     ):
         """
         Save the vocabulary graph to the graph database.
-        :param concepts: The list of concepts to save. This list is passed in to
-            allow for any necessary term metadata to be accessed during graph saving.
-        :param graph: The vocabulary graph to save.
+        :param concepts: The concepts to save. This is passed in to allow for any necessary
+            term metadata to be accessed during graph saving. May be a plain list, or any
+            other (single-pass) iterable -- e.g. a generator streaming an offline dump file --
+            so implementations must not assume it supports indexing/`len()` and should only
+            hold one batch's worth in memory at a time.
+        :param graph: The vocabulary graph to save. Either an `nx.DiGraph`/`nx.MultiDiGraph`,
+            or an iterable of `(source_id, target_id, relationship_type, relationship_key)`
+            edge tuples in the same shape `bioterms.etc.utils.edge_iter` produces.
         :param consume_concepts: Whether to consume the list of concepts while processing
-            for memory efficiency.
+            for memory efficiency. Only meaningful when `concepts` is a plain list.
         """
 
     @abstractmethod

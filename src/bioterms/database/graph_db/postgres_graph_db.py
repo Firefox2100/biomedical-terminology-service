@@ -47,7 +47,7 @@ those as plain TEXT, mirroring Neo4j's own untyped relationship-type/property mo
 """
 import asyncio
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, Iterable, Optional
 from sqlalchemy import Float, Text, bindparam, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection
@@ -468,22 +468,27 @@ class PostgresGraphDatabase(GraphDatabase):
     # ------------------------------------------------------------------
 
     async def save_vocabulary_graph(self,
-                                    concepts: list[Concept],
-                                    graph: nx.DiGraph | nx.MultiDiGraph,
+                                    concepts: list[Concept] | Iterable[Concept],
+                                    graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Optional[str], Optional[str]]],
                                     consume_concepts: bool = False,
                                     ):
         """
         Save the vocabulary graph to the graph database.
-        :param concepts: The list of concepts to save.
-        :param graph: The vocabulary graph to save.
+        :param concepts: The concepts to save. May be a plain list, or any other (single-pass)
+            iterable -- e.g. a generator streaming an offline dump file -- in which case only
+            one batch's worth is ever held in memory at a time.
+        :param graph: The vocabulary graph to save. Either an `nx.DiGraph`/`nx.MultiDiGraph`,
+            or an iterable of `(source_id, target_id, relationship_type, relationship_key)`
+            edge tuples in the same shape `edge_iter` produces -- see `edge_iter`.
         :param consume_concepts: Unused here (SQLAlchemy needs the full batch regardless); kept
             for interface compatibility.
         """
-        from bioterms.etc.utils import batch_iterable, edge_iter
+        from bioterms.etc.utils import batch_iterable, edge_iter, peek_first
 
-        if not concepts:
+        first_concept, concepts = peek_first(concepts)
+        if first_concept is None:
             return
-        prefix = concepts[0].prefix
+        prefix = first_concept.prefix
 
         async with self.engine.begin() as conn:
             p = await self._ensure_prefix_schema(conn, prefix)
