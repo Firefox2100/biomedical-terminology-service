@@ -296,12 +296,12 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     verbose_print('Ensembl GTF file read, processing entries...')
 
     for _, row in iter_progress(gene_df.iterrows(), description='Processing GTF entries', total=len(gene_df)):
-        # Parse the attribute into a dictionary
-        attributes = dict(
-            part.split(' ', 1)
-            for part in shlex.split(row['attribute'].replace(';', ' '))
-            if ' ' in part
-        )
+        # Parse the attribute into a dictionary. GTF attributes are `key "value";` pairs --
+        # shlex.split already splits each pair into two separate tokens (key, value), so they
+        # are recombined here by pairing up consecutive tokens rather than re-splitting each
+        # token on a space it no longer contains.
+        attribute_tokens = shlex.split(row['attribute'].replace(';', ' '))
+        attributes = dict(zip(attribute_tokens[0::2], attribute_tokens[1::2]))
 
         feature = row['feature']
         if feature == 'gene':

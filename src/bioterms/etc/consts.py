@@ -226,6 +226,10 @@ class Settings(BaseSettings):
         0,
         description='Redis database index for the cache',
     )
+    redis_password: Optional[str] = Field(
+        None,
+        description='Password for the Redis cache, if authentication is required',
+    )
     cache_hard_ttl_multiplier: int = Field(
         7,
         description='Multiplier applied to cache item TTLs for Redis hard expiration. '

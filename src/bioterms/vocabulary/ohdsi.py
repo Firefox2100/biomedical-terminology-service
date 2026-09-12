@@ -1,3 +1,4 @@
+import csv
 import os
 from datetime import datetime, timezone
 import httpx
@@ -83,6 +84,7 @@ def _canonicalize_relationship_id(relationship_id: str,
                 'reverse_relationship_id',
             ],
             sep='\t',
+            quoting=csv.QUOTE_NONE,
         )
 
         for _, row in relationship_df.iterrows():
@@ -264,6 +266,7 @@ def _process_concepts() -> dict[int, CONCEPT_CLASS]:
         ],
         sep='\t',
         chunksize=100000,
+        quoting=csv.QUOTE_NONE,
     )
 
     concepts: dict[int, CONCEPT_CLASS] = {}
@@ -306,6 +309,7 @@ def _process_synonyms(concepts: dict[int, CONCEPT_CLASS]):
         ],
         sep='\t',
         chunksize=100000,
+        quoting=csv.QUOTE_NONE,
     )
 
     for chunk in iter_progress(chunks, desc='Processing OHDSI concept synonyms'):
@@ -389,6 +393,7 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
         ],
         sep='\t',
         chunksize=100000,
+        quoting=csv.QUOTE_NONE,
     )
 
     for chunk in iter_progress(chunks, desc='Processing OHDSI drug strengths'):
@@ -427,6 +432,7 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
         ],
         sep='\t',
         chunksize=100000,
+        quoting=csv.QUOTE_NONE,
     )
 
     for chunk in iter_progress(relationship_chunks, desc='Processing OHDSI concept relationships'):
@@ -463,6 +469,7 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
         ],
         sep='\t',
         chunksize=100000,
+        quoting=csv.QUOTE_NONE,
     )
 
     for chunk in iter_progress(ancestor_chunks, desc='Processing OHDSI concept ancestors'):
@@ -510,6 +517,7 @@ def _process_annotations() -> list[Annotation]:
         ],
         sep='\t',
         chunksize=100000,
+        quoting=csv.QUOTE_NONE,
     )
 
     annotations = []

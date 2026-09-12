@@ -37,7 +37,7 @@ class TextTransformer:
         produce dimension-mismatched writes.
         :return: The embedding vector dimension.
         """
-        return self.transformer.get_sentence_embedding_dimension()
+        return self.transformer.get_embedding_dimension()
 
     def embed_strings(self,
                       texts: list[str],

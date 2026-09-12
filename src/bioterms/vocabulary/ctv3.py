@@ -1,3 +1,4 @@
+import csv
 import os
 import aiofiles
 import aiofiles.os
@@ -167,6 +168,7 @@ def _load_concepts() -> list[CONCEPT_CLASS]:
         header=None,
         names=['concept_id', 'status'],
         usecols=[0, 1],
+        quoting=csv.QUOTE_NONE,
     ).sort_values('concept_id').reset_index(drop=True)
 
     description_df = pd.read_csv(
@@ -175,6 +177,7 @@ def _load_concepts() -> list[CONCEPT_CLASS]:
         header=None,
         names=['concept_id', 'term_id', 'type'],
         usecols=[0, 1, 2],
+        quoting=csv.QUOTE_NONE,
     )
 
     term_df = pd.read_csv(
@@ -183,6 +186,7 @@ def _load_concepts() -> list[CONCEPT_CLASS]:
         header=None,
         names=['term_id', 'term_30', 'term_60', 'term_198'],
         usecols=[0, 2, 3, 4],
+        quoting=csv.QUOTE_NONE,
     )
 
     merged_term_df = pd.merge(
@@ -254,6 +258,7 @@ def _load_relationships(concepts: list[CONCEPT_CLASS],
         header=None,
         names=['child_id', 'parent_id'],
         usecols=[0, 1],
+        quoting=csv.QUOTE_NONE,
     )
 
     redundant_df = pd.read_csv(
@@ -261,6 +266,7 @@ def _load_relationships(concepts: list[CONCEPT_CLASS],
         sep='|',
         header=None,
         names=['current_id', 'old_id'],
+        quoting=csv.QUOTE_NONE,
     )
 
     verbose_print('Successfully read CTV3 relationship files from disk, processing relationships...')

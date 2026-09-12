@@ -80,8 +80,9 @@ def _build_hgnc_symbol_concept(row) -> tuple[CONCEPT_CLASS, list[Annotation]]:
     if row['alias_name'] and pd.notna(row['alias_name']):
         synonyms.extend(row['alias_name'].split('|'))
 
-    if not pd.isna(row['location_sortable']):
-        location = row['location_sortable']
+    location_sortable = row.get('location_sortable')
+    if location_sortable is not None and not pd.isna(location_sortable):
+        location = location_sortable
     elif not pd.isna(row['location']):
         location = row['location']
     else:
