@@ -73,7 +73,7 @@ class FakeTextTransformer:
 
 @pytest.fixture(scope='session')
 def postgres_container():
-    from testcontainers.community.postgres import PostgresContainer
+    from testcontainers.postgres import PostgresContainer
 
     with PostgresContainer(image=PGVECTOR_IMAGE, driver='asyncpg') as container:
         yield container

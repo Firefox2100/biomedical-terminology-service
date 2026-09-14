@@ -150,6 +150,7 @@ def _build_hgnc_withdrawn_concept(row,
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
+                                    build_search_index: bool = True,
                                     ):
     """
     Load the HGNC vocabulary from a file into the primary databases.
@@ -233,6 +234,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
             concepts=concepts,
+            build_search_index=build_search_index,
         )
         await write_graph_to_file(
             prefix=VOCABULARY_PREFIX,

@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from bioterms.database.graph_db.postgres_graph_db import PostgresGraphDatabase
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import (
     AnnotationType,
     ConceptPrefix,
@@ -58,7 +59,7 @@ pytestmark = pytest.mark.skipif(not _docker_available(), reason='Docker is not a
 
 @pytest.fixture(scope='session')
 def postgres_container():
-    from testcontainers.community.postgres import PostgresContainer
+    from testcontainers.postgres import PostgresContainer
 
     with PostgresContainer(image=POSTGRES_IMAGE, driver='asyncpg') as container:
         yield container
@@ -236,6 +237,123 @@ async def test_closure_ancestors_and_descendants(graph_db):
 
 
 @pytest.mark.asyncio
+async def test_closure_handles_densely_polyhierarchical_graph(graph_db):
+    """
+    A small fully-connected bipartite chain (every node in layer N is_a every node in
+    layer N+1) -- the shape of graph that made a naive `UNION ALL` recursive-CTE closure
+    combinatorially enumerate every path before deduplicating, rather than each
+    (ancestor, descendant) pair once. Correctness (not just that it doesn't blow up) is what
+    matters here: every node in an earlier layer must reach every node in every later layer,
+    each exactly once, at the depth of the layer gap between them.
+    """
+    layers, width = 4, 5
+    concepts = [
+        make_concept(ConceptPrefix.HPO, f'L{layer}_{i}')
+        for layer in range(layers)
+        for i in range(width)
+    ]
+    g = nx.MultiDiGraph()
+    for layer in range(layers - 1):
+        for i in range(width):
+            for j in range(width):
+                g.add_edge(f'L{layer}_{i}', f'L{layer + 1}_{j}', key='is_a', label=ConceptRelationshipType.IS_A)
+
+    await graph_db.save_vocabulary_graph(concepts, g)
+
+    # Layer 0 nodes should have every node in layers 1-3 as an ancestor (is_a points from
+    # child to parent, so "ancestor" here means everything reachable by following is_a
+    # forward): width * (layers - 1) = 15 ancestors for an L0 node.
+    ancestors = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['L0_0'])
+    assert len(ancestors[0].related_concepts) == width * (layers - 1)
+
+    # A last-layer node has no ancestors at all.
+    ancestors_last = await graph_db.trace_ancestors(ConceptPrefix.HPO, [f'L{layers - 1}_0'])
+    assert ancestors_last[0].related_concepts == []
+
+    # Bounded to depth 1, an L0 node's ancestors are exactly layer 1 (not layers 2-3).
+    bounded = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['L0_0'], max_depth=1)
+    assert set(bounded[0].related_concepts) == {f'L1_{i}' for i in range(width)}
+
+
+@pytest.mark.asyncio
+async def test_closure_depth_cap_falls_back_to_live_traversal_beyond_it(graph_db, monkeypatch):
+    """
+    With `postgres_graph_closure_depth` set below the chain's real depth, the closure table
+    itself must only contain pairs up to that cap -- but ancestor/descendant queries deeper than
+    the cap, or unbounded, must still return the full, correct answer via the live traversal
+    fallback in `_closure_lookup`. A query fully within the cap must still hit the closure table
+    (same correctness expectation, just a different code path).
+    """
+    monkeypatch.setattr(CONFIG, 'postgres_graph_closure_depth', 2)
+
+    # A 5-node straight chain, depth 4 end-to-end: n0 -is_a-> n1 -is_a-> ... -is_a-> n4.
+    concepts = [make_concept(ConceptPrefix.HPO, f'n{i}') for i in range(5)]
+    g = nx.MultiDiGraph()
+    for i in range(4):
+        g.add_edge(f'n{i}', f'n{i + 1}', key='is_a', label=ConceptRelationshipType.IS_A)
+
+    await graph_db.save_vocabulary_graph(concepts, g)
+
+    engine = graph_db.engine
+    async with engine.connect() as conn:
+        max_depth_in_table = await conn.scalar(text('SELECT max(depth) FROM graph_closure_hpo'))
+    assert max_depth_in_table == 2, 'closure table should stop materialising at the configured depth cap'
+
+    # Within the cap: served by the closure table, must still be correct.
+    bounded = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['n0'], max_depth=2)
+    assert set(bounded[0].related_concepts) == {'n1', 'n2'}
+
+    # Deeper than the cap: closure table alone would be missing n3/n4, live fallback must
+    # supply the full correct answer.
+    deeper = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['n0'], max_depth=4)
+    assert set(deeper[0].related_concepts) == {'n1', 'n2', 'n3', 'n4'}
+
+    # Unbounded: same expectation, via the live fallback's safety-bound depth.
+    unbounded = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['n0'])
+    assert set(unbounded[0].related_concepts) == {'n1', 'n2', 'n3', 'n4'}
+
+    # Descendants direction, deeper than the cap, from the other end of the chain.
+    descendants = await graph_db.expand_terms(ConceptPrefix.HPO, ['n4'], max_depth=4)
+    assert set(descendants[0].related_concepts) == {'n0', 'n1', 'n2', 'n3'}
+
+    # A limit beyond the cap still caps the number of results returned, via the live fallback.
+    limited = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['n0'], max_depth=4, limit=1)
+    assert len(limited[0].related_concepts) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_vocabulary_graph_keeps_nodes_and_edges_if_closure_build_fails(graph_db, monkeypatch):
+    """
+    Nodes and edges are committed as their own batches, ahead of the final closure rebuild --
+    a failure in the closure step (which is what actually happened against a real OHDSI-sized
+    graph: the old closure query exhausted the server's temp-file disk) must not roll back the
+    node/edge data that was already saved, so a retry only has to redo the closure, not
+    potentially hours of node/edge upserts.
+    """
+    async def failing_build_closure(self, conn, p):
+        raise RuntimeError('simulated closure failure')
+
+    monkeypatch.setattr(type(graph_db), '_build_closure', failing_build_closure)
+
+    concepts = [make_concept(ConceptPrefix.HPO, cid) for cid in ('HP:leaf', 'HP:mid1', 'HP:mid2', 'HP:root')]
+
+    with pytest.raises(RuntimeError, match='simulated closure failure'):
+        await graph_db.save_vocabulary_graph(concepts, hpo_hierarchy_graph())
+
+    assert await graph_db.count_terms(ConceptPrefix.HPO) == 4
+
+    graph = await graph_db.get_vocabulary_graph(ConceptPrefix.HPO)
+    assert graph.number_of_edges() == 4
+
+    # Retrying (without the monkeypatched failure) succeeds and only needed to redo the
+    # closure -- the nodes/edges from the failed attempt are reused via ON CONFLICT.
+    monkeypatch.undo()
+    await graph_db.save_vocabulary_graph(concepts, hpo_hierarchy_graph())
+    ancestors = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['HP:leaf'])
+    assert set(ancestors[0].related_concepts) == {'HP:mid1', 'HP:mid2', 'HP:root'}
+
+
+@pytest.mark.asyncio
 async def test_get_replaced_and_replacing_terms(graph_db):
     concepts = [make_concept(ConceptPrefix.HPO, cid) for cid in ('HP:old', 'HP:new')]
     g = nx.MultiDiGraph()
@@ -251,6 +369,25 @@ async def test_get_replaced_and_replacing_terms(graph_db):
     # A term with no replacement relationship still yields an (empty) RelatedTerm.
     none_result = await graph_db.get_replacing_terms(ConceptPrefix.HPO, ['HP:new'])
     assert none_result[0].related_concepts == []
+
+
+@pytest.mark.asyncio
+async def test_get_relationship_edges_filters_by_type(graph_db):
+    concepts = [make_concept(ConceptPrefix.HPO, cid) for cid in ('HP:a', 'HP:b', 'HP:c', 'HP:d')]
+    g = nx.MultiDiGraph()
+    g.add_edge('HP:a', 'HP:b', key='replaced_by', label=ConceptRelationshipType.REPLACED_BY)
+    g.add_edge('HP:c', 'HP:d', key='replaced_by', label=ConceptRelationshipType.REPLACED_BY)
+    g.add_edge('HP:a', 'HP:c', key='is_a', label=ConceptRelationshipType.IS_A)
+    await graph_db.save_vocabulary_graph(concepts, g)
+
+    edges = [e async for e in graph_db.get_relationship_edges(ConceptPrefix.HPO, ConceptRelationshipType.REPLACED_BY)]
+    assert sorted(edges) == [('HP:a', 'HP:b'), ('HP:c', 'HP:d')]
+
+    is_a_edges = [e async for e in graph_db.get_relationship_edges(ConceptPrefix.HPO, ConceptRelationshipType.IS_A)]
+    assert is_a_edges == [('HP:a', 'HP:c')]
+
+    part_of_edges = [e async for e in graph_db.get_relationship_edges(ConceptPrefix.HPO, ConceptRelationshipType.PART_OF)]
+    assert part_of_edges == []
 
 
 @pytest.mark.asyncio

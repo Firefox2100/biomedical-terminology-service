@@ -79,6 +79,17 @@ async def load_command(vocabulary: Annotated[
                                help='Load vocabulary in offline mode without writing to database. '
                                     'This mode allows compiling the database structure on a separate '
                                     'machine.')
+                       ] = False,
+                       no_index: Annotated[
+                           bool,
+                           typer.Option(
+                               '--no-index',
+                               help='In offline mode, skip precomputing the fallback-search '
+                                    'nGrams/searchText fields in the concept dump. Only safe when '
+                                    'the eventual restore target does not need them -- any SQL '
+                                    'backend (including PostgreSQL), or MongoDB with native Atlas '
+                                    'Search, always recomputes these from the concept itself at '
+                                    'restore time regardless. Ignored outside offline mode.')
                        ] = False
                        ):
     try:
@@ -90,7 +101,9 @@ async def load_command(vocabulary: Annotated[
             CONSOLE.print('[red]Either specify a vocabulary to load or use the --all flag.[/red]')
             return
         for vocabulary in target_vocabularies:
-            await load_vocabulary(vocabulary, drop_existing=overwrite, offline=offline)
+            await load_vocabulary(
+                vocabulary, drop_existing=overwrite, offline=offline, build_search_index=not no_index,
+            )
             CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
         CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value}: {e}[/red]')

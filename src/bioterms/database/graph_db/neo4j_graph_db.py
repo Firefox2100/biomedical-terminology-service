@@ -688,6 +688,32 @@ class Neo4jGraphDatabase(GraphDatabase):
             record = await result.single()
             return record['relationship_count'] if record is not None else 0
 
+    async def get_relationship_edges(self,
+                                     prefix: ConceptPrefix,
+                                     relationship_type: ConceptRelationshipType,
+                                     ) -> AsyncIterator[tuple[str, str]]:
+        """
+        Stream (source_id, target_id) pairs for one specific same-vocabulary relationship
+        type, filtered server-side rather than fetching every edge and discarding most of
+        them client-side.
+        :param prefix: The vocabulary prefix to fetch edges for.
+        :param relationship_type: The single relationship type to filter to.
+        :return: An async iterator of (source_id, target_id) tuples.
+        """
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                WHERE type(r) = $rel_type
+                RETURN source.id AS source_id, target.id AS target_id
+                """,
+                session=session,
+                parameters={'prefix': prefix.value, 'rel_type': relationship_type.value},
+            )
+
+            async for record in result:
+                yield record['source_id'], record['target_id']
+
     async def count_similarity_relationships(self,
                                              prefix_from: ConceptPrefix,
                                              prefix_to: ConceptPrefix,

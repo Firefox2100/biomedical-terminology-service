@@ -2,6 +2,8 @@
 Abstract base class for vector databases.
 """
 
+import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from collections.abc import AsyncIterator
@@ -9,6 +11,12 @@ from collections.abc import AsyncIterator
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix, EmbeddingKind
 from bioterms.model.concept import Concept
+
+
+# How many embedded batches the writer is allowed to lag behind the embedder by. Bounds
+# memory use while still letting the two run concurrently instead of in lockstep -- see
+# `VectorDatabase.insert_concepts`.
+_EMBED_QUEUE_MAXSIZE = 4
 
 
 @dataclass(frozen=True)
@@ -50,17 +58,34 @@ class VectorDatabase(ABC):
                                    total_items: int | None = None,
                                    ) -> int:
         """
-        Load precomputed embedding items into the vector database.
+        Load precomputed embedding items into the vector database. Implementations must write
+        a given concept's items atomically -- either all of them land, or none do, from the
+        perspective of a reader -- since `get_embedded_concept_ids` treats "this concept has
+        at least one item stored" as proof it has *all* of its items stored, to make
+        `insert_concepts` resumable after a stopped/crashed run.
         :param prefix: The vocabulary prefix of the embedding items.
         :param items: An async iterator of EmbeddingItemVector instances.
         :param total_items: Optional total number of items, used for progress tracking.
         :return: The number of embedding items written.
         """
 
+    @abstractmethod
+    async def get_embedded_concept_ids(self,
+                                       prefix: ConceptPrefix,
+                                       ) -> set[str]:
+        """
+        Return the concept IDs that already have embedding items stored for the given prefix.
+        Used by `insert_concepts` to skip concepts a previous, interrupted run already
+        finished, rather than re-embedding the whole vocabulary from scratch on restart.
+        :param prefix: The vocabulary prefix to check.
+        :return: The set of concept IDs with at least one stored embedding item.
+        """
+
     async def insert_concepts(self,
                               concepts: list[Concept] | AsyncIterator[Concept],
                               prefix: ConceptPrefix,
                               total_concepts: int | None = None,
+                              resume: bool = True,
                               ) -> int:
         """
         Embed every concept's embedding items (see `Concept.embedding_items`) and write them
@@ -70,6 +95,9 @@ class VectorDatabase(ABC):
         :param concepts: A list of Concept instances to insert, or an async iterator of them.
         :param prefix: The prefix of the concepts being inserted.
         :param total_concepts: Optional total number of concepts, used for progress tracking.
+        :param resume: Whether to skip concepts that already have embedding items stored (e.g.
+            from a previous run of this same load that was stopped or crashed partway through).
+            Set to False to force re-embedding everything, e.g. right after `drop_existing`.
         :return: The number of embedding items written.
         """
         from bioterms.embedding import ConceptTransformer
@@ -77,10 +105,57 @@ class VectorDatabase(ABC):
         if isinstance(concepts, list) and not concepts:
             return 0
 
+        already_embedded = await self.get_embedded_concept_ids(prefix) if resume else set()
+
+        if already_embedded and total_concepts is not None:
+            total_concepts = max(total_concepts - len(already_embedded), 0)
+
+        async def concept_source() -> AsyncIterator[Concept]:
+            if isinstance(concepts, AsyncIterator):
+                async for concept in concepts:
+                    yield concept
+            elif isinstance(concepts, list):
+                for concept in concepts:
+                    yield concept
+            else:
+                raise TypeError('concepts must be a list or an AsyncIterator of Concept instances')
+
+        async def remaining_concepts() -> AsyncIterator[Concept]:
+            async for concept in concept_source():
+                if concept.concept_id in already_embedded:
+                    continue
+                yield concept
+
         transformer = ConceptTransformer()
 
+        # Embedding (reading concepts and running them through the model) and writing already-
+        # embedded batches to the database are independent work -- one CPU/GPU-bound, the other
+        # network-I/O-bound -- so they run as two concurrent tasks joined by a small bounded
+        # queue, instead of a single sequential generator chain where the writer's DB round-
+        # trip stalls the embedder (and vice versa) even though neither has to wait on the
+        # other. `load_embedding_items` drives the consumer side by iterating `item_iter()`;
+        # the embedder runs independently as `producer_task`, staying up to
+        # `_EMBED_QUEUE_MAXSIZE` batches ahead of whatever the writer has consumed so far.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=_EMBED_QUEUE_MAXSIZE)
+        _sentinel = object()
+
+        async def produce() -> None:
+            try:
+                async for embedded_batch in transformer.embed_concepts(
+                    remaining_concepts(), total_concepts=total_concepts,
+                ):
+                    await queue.put(embedded_batch)
+            finally:
+                # Always unblock the consumer, even if embedding raised -- otherwise
+                # `item_iter` (and so `load_embedding_items`) would hang forever waiting on a
+                # queue nothing will ever add to again.
+                await queue.put(_sentinel)
+
         async def item_iter() -> AsyncIterator[EmbeddingItemVector]:
-            async for embedded_batch in transformer.embed_concepts(concepts, total_concepts=total_concepts):
+            while True:
+                embedded_batch = await queue.get()
+                if embedded_batch is _sentinel:
+                    break
                 for item, vector in embedded_batch:
                     yield EmbeddingItemVector(
                         item_id=item.item_id,
@@ -90,7 +165,24 @@ class VectorDatabase(ABC):
                         vector=vector,
                     )
 
-        return await self.load_embedding_items(prefix=prefix, items=item_iter())
+        producer_task = asyncio.create_task(produce())
+        try:
+            written = await self.load_embedding_items(prefix=prefix, items=item_iter())
+        except BaseException:
+            # The writer failed -- stop the (now pointless) embedding work rather than let it
+            # keep running, or keep blocking forever on `queue.put` once the queue fills up
+            # with nobody left to drain it.
+            producer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await producer_task
+            raise
+
+        # `create_task` swallows exceptions until the task is awaited or checked -- surface an
+        # embedding-side failure here rather than silently dropping it now that the consumer
+        # has finished (normally, because it saw the sentinel `produce` sends even on error).
+        await producer_task
+
+        return written
 
     @abstractmethod
     async def count_vectors(self,

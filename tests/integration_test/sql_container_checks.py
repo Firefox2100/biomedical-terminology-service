@@ -58,7 +58,7 @@ pytestmark = pytest.mark.skipif(not _docker_available(), reason='Docker is not a
 
 @pytest.fixture(scope='session')
 def postgres_container():
-    from testcontainers.community.postgres import PostgresContainer
+    from testcontainers.postgres import PostgresContainer
 
     with PostgresContainer(image=POSTGRES_IMAGE, driver='asyncpg') as container:
         yield container

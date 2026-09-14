@@ -166,6 +166,19 @@ class Settings(BaseSettings):
         5000,
         description='Batch size for SQL database operations',
     )
+    sql_pool_size: int = Field(
+        20,
+        description='Base number of pooled SQL connections kept open (SQLAlchemy default is '
+                    '5, which a concurrent batch workload -- e.g. scripts/reranker/'
+                    'build_training_data.py -- can exhaust well before the app itself is '
+                    'under any real load, raising a pool-checkout TimeoutError).',
+    )
+    sql_max_overflow: int = Field(
+        20,
+        description='Extra connections allowed beyond `sql_pool_size` under burst load '
+                    '(SQLAlchemy default is 10). Total concurrent connections this driver '
+                    'will open is sql_pool_size + sql_max_overflow.',
+    )
 
     graph_database_driver: GraphDatabaseDriverType = Field(
         GraphDatabaseDriverType.NEO4J,
@@ -202,12 +215,24 @@ class Settings(BaseSettings):
                     'and/or BTS_POSTGRES_VECTOR_DB_URL to run the document, vector, and graph '
                     'stores on one PostgreSQL instance.',
     )
+    postgres_graph_closure_depth: int = Field(
+        5,
+        description='How many BFS layers of each vocabulary\'s ancestor/descendant closure to '
+                    'materialise into `graph_closure_<prefix>` (see build-database.rst). Queries '
+                    'requesting at most this many hops are served from the indexed closure table; '
+                    'deeper or unbounded queries fall back to a live, per-query bounded traversal '
+                    'over `graph_edge_<prefix>` instead. Lower values trade slower deep/unbounded '
+                    'lookups for a much smaller closure table -- this matters most on densely '
+                    'polyhierarchical vocabularies (e.g. OHDSI), where materialising the full '
+                    'closure can run into the hundreds of GB.',
+    )
     postgres_graph_closure_max_depth: int = Field(
         500,
-        description='Safety bound on recursion depth when materialising each vocabulary\'s '
-                    'ancestor/descendant closure table (see build-database.rst). Guards against '
-                    'runaway recursion on a malformed/cyclic hierarchy; real ontologies are far '
-                    'shallower than this.',
+        description='Hard safety ceiling on recursion depth, applied both when materialising a '
+                    'closure table (in case `postgres_graph_closure_depth` is set unreasonably '
+                    'high) and to the live fallback traversal used for unbounded queries beyond '
+                    'that depth. Guards against runaway recursion on a malformed/cyclic hierarchy; '
+                    'real ontologies are far shallower than this.',
     )
 
     cache_driver: CacheDriverType = Field(
@@ -264,8 +289,11 @@ class Settings(BaseSettings):
                     'Set to 1 to disable multiprocessing.',
     )
     embedding_batch_size: int = Field(
-        32,
-        description='Batch size used when generating concept embeddings.',
+        128,
+        description='Batch size used when generating concept embeddings. 128 saturates a '
+                    'typical GPU\'s per-call overhead for short label/synonym strings; '
+                    'benchmarked at ~5x the throughput of a batch size of 32 with no further '
+                    'gain up to 512. Lower this on CPU-only or memory-constrained deployments.',
     )
     torch_device: str = Field(
         'cpu',

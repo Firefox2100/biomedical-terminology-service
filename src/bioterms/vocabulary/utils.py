@@ -145,18 +145,36 @@ async def ensure_gene_symbol_loaded(doc_db: DocumentDatabase = None,
 async def write_concepts_to_file(prefix: ConceptPrefix,
                                  concepts: list[Concept],
                                  overwrite: bool = True,
+                                 build_search_index: bool = True,
                                  ):
     """
     Write the given concepts to an offline file for the specified vocabulary prefix.
     :param prefix: The vocabulary prefix.
     :param concepts: The list of concepts to write.
     :param overwrite: Whether to overwrite the existing file.
+    :param build_search_index: Whether to precompute and embed each concept's `nGrams`/
+        `searchText` fallback-search fields into the dump (`generate_extra_data`, spread over a
+        process pool -- the most expensive part of writing this file for a large vocabulary).
+        These fields are only ever read back by MongoDB's *non-native* fallback search mode;
+        every SQL backend, and MongoDB with native Atlas Search, recomputes `search_text()`/
+        `n_grams()` from the concept itself at restore time regardless of what's in the dump.
+        Pass False (`--no-index` on the CLI) when the restore target does not need them --
+        e.g. any SQL backend -- to skip this work entirely.
     """
     offline_dir = os.path.join(CONFIG.data_dir, 'offline')
     if not os.path.exists(offline_dir):
         os.makedirs(offline_dir, exist_ok=True)
 
     offline_file_path = os.path.join(offline_dir, f'{prefix.value}.doc.dump')
+
+    if not build_search_index:
+        async with aiofiles.open(offline_file_path, 'w' if overwrite else 'a') as f:
+            for batch in batch_iterable(concepts):
+                for concept in batch:
+                    payload = concept.model_dump(exclude_none=True)
+                    await f.write(json.dumps(payload) + '\n')
+        return
+
     with ProcessPoolExecutor(
         max_workers=CONFIG.process_limit,
     ) as executor:

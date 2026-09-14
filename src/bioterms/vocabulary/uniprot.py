@@ -196,6 +196,7 @@ async def _flush_batch(concepts: list[UniProtConcept],
                        doc_db: DocumentDatabase = None,
                        graph_db: GraphDatabase = None,
                        offline: bool,
+                       build_search_index: bool = True,
                        ):
     """
     Save one batch of concepts/annotations, either directly to the primary databases or as
@@ -216,6 +217,7 @@ async def _flush_batch(concepts: list[UniProtConcept],
             prefix=VOCABULARY_PREFIX,
             concepts=concepts,
             overwrite=is_first_batch,
+            build_search_index=build_search_index,
         )
 
         batch_graph = nx.MultiDiGraph()
@@ -239,6 +241,7 @@ async def _flush_batch(concepts: list[UniProtConcept],
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
+                                    build_search_index: bool = True,
                                     ):
     """
     Load the complete UniProtKB vocabulary from the downloaded flat files into the primary
@@ -287,6 +290,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                     concepts, annotations,
                     is_first_batch=(total_batches == 0),
                     doc_db=doc_db, graph_db=graph_db, offline=offline,
+                    build_search_index=build_search_index,
                 )
                 total_loaded += len(concepts)
                 total_batches += 1
@@ -299,6 +303,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                 concepts, annotations,
                 is_first_batch=(total_batches == 0),
                 doc_db=doc_db, graph_db=graph_db, offline=offline,
+                build_search_index=build_search_index,
             )
             total_loaded += len(concepts)
             total_batches += 1

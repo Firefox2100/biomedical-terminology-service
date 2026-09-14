@@ -334,6 +334,15 @@ class PostgresGraphDatabase(GraphDatabase):
             f'CREATE INDEX IF NOT EXISTS ix_graph_closure_{p}_descendant '
             f'ON graph_closure_{p} (descendant_id)'
         ))
+        # One row per prefix (tiny, no partitioning needed): whether that prefix's last closure
+        # build reached natural exhaustion (the whole real closure fits within the materialised
+        # depth) versus being cut off by CONFIG.postgres_graph_closure_depth. `_closure_lookup`
+        # uses this to skip the live-traversal fallback for vocabularies shallow enough that the
+        # closure table already holds the complete answer, even for unbounded queries.
+        await conn.execute(text(
+            'CREATE TABLE IF NOT EXISTS graph_closure_status ('
+            'prefix TEXT PRIMARY KEY, is_complete BOOLEAN NOT NULL)'
+        ))
 
         self._prefix_schema_ready.add(p)
         return p
@@ -439,29 +448,89 @@ class PostgresGraphDatabase(GraphDatabase):
         """
         (Re)build the ancestor/descendant transitive closure table for one vocabulary prefix,
         over its is_a/part_of edges.
+
+        This computes the closure one BFS layer at a time ("semi-naive evaluation"), inserting
+        each (ancestor, descendant) pair into `graph_closure_{p}` the first time it is found --
+        via a `NOT EXISTS` check against what earlier layers already discovered -- and only
+        expanding the *new* frontier at each step, rather than re-deriving already-known pairs.
+
+        Materialisation stops after `CONFIG.postgres_graph_closure_depth` layers (or sooner, if
+        the closure is naturally exhausted first) rather than continuing to full closure --
+        `_closure_lookup` falls back to a live, per-query bounded traversal for anything deeper.
+        On a densely polyhierarchical vocabulary (OHDSI, built from ~150 source vocabularies),
+        the full closure can run into the hundreds of GB; almost all real ancestor/descendant
+        queries only need a handful of hops, so this trades slower rare deep/unbounded queries
+        for an order-of-magnitude smaller table.
+
+        This replaces an earlier single-shot `WITH RECURSIVE ... UNION ALL` query that
+        enumerated every distinct path before deduplicating (via a final `GROUP BY`) at the
+        end. On a densely polyhierarchical graph (many nodes sharing multiple ancestors --
+        OHDSI's is_a/part_of graph, built from ~150 source vocabularies, is exactly this), the
+        number of distinct *paths* to a given pair can be many orders of magnitude larger than
+        the number of distinct *pairs*, since `UNION ALL` does not dedupe between recursion
+        steps. That queries materialised enough intermediate rows to exhaust the server's temp
+        file space on OHDSI's real hierarchy; a synthetic 7-layer, 12-wide fully-connected
+        bipartite chain (864 edges, closure of 3,024 pairs) reproduces the same shape of blowup
+        locally and took 56s with the old query against 0.15s here, for byte-identical results.
         :param conn: The connection to execute on.
         :param p: The safe table-name suffix for the prefix.
         """
         await conn.execute(text(f'TRUNCATE graph_closure_{p}'))
+
+        hierarchy_bind = bindparam('hierarchy_types', expanding=True)
+        params = {'hierarchy_types': list(_HIERARCHY_REL_TYPES)}
+        materialize_depth = min(CONFIG.postgres_graph_closure_depth, CONFIG.postgres_graph_closure_max_depth)
+        frontier = f'closure_frontier_{p}'
+
+        await conn.execute(text(f'DROP TABLE IF EXISTS {frontier}'))
+        await conn.execute(text(
+            f'CREATE TEMP TABLE {frontier} (ancestor_id TEXT NOT NULL, descendant_id TEXT NOT NULL) '
+            f'ON COMMIT DROP'
+        ))
         await conn.execute(text(f"""
-            INSERT INTO graph_closure_{p} (ancestor_id, descendant_id, depth)
-            WITH RECURSIVE closure(ancestor_id, descendant_id, depth) AS (
-                SELECT target_id, source_id, 1
-                FROM graph_edge_{p}
-                WHERE rel_type IN :hierarchy_types
-                UNION ALL
-                SELECT e.target_id, c.descendant_id, c.depth + 1
-                FROM closure c
-                JOIN graph_edge_{p} e ON e.source_id = c.ancestor_id AND e.rel_type IN :hierarchy_types
-                WHERE c.depth < :max_depth
-            )
-            SELECT ancestor_id, descendant_id, MIN(depth)
-            FROM closure
-            GROUP BY ancestor_id, descendant_id
-        """).bindparams(bindparam('hierarchy_types', expanding=True)), {
-            'hierarchy_types': list(_HIERARCHY_REL_TYPES),
-            'max_depth': CONFIG.postgres_graph_closure_max_depth,
-        })
+            INSERT INTO {frontier} (ancestor_id, descendant_id)
+            SELECT DISTINCT target_id, source_id
+            FROM graph_edge_{p}
+            WHERE rel_type IN :hierarchy_types
+        """).bindparams(hierarchy_bind), params)
+
+        depth = 1
+        while True:
+            result = await conn.execute(text(f"""
+                INSERT INTO graph_closure_{p} (ancestor_id, descendant_id, depth)
+                SELECT ancestor_id, descendant_id, :depth FROM {frontier}
+                ON CONFLICT (ancestor_id, descendant_id) DO NOTHING
+            """), {'depth': depth})
+
+            if result.rowcount == 0 or depth >= materialize_depth:
+                break
+
+            next_frontier = f'{frontier}_next'
+            await conn.execute(text(f'DROP TABLE IF EXISTS {next_frontier}'))
+            await conn.execute(text(f"""
+                CREATE TEMP TABLE {next_frontier} AS
+                SELECT DISTINCT e.target_id AS ancestor_id, f.descendant_id AS descendant_id
+                FROM {frontier} f
+                JOIN graph_edge_{p} e ON e.source_id = f.ancestor_id AND e.rel_type IN :hierarchy_types
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM graph_closure_{p} c
+                    WHERE c.ancestor_id = e.target_id AND c.descendant_id = f.descendant_id
+                )
+            """).bindparams(hierarchy_bind), params)
+
+            await conn.execute(text(f'DROP TABLE {frontier}'))
+            await conn.execute(text(f'ALTER TABLE {next_frontier} RENAME TO {frontier}'))
+
+            depth += 1
+
+        # rowcount == 0 means the last attempted layer had nothing new to add -- the closure is
+        # genuinely exhausted, not merely cut off by materialize_depth -- so it's safe to treat
+        # graph_closure_{p} as the complete answer for this prefix regardless of query depth.
+        is_complete = result.rowcount == 0
+        await conn.execute(text("""
+            INSERT INTO graph_closure_status (prefix, is_complete) VALUES (:p, :is_complete)
+            ON CONFLICT (prefix) DO UPDATE SET is_complete = EXCLUDED.is_complete
+        """), {'p': p, 'is_complete': is_complete})
 
     # ------------------------------------------------------------------
     # Vocabulary graph CRUD
@@ -490,56 +559,65 @@ class PostgresGraphDatabase(GraphDatabase):
             return
         prefix = first_concept.prefix
 
+        # Node batches, edge batches, and the final closure rebuild each commit in their own
+        # transaction rather than one spanning the whole call. A vocabulary the size of OHDSI
+        # can take well over an hour to save; every node/edge upsert here is already idempotent
+        # (ON CONFLICT), so committing incrementally means a failure anywhere -- including in
+        # the closure rebuild at the very end -- only costs re-running from that point, not
+        # discarding everything already written and starting over.
         async with self.engine.begin() as conn:
             p = await self._ensure_prefix_schema(conn, prefix)
 
-            extra_columns = [GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop] for prop in GRAPH_NODE_EXTRA_PROPERTIES]
-            all_columns = ['concept_id', 'types'] + extra_columns
-            update_set = ', '.join(f'{col} = EXCLUDED.{col}' for col in ['types'] + extra_columns)
+        extra_columns = [GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop] for prop in GRAPH_NODE_EXTRA_PROPERTIES]
+        all_columns = ['concept_id', 'types'] + extra_columns
+        update_set = ', '.join(f'{col} = EXCLUDED.{col}' for col in ['types'] + extra_columns)
 
-            node_upsert = text(f"""
-                INSERT INTO graph_node_{p} ({', '.join(all_columns)})
-                VALUES ({', '.join(':' + col for col in all_columns)})
-                ON CONFLICT (concept_id) DO UPDATE SET {update_set}
-            """).bindparams(bindparam('types', type_=ARRAY(Text)))
+        node_upsert = text(f"""
+            INSERT INTO graph_node_{p} ({', '.join(all_columns)})
+            VALUES ({', '.join(':' + col for col in all_columns)})
+            ON CONFLICT (concept_id) DO UPDATE SET {update_set}
+        """).bindparams(bindparam('types', type_=ARRAY(Text)))
 
-            for batch in batch_iterable(concepts, consume=consume_concepts):
-                rows = []
-                for c in batch:
-                    dumped = c.model_dump()
-                    row = {'concept_id': c.concept_id, 'types': [t.value for t in c.concept_types]}
-                    for prop in GRAPH_NODE_EXTRA_PROPERTIES:
-                        row[GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop]] = dumped.get(prop)
-                    rows.append(row)
+        for batch in batch_iterable(concepts, consume=consume_concepts):
+            rows = []
+            for c in batch:
+                dumped = c.model_dump()
+                row = {'concept_id': c.concept_id, 'types': [t.value for t in c.concept_types]}
+                for prop in GRAPH_NODE_EXTRA_PROPERTIES:
+                    row[GRAPH_NODE_EXTRA_PROPERTY_COLUMNS[prop]] = dumped.get(prop)
+                rows.append(row)
+            async with self.engine.begin() as conn:
                 await conn.execute(node_upsert, rows)
 
-            bare_node_upsert = text(
-                f'INSERT INTO graph_node_{p} (concept_id) VALUES (:concept_id) ON CONFLICT (concept_id) DO NOTHING'
-            )
-            edge_upsert = text(f"""
-                INSERT INTO graph_edge_{p} (source_id, target_id, rel_type)
-                VALUES (:source_id, :target_id, :rel_type)
-                ON CONFLICT (source_id, target_id, rel_type) DO NOTHING
-            """)
+        bare_node_upsert = text(
+            f'INSERT INTO graph_node_{p} (concept_id) VALUES (:concept_id) ON CONFLICT (concept_id) DO NOTHING'
+        )
+        edge_upsert = text(f"""
+            INSERT INTO graph_edge_{p} (source_id, target_id, rel_type)
+            VALUES (:source_id, :target_id, :rel_type)
+            ON CONFLICT (source_id, target_id, rel_type) DO NOTHING
+        """)
 
-            for batch in batch_iterable(edge_iter(graph)):
-                edge_rows = [
-                    {'source_id': source, 'target_id': target, 'rel_type': rel_label or 'related_to'}
-                    for source, target, rel_label, _rel_key in batch
-                ]
-                if not edge_rows:
-                    continue
+        for batch in batch_iterable(edge_iter(graph)):
+            edge_rows = [
+                {'source_id': source, 'target_id': target, 'rel_type': rel_label or 'related_to'}
+                for source, target, rel_label, _rel_key in batch
+            ]
+            if not edge_rows:
+                continue
 
-                node_ids = sorted({e['source_id'] for e in edge_rows} | {e['target_id'] for e in edge_rows})
+            node_ids = sorted({e['source_id'] for e in edge_rows} | {e['target_id'] for e in edge_rows})
+            async with self.engine.begin() as conn:
                 await conn.execute(bare_node_upsert, [{'concept_id': nid} for nid in node_ids])
                 await conn.execute(edge_upsert, edge_rows)
 
-            # Rebuilt here rather than left to create_index(): the generic vocabulary-load
-            # pipeline (vocabulary.create_indexes()) calls create_index() *before* loading
-            # data, since for Neo4j index creation is just a structural, order-independent
-            # DDL statement. This driver's closure table is a full recompute of the
-            # is_a/part_of transitive closure, which needs the edges above to already exist,
-            # so it is (re)built here, once this call's edges are actually in place.
+        # Rebuilt here rather than left to create_index(): the generic vocabulary-load
+        # pipeline (vocabulary.create_indexes()) calls create_index() *before* loading
+        # data, since for Neo4j index creation is just a structural, order-independent
+        # DDL statement. This driver's closure table is a full recompute of the
+        # is_a/part_of transitive closure, which needs the edges above to already exist,
+        # so it is (re)built here, once this call's edges are actually in place.
+        async with self.engine.begin() as conn:
             await self._build_closure(conn, p)
 
     async def get_vocabulary_graph(self,
@@ -647,6 +725,31 @@ class PostgresGraphDatabase(GraphDatabase):
                 return 0
             result = await conn.execute(text(f'SELECT count(*) FROM graph_edge_{p}'))
             return int(result.scalar_one())
+
+    async def get_relationship_edges(self,
+                                     prefix: ConceptPrefix,
+                                     relationship_type: ConceptRelationshipType,
+                                     ) -> AsyncIterator[tuple[str, str]]:
+        """
+        Stream (source_id, target_id) pairs for one specific same-vocabulary relationship
+        type, filtered server-side rather than fetching every edge and discarding most of
+        them client-side.
+        :param prefix: The vocabulary prefix to fetch edges for.
+        :param relationship_type: The single relationship type to filter to.
+        :return: An async iterator of (source_id, target_id) tuples.
+        """
+        p = safe_table_suffix(prefix.value)
+
+        async with self.engine.connect() as conn:
+            if not await self._table_exists(conn, f'graph_edge_{p}'):
+                return
+
+            stream = await conn.stream(
+                text(f'SELECT source_id, target_id FROM graph_edge_{p} WHERE rel_type = :rel_type'),
+                {'rel_type': relationship_type.value},
+            )
+            async for row in stream:
+                yield row.source_id, row.target_id
 
     async def count_similarity_relationships(self,
                                              prefix_from: ConceptPrefix,
@@ -850,7 +953,14 @@ class PostgresGraphDatabase(GraphDatabase):
                               direction: str,
                               ) -> AsyncIterator[RelatedTerm]:
         """
-        Shared implementation for ancestor/descendant lookups against the closure table.
+        Shared implementation for ancestor/descendant lookups.
+
+        `graph_closure_{p}` only materialises up to `CONFIG.postgres_graph_closure_depth` hops
+        (see `_build_closure`); a request within that depth is served from it directly (an
+        indexed read). A request deeper than that, or unbounded (`max_depth=None`), instead runs
+        a live traversal over `graph_edge_{p}` scoped to just `concept_ids` -- much cheaper than
+        materialising the full closure for the whole vocabulary, since it starts from a handful
+        of nodes rather than every node, but still correct for however deep the caller asked.
         :param prefix: The vocabulary prefix.
         :param concept_ids: The concept IDs to look up.
         :param max_depth: The maximum depth to include, or None for unbounded.
@@ -859,40 +969,149 @@ class PostgresGraphDatabase(GraphDatabase):
         :return: An async iterator of RelatedTerm, one per input concept ID (even if empty).
         """
         p = safe_table_suffix(prefix.value)
+        materialize_depth = CONFIG.postgres_graph_closure_depth
+        related_by_id: dict[str, list[str]] = {cid: [] for cid in concept_ids}
+
+        async with self.engine.connect() as conn:
+            use_closure_table = max_depth is not None and max_depth <= materialize_depth
+            if not use_closure_table:
+                # A prefix whose closure build reached natural exhaustion within the
+                # materialised depth already holds the full, correct closure -- no need to pay
+                # for a live traversal just because the request happens to be unbounded or
+                # nominally "deeper" than the cap.
+                use_closure_table = await self._closure_is_complete(conn, p)
+
+            if use_closure_table:
+                if await self._table_exists(conn, f'graph_closure_{p}'):
+                    await self._closure_table_lookup(conn, p, concept_ids, max_depth, limit, direction, related_by_id)
+            else:
+                if await self._table_exists(conn, f'graph_edge_{p}'):
+                    live_max_depth = max_depth if max_depth is not None else CONFIG.postgres_graph_closure_max_depth
+                    await self._live_traversal_lookup(
+                        conn, p, concept_ids, live_max_depth, limit, direction, related_by_id,
+                    )
+
+        for cid in concept_ids:
+            yield RelatedTerm(conceptId=cid, relatedConcepts=list(set(related_by_id[cid])))
+
+    @staticmethod
+    async def _closure_is_complete(conn: AsyncConnection, p: str) -> bool:
+        """
+        Whether `graph_closure_{p}`'s last build reached natural exhaustion (see `_build_closure`
+        /`graph_closure_status`), rather than being cut off by `CONFIG.postgres_graph_closure_depth`.
+        Missing status (no table, or no row yet -- e.g. a closure table from before this status
+        table existed) is treated conservatively as incomplete, so callers fall back to live
+        traversal rather than risk silently truncated results.
+        """
+        if not await PostgresGraphDatabase._table_exists(conn, 'graph_closure_status'):
+            return False
+        value = await conn.scalar(text('SELECT is_complete FROM graph_closure_status WHERE prefix = :p'), {'p': p})
+        return bool(value)
+
+    @staticmethod
+    async def _closure_table_lookup(conn: AsyncConnection,
+                                    p: str,
+                                    concept_ids: list[str],
+                                    max_depth: int | None,
+                                    limit: int | None,
+                                    direction: str,
+                                    related_by_id: dict[str, list[str]],
+                                    ) -> None:
+        """
+        Fast path: serve an ancestor/descendant lookup from the precomputed closure table, for
+        a request within `CONFIG.postgres_graph_closure_depth`. Mutates `related_by_id` in place.
+        """
         lookup_col = 'descendant_id' if direction == 'ancestors' else 'ancestor_id'
         related_col = 'ancestor_id' if direction == 'ancestors' else 'descendant_id'
 
         depth_clause = 'AND c.depth <= :max_depth' if max_depth is not None else ''
         limit_clause = 'LIMIT :limit' if limit is not None else ''
 
-        related_by_id: dict[str, list[str]] = {cid: [] for cid in concept_ids}
+        params = {'concept_ids': concept_ids}
+        if max_depth is not None:
+            params['max_depth'] = max_depth
+        if limit is not None:
+            params['limit'] = limit
 
-        async with self.engine.connect() as conn:
-            if await self._table_exists(conn, f'graph_closure_{p}'):
-                params = {'concept_ids': concept_ids}
-                if max_depth is not None:
-                    params['max_depth'] = max_depth
-                if limit is not None:
-                    params['limit'] = limit
+        result = await conn.execute(text(f"""
+            SELECT ids.concept_id, related.{related_col}
+            FROM unnest(:concept_ids) AS ids(concept_id)
+            LEFT JOIN LATERAL (
+                SELECT {related_col} FROM graph_closure_{p} c
+                WHERE c.{lookup_col} = ids.concept_id {depth_clause}
+                ORDER BY c.depth
+                {limit_clause}
+            ) related ON true
+        """).bindparams(_array_param('concept_ids', concept_ids)), params)
 
-                result = await conn.execute(text(f"""
-                    SELECT ids.concept_id, related.{related_col}
-                    FROM unnest(:concept_ids) AS ids(concept_id)
-                    LEFT JOIN LATERAL (
-                        SELECT {related_col} FROM graph_closure_{p} c
-                        WHERE c.{lookup_col} = ids.concept_id {depth_clause}
-                        ORDER BY c.depth
-                        {limit_clause}
-                    ) related ON true
-                """).bindparams(_array_param('concept_ids', concept_ids)), params)
+        for row in result:
+            value = getattr(row, related_col)
+            if value is not None:
+                related_by_id[row.concept_id].append(value)
 
-                for row in result:
-                    value = getattr(row, related_col)
-                    if value is not None:
-                        related_by_id[row.concept_id].append(value)
+    @staticmethod
+    async def _live_traversal_lookup(conn: AsyncConnection,
+                                     p: str,
+                                     concept_ids: list[str],
+                                     max_depth: int,
+                                     limit: int | None,
+                                     direction: str,
+                                     related_by_id: dict[str, list[str]],
+                                     ) -> None:
+        """
+        Fallback path: a bounded `WITH RECURSIVE` traversal over `graph_edge_{p}`'s is_a/part_of
+        edges, scoped to `concept_ids` only -- used when the request goes deeper than
+        `CONFIG.postgres_graph_closure_depth` (or is unbounded) and so cannot be answered purely
+        from the closure table. Recomputes from depth 0 rather than continuing from the closure
+        table's frontier: simpler to reason about correctly, and still cheap since it is scoped
+        to a handful of starting nodes rather than the whole vocabulary. Mutates `related_by_id`
+        in place.
+        """
+        edge_lookup_col = 'source_id' if direction == 'ancestors' else 'target_id'
+        edge_related_col = 'target_id' if direction == 'ancestors' else 'source_id'
+        limit_clause = 'LIMIT :limit' if limit is not None else ''
 
-        for cid in concept_ids:
-            yield RelatedTerm(conceptId=cid, relatedConcepts=list(set(related_by_id[cid])))
+        hierarchy_bind = bindparam('hierarchy_types', expanding=True)
+        params = {
+            'concept_ids': concept_ids,
+            'hierarchy_types': list(_HIERARCHY_REL_TYPES),
+            'max_depth': max_depth,
+        }
+        if limit is not None:
+            params['limit'] = limit
+
+        result = await conn.execute(text(f"""
+            WITH RECURSIVE frontier(start_id, cur_id, depth) AS (
+                SELECT concept_id, concept_id, 0
+                FROM unnest(:concept_ids) AS ids(concept_id)
+              UNION ALL
+                SELECT f.start_id, next.related_id, f.depth + 1
+                FROM frontier f
+                JOIN LATERAL (
+                    SELECT {edge_related_col} AS related_id FROM graph_edge_{p}
+                    WHERE {edge_lookup_col} = f.cur_id AND rel_type IN :hierarchy_types
+                ) next ON true
+                WHERE f.depth < :max_depth
+            ),
+            deduped AS (
+                SELECT start_id, cur_id AS related_id, MIN(depth) AS depth
+                FROM frontier
+                WHERE depth > 0
+                GROUP BY start_id, cur_id
+            )
+            SELECT ids.concept_id, related.related_id
+            FROM unnest(:concept_ids) AS ids(concept_id)
+            LEFT JOIN LATERAL (
+                SELECT related_id FROM deduped d
+                WHERE d.start_id = ids.concept_id
+                ORDER BY d.depth
+                {limit_clause}
+            ) related ON true
+        """).bindparams(hierarchy_bind, _array_param('concept_ids', concept_ids)), params)
+
+        for row in result:
+            if row.related_id is not None:
+                related_by_id[row.concept_id].append(row.related_id)
 
     def trace_ancestors_iter(self,
                              prefix: ConceptPrefix,

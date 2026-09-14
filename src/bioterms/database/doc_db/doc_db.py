@@ -314,10 +314,19 @@ async def get_active_doc_db() -> DocumentDatabase:
         from sqlalchemy.ext.asyncio import create_async_engine
         from .sql_doc_db import SqlDocumentDatabase
 
+        # SQLite's async dialect uses StaticPool/NullPool, neither of which accepts
+        # pool_size/max_overflow (create_engine raises TypeError if passed) -- those only
+        # apply to QueuePool-backed dialects (PostgreSQL, MySQL).
+        pool_kwargs = {} if CONFIG.sql_db_url.startswith('sqlite') else {
+            'pool_size': CONFIG.sql_pool_size,
+            'max_overflow': CONFIG.sql_max_overflow,
+        }
+
         sql_engine = create_async_engine(
             CONFIG.sql_db_url,
             pool_pre_ping=True,
             future=True,
+            **pool_kwargs,
         )
 
         async with sql_engine.connect() as conn:

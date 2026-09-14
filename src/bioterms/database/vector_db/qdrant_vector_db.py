@@ -101,6 +101,12 @@ class QdrantVectorDatabase(VectorDatabase):
                                    ) -> int:
         """
         Load precomputed embedding items into the Qdrant collection.
+
+        Items are flushed in batches, but a batch is only ever cut at a concept boundary -- a
+        concept's items are never split across two flushes. This makes "this concept has a
+        point in the collection" a reliable proxy for "this concept's items were fully
+        written", which `get_embedded_concept_ids` (and `insert_concepts`'s resume support)
+        depends on.
         :param prefix: The vocabulary prefix of the embedding items
         :param items: An async iterator of EmbeddingItemVector instances
         :param total_items: Optional total number of items, used for progress tracking (unused
@@ -123,9 +129,24 @@ class QdrantVectorDatabase(VectorDatabase):
         )
 
         points = []
+        pending_concept_points = []
+        pending_concept_id: str | None = None
         written = 0
+
         async for item in items:
-            points.append(PointStruct(
+            if item.concept_id != pending_concept_id:
+                points.extend(pending_concept_points)
+                pending_concept_points = []
+                pending_concept_id = item.concept_id
+
+                if len(points) > 1000:
+                    await self.client.upsert(
+                        collection_name=collection_name,
+                        points=points,
+                    )
+                    points = []
+
+            pending_concept_points.append(PointStruct(
                 id=str(_stable_uuid(item.item_id)),
                 vector=item.vector,
                 payload={
@@ -137,14 +158,7 @@ class QdrantVectorDatabase(VectorDatabase):
             ))
             written += 1
 
-            if len(points) > 1000:
-                await self.client.upsert(
-                    collection_name=collection_name,
-                    points=points,
-                )
-
-                points = []
-
+        points.extend(pending_concept_points)
         if points:
             await self.client.upsert(
                 collection_name=collection_name,
@@ -161,6 +175,45 @@ class QdrantVectorDatabase(VectorDatabase):
         )
 
         return written
+
+    async def get_embedded_concept_ids(self,
+                                       prefix: ConceptPrefix,
+                                       ) -> set[str]:
+        """
+        Return the concept IDs that already have embedding items stored for a given prefix.
+        :param prefix: The vocabulary prefix to check.
+        :return: The set of concept IDs with at least one stored embedding item.
+        """
+        collection_name = prefix.value
+
+        try:
+            collection_list = await self.client.get_collections()
+            existing = [c.name for c in collection_list.collections]
+            if collection_name not in existing:
+                return set()
+        except UnexpectedResponse:
+            return set()
+
+        concept_ids: set[str] = set()
+        next_offset = None
+
+        while True:
+            points, next_offset = await self.client.scroll(
+                collection_name=collection_name,
+                with_payload=['conceptId'],
+                with_vectors=False,
+                limit=1000,
+                offset=next_offset,
+            )
+            for point in points:
+                concept_id = point.payload.get('conceptId')
+                if concept_id is not None:
+                    concept_ids.add(concept_id)
+
+            if next_offset is None:
+                break
+
+        return concept_ids
 
     async def count_vectors(self,
                             prefix: ConceptPrefix,

@@ -12,7 +12,7 @@ import numpy as np
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
-from bioterms.etc.utils import check_files_exist
+from bioterms.etc.utils import check_files_exist, verbose_print
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
@@ -187,6 +187,7 @@ async def delete_vocabulary(prefix: ConceptPrefix,
 async def load_vocabulary(prefix: ConceptPrefix,
                           drop_existing: bool = True,
                           offline: bool = False,
+                          build_search_index: bool = True,
                           cache: Cache = None,
                           doc_db: DocumentDatabase = None,
                           graph_db: GraphDatabase = None,
@@ -196,6 +197,10 @@ async def load_vocabulary(prefix: ConceptPrefix,
     :param prefix: The prefix of the vocabulary to load.
     :param drop_existing: Whether to drop existing data before loading.
     :param offline: Whether to operate in offline mode (write to data files instead of database).
+    :param build_search_index: In offline mode, whether to precompute and write each concept's
+        fallback-search `nGrams`/`searchText` fields into the `.doc.dump` (see
+        `write_concepts_to_file`). Ignored when `offline` is False. Pass False when the
+        eventual restore target doesn't need them (any SQL backend) to skip this work.
     :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
@@ -229,6 +234,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
+        build_search_index=build_search_index,
     )
     if inspect.iscoroutine(result):
         await result
@@ -292,15 +298,44 @@ async def _embed_vocabulary_offline(prefix: ConceptPrefix,
                                     ):
     """
     Embed a vocabulary's concepts from an offline concept dump into an offline embedding dump.
+    If the offline concept dump does not exist yet, it is produced first by reading the
+    vocabulary's concepts from the configured document database and writing them out in the
+    same `.doc.dump` format `write_concepts_to_file` uses elsewhere. This lets a vocabulary
+    that was loaded straight into the database (never dumped offline) still be embedded
+    offline -- against a local file, immune to the live database's load/latency/disk pressure
+    -- and the dump this produces is reusable for a later `restore_vocabulary_embeddings` call
+    without touching the database again.
     :param prefix: The prefix of the vocabulary to embed.
     :param config: The vocabulary configuration dictionary.
     """
     from bioterms.embedding import ConceptTransformer, TextTransformer, EmbeddingContainerV2, \
         EmbeddingContainerFileV2
+    from .utils import write_concepts_to_file
 
     offline_concept_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.doc.dump')
     if not os.path.exists(offline_concept_path):
-        raise ValueError(f'Offline concept file for {prefix} not found at {offline_concept_path}.')
+        doc_db = await get_active_doc_db()
+        status = await get_vocabulary_status(prefix=prefix, doc_db=doc_db)
+        if not status.loaded:
+            raise ValueError(
+                f'Offline concept file for {prefix} not found at {offline_concept_path}, and '
+                f'{prefix} is not loaded in the configured document database either -- nothing '
+                f'to embed from.'
+            )
+
+        verbose_print(
+            f'Offline concept dump for {prefix.value} not found; reading its {status.concept_count} '
+            f'concepts from the configured document database instead, and writing them to '
+            f'{offline_concept_path} for reuse.'
+        )
+        concepts = [c async for c in doc_db.get_terms_iter(prefix=prefix, model_class=config['conceptClass'])]
+        # Embedding only ever reads label/synonyms/definition off each concept -- the
+        # fallback-search nGrams/searchText fields this dump could otherwise carry are
+        # irrelevant here regardless of the eventual restore target.
+        await write_concepts_to_file(prefix=prefix, concepts=concepts, build_search_index=False)
+        del concepts
+        verbose_print(f'Offline concept dump for {prefix.value} written.')
+
     offline_embedding_path = os.path.join(CONFIG.data_dir, 'offline', f'{prefix.value}.embed.dump')
 
     async def concept_iter():

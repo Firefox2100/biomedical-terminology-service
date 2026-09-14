@@ -351,6 +351,7 @@ async def _load_snomed_release(concept_file: str,
                                graph_db: GraphDatabase = None,
                                offline: bool = False,
                                overwrite: bool = False,
+                               build_search_index: bool = True,
                                ) -> None:
     """
     Load a SNOMED release from RF2 files.
@@ -365,6 +366,8 @@ async def _load_snomed_release(concept_file: str,
     :param graph_db: Optional GraphDatabase instance to use.
     :param offline: Whether to operate in offline mode and write to data files only.
     :param overwrite: Whether to overwrite existing data files in offline mode.
+    :param build_search_index: In offline mode, whether to precompute fallback-search fields
+        (see `write_concepts_to_file`).
     """
     concept_full_path = os.path.join(CONFIG.data_dir, concept_file)
     description_full_path = os.path.join(CONFIG.data_dir, description_file)
@@ -421,6 +424,7 @@ async def _load_snomed_release(concept_file: str,
             prefix=VOCABULARY_PREFIX,
             concepts=concepts,
             overwrite=overwrite,
+            build_search_index=build_search_index,
         )
         await write_graph_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -433,6 +437,7 @@ async def _load_snomed_release(concept_file: str,
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
+                                    build_search_index: bool = True,
                                     ):
     """
     Load the SNOMED vocabulary from files into the primary databases.
@@ -454,6 +459,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         graph_db=graph_db,
         offline=offline,
         overwrite=True,
+        build_search_index=build_search_index,
     )
 
     # Load UK Clinical release
@@ -466,6 +472,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
+        build_search_index=build_search_index,
     )
 
     # Load UK Drug release
@@ -478,4 +485,5 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
+        build_search_index=build_search_index,
     )

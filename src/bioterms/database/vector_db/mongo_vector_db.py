@@ -124,6 +124,12 @@ class MongoVectorDatabase(VectorDatabase):
                                    ) -> int:
         """
         Load precomputed embedding items into the vocabulary's "<prefix>.vectors" collection.
+
+        Items are flushed in batches, but a batch is only ever cut at a concept boundary -- a
+        concept's items are never split across two flushes. This makes "this concept has an
+        item in the collection" a reliable proxy for "this concept's items were fully
+        written", which `get_embedded_concept_ids` (and `insert_concepts`'s resume support)
+        depends on.
         :param prefix: The vocabulary prefix of the embedding items
         :param items: An async iterator of EmbeddingItemVector instances
         :param total_items: Optional total number of items, used for progress tracking (unused
@@ -135,10 +141,21 @@ class MongoVectorDatabase(VectorDatabase):
         collection = self.db[collection_name]
 
         operations: list[UpdateOne] = []
+        pending_concept_ops: list[UpdateOne] = []
+        pending_concept_id: str | None = None
         written = 0
 
         async for item in items:
-            operations.append(UpdateOne(
+            if item.concept_id != pending_concept_id:
+                operations.extend(pending_concept_ops)
+                pending_concept_ops = []
+                pending_concept_id = item.concept_id
+
+                if len(operations) >= 1000:
+                    await collection.bulk_write(operations)
+                    operations = []
+
+            pending_concept_ops.append(UpdateOne(
                 {'_id': item.item_id},
                 {'$set': {
                     'conceptId': item.concept_id,
@@ -150,14 +167,22 @@ class MongoVectorDatabase(VectorDatabase):
             ))
             written += 1
 
-            if len(operations) >= 1000:
-                await collection.bulk_write(operations)
-                operations = []
-
+        operations.extend(pending_concept_ops)
         if operations:
             await collection.bulk_write(operations)
 
         return written
+
+    async def get_embedded_concept_ids(self,
+                                       prefix: ConceptPrefix,
+                                       ) -> set[str]:
+        """
+        Return the concept IDs that already have embedding items stored for a given prefix.
+        :param prefix: The vocabulary prefix to check.
+        :return: The set of concept IDs with at least one stored embedding item.
+        """
+        collection = self.db[self._vector_collection_name(prefix)]
+        return set(await collection.distinct('conceptId'))
 
     async def count_vectors(self,
                             prefix: ConceptPrefix,

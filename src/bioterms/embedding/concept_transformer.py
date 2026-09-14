@@ -166,8 +166,14 @@ class ConceptTransformer(TextTransformer):
         batches = _item_batches_iter(concepts, batch_size, total_concepts)
 
         if worker_processes == 1:
+            # Run the (blocking, GPU/CPU-bound) encode call in a worker thread rather than
+            # directly on the event loop -- otherwise it monopolises the loop for its whole
+            # duration, starving any concurrent async I/O (e.g. a writer task consuming this
+            # generator's output while flushing previous batches to the database) even though
+            # that I/O has nothing to do with the GPU and could otherwise run alongside it.
+            loop = asyncio.get_running_loop()
             async for batch in batches:
-                yield self._process_batch(batch)
+                yield await loop.run_in_executor(None, self._process_batch, batch)
             return
 
         async for embedded_batch in self._embed_parallel(batches, worker_processes):

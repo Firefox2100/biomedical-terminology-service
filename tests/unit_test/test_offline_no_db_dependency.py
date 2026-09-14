@@ -11,7 +11,7 @@ import bioterms.similarity as similarity
 
 @pytest.mark.asyncio
 async def test_load_vocabulary_offline_does_not_require_cache(monkeypatch):
-    async def fake_load_vocabulary_from_file(doc_db=None, graph_db=None, offline=False):
+    async def fake_load_vocabulary_from_file(doc_db=None, graph_db=None, offline=False, build_search_index=True):
         assert doc_db is None
         assert graph_db is None
         assert offline is True

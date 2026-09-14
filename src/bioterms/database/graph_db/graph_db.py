@@ -202,6 +202,23 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    def get_relationship_edges(self,
+                               prefix: ConceptPrefix,
+                               relationship_type: ConceptRelationshipType,
+                               ) -> AsyncIterator[tuple[str, str]]:
+        """
+        Stream (source_id, target_id) pairs for one specific same-vocabulary relationship
+        type -- a targeted alternative to `get_vocabulary_graph` for callers that only need
+        one relationship type (e.g. `REPLACED_BY` for equivalence lookups) and would
+        otherwise have to pull a whole vocabulary's graph (every relationship type, every
+        edge) into memory just to filter it client-side. On a vocabulary the size of OHDSI
+        (tens of millions of internal edges), that difference is the point.
+        :param prefix: The vocabulary prefix to fetch edges for.
+        :param relationship_type: The single relationship type to filter to.
+        :return: An async iterator of (source_id, target_id) tuples.
+        """
+
+    @abstractmethod
     async def count_similarity_relationships(self,
                                              prefix_from: ConceptPrefix,
                                              prefix_to: ConceptPrefix,

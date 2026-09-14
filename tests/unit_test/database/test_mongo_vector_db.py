@@ -54,6 +54,9 @@ class FakeCollection:
     async def count_documents(self, filt):
         return len(self.docs)
 
+    async def distinct(self, field):
+        return list({d[field] for d in self.docs.values() if field in d})
+
     async def aggregate(self, pipeline):
         # Ignore the actual vector math for this fake; just return every item matching the
         # $vectorSearch filter's "kind", honouring "limit".
@@ -133,6 +136,22 @@ async def test_load_embedding_items_upserts_items_and_creates_index_once(monkeyp
     assert collection.docs['HP:0000002:alias:0']['conceptId'] == 'HP:0000002'
     assert 'vector_index' in collection.search_indexes
     assert collection.create_search_index_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_embedded_concept_ids_returns_distinct_concepts(monkeypatch):
+    vector_db = make_vector_db(monkeypatch)
+    await vector_db.load_embedding_items(
+        prefix=ConceptPrefix.MONDO,
+        items=_items_iter([
+            EmbeddingItemVector('MONDO:1:alias:0', 'MONDO:1', EmbeddingKind.ALIAS, 'a', [1.0, 0.0, 0.0]),
+            EmbeddingItemVector('MONDO:1:definition:0', 'MONDO:1', EmbeddingKind.DEFINITION, 'd', [0.0, 0.0, 1.0]),
+            EmbeddingItemVector('MONDO:2:alias:0', 'MONDO:2', EmbeddingKind.ALIAS, 'b', [0.0, 1.0, 0.0]),
+        ]),
+    )
+
+    assert await vector_db.get_embedded_concept_ids(ConceptPrefix.MONDO) == {'MONDO:1', 'MONDO:2'}
+    assert await vector_db.get_embedded_concept_ids(ConceptPrefix.HPO) == set()
 
 
 @pytest.mark.asyncio

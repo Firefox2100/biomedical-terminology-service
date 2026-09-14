@@ -128,12 +128,24 @@ class PostgresVectorDatabase(VectorDatabase):
         result = await conn.execute(text('SELECT to_regclass(:name) IS NOT NULL'), {'name': table_name})
         return bool(result.scalar())
 
-    async def _ensure_table_and_index(self,
-                                      prefix: ConceptPrefix,
-                                      ) -> Table:
+    @staticmethod
+    def _vector_index_name(table_name: str) -> str:
         """
-        Ensure the table and HNSW similarity index backing a vocabulary prefix's embedding
-        items exist, creating them if necessary.
+        The name of the HNSW similarity index for a vocabulary prefix's embedding-item table.
+        :param table_name: The embedding-item table's name.
+        :return: The index name.
+        """
+        return f'{table_name}_vector_hnsw_idx'
+
+    async def _ensure_table(self,
+                            prefix: ConceptPrefix,
+                            ) -> Table:
+        """
+        Ensure the table and its cheap-to-maintain (non-vector) indexes backing a vocabulary
+        prefix's embedding items exist, creating them if necessary. The HNSW vector index is
+        handled separately (see `_drop_vector_index`/`_build_vector_index`) -- unlike these
+        indexes, it is expensive to maintain incrementally, so bulk loads drop it first and
+        rebuild it once at the end rather than paying that cost on every inserted row.
         :param prefix: The vocabulary prefix.
         :return: The Table object for the prefix.
         """
@@ -158,13 +170,39 @@ class PostgresVectorDatabase(VectorDatabase):
                 f'CREATE INDEX IF NOT EXISTS ix_{table.name}_kind ON {table.name} (kind)'
             ))
 
-            idx_name = f'{table.name}_vector_hnsw_idx'
+        return table
+
+    async def _drop_vector_index(self,
+                                 table: Table,
+                                 ) -> None:
+        """
+        Drop the HNSW similarity index for a table, if it exists, so a bulk load of embedding
+        items does not pay the (much higher, per-row) cost of incrementally maintaining an
+        HNSW graph while inserting -- see `_build_vector_index`.
+        :param table: The embedding-item table.
+        """
+        async with self.engine.begin() as conn:
+            await conn.execute(text(f'DROP INDEX IF EXISTS {self._vector_index_name(table.name)}'))
+
+    async def _build_vector_index(self,
+                                  table: Table,
+                                  ) -> None:
+        """
+        (Re)build the HNSW similarity index for a table in one bulk pass, now that its
+        embedding items are loaded. This intentionally does not raise `maintenance_work_mem`
+        for the build -- the server's configured value is whatever the deployment already
+        budgets for concurrent index builds, and overriding it here previously caused a
+        `DiskFullError` (shared-memory exhaustion) under concurrent load on at least one
+        deployment. The efficiency win is building the index once in bulk instead of
+        incrementally maintaining it on every insert; a larger work_mem is a separate,
+        deployment-specific tuning knob, not something this driver should force.
+        :param table: The embedding-item table.
+        """
+        async with self.engine.begin() as conn:
             await conn.execute(text(
-                f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table.name} '
+                f'CREATE INDEX IF NOT EXISTS {self._vector_index_name(table.name)} ON {table.name} '
                 f'USING hnsw (vector vector_cosine_ops)'
             ))
-
-        return table
 
     async def load_embedding_items(self,
                                    prefix: ConceptPrefix,
@@ -172,19 +210,34 @@ class PostgresVectorDatabase(VectorDatabase):
                                    total_items: int | None = None,
                                    ) -> int:
         """
-        Load precomputed embedding items into the PostgreSQL vector store.
+        Load precomputed embedding items into the PostgreSQL vector store. The HNSW index is
+        dropped before loading and rebuilt once afterward (see `_drop_vector_index`/
+        `_build_vector_index`) rather than incrementally maintained on every insert, which is
+        dramatically faster for bulk loads.
+
+        Items are flushed to the database in batches, but a batch is only ever cut at a
+        concept boundary -- a concept's items (its label, each synonym, its definition) are
+        never split across two flushes. This makes "this concept has an item in the table"
+        a reliable proxy for "this concept's items were fully written", which
+        `get_embedded_concept_ids` (and, through it, `insert_concepts`'s resume support)
+        depends on: a crash or Ctrl-C can therefore only ever land between concepts, never
+        mid-concept, so resuming never has to guess whether a concept was partially embedded.
         :param prefix: The vocabulary prefix of the embedding items
         :param items: An async iterator of EmbeddingItemVector instances
         :param total_items: Optional total number of items, used for progress tracking (unused
             by this driver, kept for interface compatibility)
         :return: The number of embedding items written
         """
-        table = await self._ensure_table_and_index(prefix)
+        table = await self._ensure_table(prefix)
+        await self._drop_vector_index(table)
 
         rows: list[dict] = []
+        pending_concept_rows: list[dict] = []
+        pending_concept_id: str | None = None
         written = 0
 
         async def flush():
+            nonlocal rows
             if not rows:
                 return
             async with self.engine.begin() as conn:
@@ -199,9 +252,20 @@ class PostgresVectorDatabase(VectorDatabase):
                     },
                 )
                 await conn.execute(stmt)
+            rows = []
 
         async for item in items:
-            rows.append({
+            if item.concept_id != pending_concept_id:
+                # The previously-pending concept (if any) is now fully collected -- safe to
+                # queue for writing.
+                rows.extend(pending_concept_rows)
+                pending_concept_rows = []
+                pending_concept_id = item.concept_id
+
+                if len(rows) >= 1000:
+                    await flush()
+
+            pending_concept_rows.append({
                 'item_id': item.item_id,
                 'concept_id': item.concept_id,
                 'kind': item.kind.value,
@@ -210,11 +274,10 @@ class PostgresVectorDatabase(VectorDatabase):
             })
             written += 1
 
-            if len(rows) >= 1000:
-                await flush()
-                rows = []
-
+        rows.extend(pending_concept_rows)
         await flush()
+
+        await self._build_vector_index(table)
 
         return written
 
@@ -234,6 +297,23 @@ class PostgresVectorDatabase(VectorDatabase):
 
             result = await conn.execute(text(f'SELECT count(*) FROM {table_name}'))
             return int(result.scalar_one())
+
+    async def get_embedded_concept_ids(self,
+                                       prefix: ConceptPrefix,
+                                       ) -> set[str]:
+        """
+        Return the concept IDs that already have embedding items stored for a given prefix.
+        :param prefix: The vocabulary prefix to check.
+        :return: The set of concept IDs with at least one stored embedding item.
+        """
+        table_name = self._table_name(prefix)
+
+        async with self.engine.connect() as conn:
+            if not await self._table_exists(conn, table_name):
+                return set()
+
+            result = await conn.execute(text(f'SELECT DISTINCT concept_id FROM {table_name}'))
+            return {row[0] for row in result}
 
     async def search_items_iter(self,
                                 query_vector: list[float],
