@@ -1,7 +1,7 @@
 from typing import AsyncIterator
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, \
-    PayloadSchemaType, TurboQuantization, TurboQuantQuantizationConfig, TurboQuantBitSize
+    PayloadSchemaType, Datatype
 from qdrant_client.http.models import HnswConfigDiff
 from qdrant_client.http.exceptions import UnexpectedResponse
 
@@ -11,18 +11,24 @@ from bioterms.embedding import TextTransformer
 from .vector_db import VectorDatabase, EmbeddingItemVector
 
 
-def _quantization_config():
-    """
-    Build the Qdrant quantization config matching BTS_QDRANT_STORAGE_TYPE.
-    :return: A quantization config to pass to `create_collection`, or None to use Qdrant's
-        default full-precision storage.
-    """
-    if CONFIG.qdrant_storage_type == QdrantStorageType.TURBO4:
-        return TurboQuantization(
-            turbo=TurboQuantQuantizationConfig(bits=TurboQuantBitSize.BITS4),
-        )
+_STORAGE_TYPE_TO_DATATYPE: dict[QdrantStorageType, Datatype] = {
+    QdrantStorageType.FLOAT32: Datatype.FLOAT32,
+    QdrantStorageType.FLOAT16: Datatype.FLOAT16,
+    QdrantStorageType.UINT8: Datatype.UINT8,
+    QdrantStorageType.TURBO4: Datatype.TURBO4,
+}
 
-    return None
+
+def _vector_datatype() -> Datatype:
+    """
+    The on-disk/in-memory storage datatype for a newly created collection's vectors, matching
+    BTS_QDRANT_STORAGE_TYPE. Unlike a quantization config -- which keeps the original
+    full-precision vectors and builds a second, quantized copy alongside them -- this is the
+    vectors' actual storage format: e.g. "turbo4" vectors are written directly in TurboQuant
+    4-bit form, with no separate float32 copy ever stored.
+    :return: The Qdrant vector datatype to use.
+    """
+    return _STORAGE_TYPE_TO_DATATYPE[CONFIG.qdrant_storage_type]
 
 
 class QdrantVectorDatabase(VectorDatabase):
@@ -92,8 +98,8 @@ class QdrantVectorDatabase(VectorDatabase):
             vectors_config=VectorParams(
                 size=dimension,
                 distance=distance,
+                datatype=_vector_datatype(),
             ),
-            quantization_config=_quantization_config(),
         )
         await self.client.create_payload_index(
             collection_name=collection_name,

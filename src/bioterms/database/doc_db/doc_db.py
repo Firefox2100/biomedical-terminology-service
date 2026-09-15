@@ -305,7 +305,9 @@ async def get_active_doc_db() -> DocumentDatabase:
 
         MongoDocumentDatabase.set_client(mongo_client)
 
-        _active_doc_db = MongoDocumentDatabase()
+        doc_db = MongoDocumentDatabase()
+        await doc_db.initialize()
+        _active_doc_db = doc_db
 
         return _active_doc_db
 
@@ -332,7 +334,9 @@ async def get_active_doc_db() -> DocumentDatabase:
         async with sql_engine.connect() as conn:
             await conn.execute(text('SELECT 1'))
 
-        _active_doc_db = SqlDocumentDatabase(sql_engine, batch_size=CONFIG.sql_batch_size)
+        doc_db = SqlDocumentDatabase(sql_engine, batch_size=CONFIG.sql_batch_size)
+        await doc_db.initialize()
+        _active_doc_db = doc_db
 
         return _active_doc_db
 

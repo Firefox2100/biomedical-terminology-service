@@ -315,11 +315,14 @@ class Settings(BaseSettings):
         description='Location of the Qdrant vector database',
     )
     qdrant_storage_type: QdrantStorageType = Field(
-        QdrantStorageType.DEFAULT,
-        description='Vector storage type for newly created Qdrant collections, when '
-                    'BTS_VECTOR_DATABASE_DRIVER=qdrant. "turbo4" enables TurboQuant 4-bit '
-                    'quantization, which substantially reduces storage cost at some loss of '
-                    'recall accuracy compared to the "default" full-precision storage.',
+        QdrantStorageType.FLOAT32,
+        description='The vector storage datatype for newly created Qdrant collections, when '
+                    'BTS_VECTOR_DATABASE_DRIVER=qdrant. This is the actual on-disk/in-memory '
+                    'format vectors are written in -- not a quantization index built alongside '
+                    'a full-precision copy. "float32" is full precision (the default); '
+                    '"float16" and "uint8" are smaller, lower-fidelity storage formats; '
+                    '"turbo4" stores vectors directly in TurboQuant 4-bit form. Each step down '
+                    'in precision reduces storage cost at some further loss of recall accuracy.',
     )
     mongodb_vector_index_name: str = Field(
         'vector_index',

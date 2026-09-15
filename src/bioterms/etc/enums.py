@@ -135,8 +135,12 @@ class VectorDatabaseDriverType(Enum):
 
 class QdrantStorageType(Enum):
     """
-    The vector storage type used for Qdrant collections, when
-    BTS_VECTOR_DATABASE_DRIVER=qdrant.
+    The vector storage datatype used for newly created Qdrant collections, when
+    BTS_VECTOR_DATABASE_DRIVER=qdrant. Mirrors qdrant_client.models.Datatype -- the actual
+    on-disk/in-memory format vectors are written in, not a quantization index built alongside
+    a full-precision copy.
     """
-    DEFAULT = 'default'
+    FLOAT32 = 'float32'
+    FLOAT16 = 'float16'
+    UINT8 = 'uint8'
     TURBO4 = 'turbo4'
