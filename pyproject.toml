@@ -27,8 +27,8 @@ dependencies = [
     "argon2-cffi~=25.1.0",
     "asgi-csrf~=0.11",
     "celery~=5.6.3",
-    "fastapi~=0.139.2",
-    "fastmcp~=3.4.7",
+    "fastapi~=0.141.1",
+    "fastmcp~=4.0.3",
     "fhir.resources~=8.3.0",
     "httpx~=0.28.1",
     "itsdangerous~=2.2.0",
@@ -40,16 +40,16 @@ dependencies = [
     "owlready2~=0.51",
     "pandas~=3.0.5",
     "pyyaml~=6.0.3",
-    "pydantic~=2.13.4",
-    "pydantic-settings~=2.14.2",
+    "pydantic~=2.13.5",
+    "pydantic-settings~=2.15.0",
     "pyroaring~=1.1.0",
     "pytheus~=0.6.1",
     "rich~=15.0.0",
-    "sentence-transformers~=5.6.1",
-    "transformers~=5.14.1",
-    "tqdm~=4.69.1",
-    "typer~=0.27.1",
-    "uvicorn~=0.51.0",
+    "sentence-transformers~=6.0.1",
+    "transformers~=5.17.0",
+    "tqdm~=4.70.1",
+    "typer~=0.27.2",
+    "uvicorn~=0.53.0",
 ]
 dynamic = [
     "version"
@@ -63,35 +63,35 @@ test = [
     "asyncpg~=0.31.0",
     "aiosqlite~=0.22.1",
     "deepdiff~=9.1.0",
-    "locust~=2.46.4",
-    "matplotlib~=3.10.9",
-    "neo4j~=6.2.0",
+    "locust~=2.46.5",
+    "matplotlib~=3.11.2",
+    "neo4j~=6.3.0",
     "pgvector~=0.5.0",
     "pytest~=9.1.1",
     "pytest-asyncio~=1.4.0",
     "pytest-cov~=7.1.0",
-    "pylint~=4.0.7",
-    "pymongo~=4.17.0",
-    "qdrant-client~=1.18.0",
-    "redis~=8.0.1",
-    "sentry-sdk[fastapi]~=2.66.1",
+    "pylint~=4.0.8",
+    "pymongo~=4.18.1",
+    "qdrant-client~=1.19.0",
+    "redis~=8.1.0",
+    "sentry-sdk[fastapi]~=2.69.1",
     "sqlalchemy~=2.0.52",
     "testcontainers~=4.10.0",
 ]
 pymongo = [
-    "pymongo~=4.17.0",
+    "pymongo~=4.18.1",
 ]
 neo4j = [
-    "neo4j~=6.2.0",
+    "neo4j~=6.3.0",
 ]
 qdrant = [
-    "qdrant-client~=1.18.0",
+    "qdrant-client~=1.19.0",
 ]
 redis = [
-    "redis~=8.0.1",
+    "redis~=8.1.0",
 ]
 sentry = [
-    "sentry-sdk[fastapi]~=2.66.1",
+    "sentry-sdk[fastapi]~=2.69.1",
 ]
 sql = [
     "sqlalchemy~=2.0.52",
@@ -104,11 +104,11 @@ postgres = [
 all = [
     "asyncpg~=0.31.0",
     "pgvector~=0.5.0",
-    "pymongo~=4.17.0",
-    "neo4j~=6.2.0",
-    "qdrant-client~=1.18.0",
-    "redis~=8.0.1",
-    "sentry-sdk[fastapi]~=2.66.1",
+    "pymongo~=4.18.1",
+    "neo4j~=6.3.0",
+    "qdrant-client~=1.19.0",
+    "redis~=8.1.0",
+    "sentry-sdk[fastapi]~=2.69.1",
     "sqlalchemy~=2.0.52",
 ]
 

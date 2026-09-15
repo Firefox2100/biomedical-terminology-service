@@ -1,13 +1,28 @@
 from typing import AsyncIterator
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, \
-    PayloadSchemaType
+    PayloadSchemaType, TurboQuantization, TurboQuantQuantizationConfig, TurboQuantBitSize
 from qdrant_client.http.models import HnswConfigDiff
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from bioterms.etc.enums import ConceptPrefix, EmbeddingKind
+from bioterms.etc.consts import CONFIG
+from bioterms.etc.enums import ConceptPrefix, EmbeddingKind, QdrantStorageType
 from bioterms.embedding import TextTransformer
 from .vector_db import VectorDatabase, EmbeddingItemVector
+
+
+def _quantization_config():
+    """
+    Build the Qdrant quantization config matching BTS_QDRANT_STORAGE_TYPE.
+    :return: A quantization config to pass to `create_collection`, or None to use Qdrant's
+        default full-precision storage.
+    """
+    if CONFIG.qdrant_storage_type == QdrantStorageType.TURBO4:
+        return TurboQuantization(
+            turbo=TurboQuantQuantizationConfig(bits=TurboQuantBitSize.BITS4),
+        )
+
+    return None
 
 
 class QdrantVectorDatabase(VectorDatabase):
@@ -77,7 +92,8 @@ class QdrantVectorDatabase(VectorDatabase):
             vectors_config=VectorParams(
                 size=dimension,
                 distance=distance,
-            )
+            ),
+            quantization_config=_quantization_config(),
         )
         await self.client.create_payload_index(
             collection_name=collection_name,

@@ -131,3 +131,12 @@ class VectorDatabaseDriverType(Enum):
     QDRANT = 'qdrant'
     MONGODB = 'mongodb'
     POSTGRESQL = 'postgresql'
+
+
+class QdrantStorageType(Enum):
+    """
+    The vector storage type used for Qdrant collections, when
+    BTS_VECTOR_DATABASE_DRIVER=qdrant.
+    """
+    DEFAULT = 'default'
+    TURBO4 = 'turbo4'

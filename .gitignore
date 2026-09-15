@@ -211,3 +211,7 @@ __marimo__/
 
 # Term browser built files
 /src/bioterms/data/static/term-browser/
+
+# Reranker training: SLURM batch scripts are cluster-specific (account, partition, module
+# names, paths) -- never commit these, including the baseline template.
+scripts/reranker/slurm/

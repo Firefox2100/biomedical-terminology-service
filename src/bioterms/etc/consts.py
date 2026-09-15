@@ -13,7 +13,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from bioterms.etc.enums import DocDatabaseDriverType, GraphDatabaseDriverType, CacheDriverType, \
-    ServiceEnvironment, VectorDatabaseDriverType
+    ServiceEnvironment, VectorDatabaseDriverType, QdrantStorageType
 
 
 SECRETS_DIR = '/run/secrets' if os.path.isdir('/run/secrets') else None
@@ -313,6 +313,13 @@ class Settings(BaseSettings):
     qdrant_location: str = Field(
         'http://localhost:6333',
         description='Location of the Qdrant vector database',
+    )
+    qdrant_storage_type: QdrantStorageType = Field(
+        QdrantStorageType.DEFAULT,
+        description='Vector storage type for newly created Qdrant collections, when '
+                    'BTS_VECTOR_DATABASE_DRIVER=qdrant. "turbo4" enables TurboQuant 4-bit '
+                    'quantization, which substantially reduces storage cost at some loss of '
+                    'recall accuracy compared to the "default" full-precision storage.',
     )
     mongodb_vector_index_name: str = Field(
         'vector_index',
