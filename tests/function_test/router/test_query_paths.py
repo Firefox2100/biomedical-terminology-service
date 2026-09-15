@@ -13,10 +13,12 @@ from bioterms.model.concept_path import ConceptPath, NodeInPath
 from bioterms.model.related_term import RelatedTerm
 from bioterms.model.similar_term import SimilarTerm, SimilarTermByPrefix, SimilarTermWithScores
 from bioterms.model.translated_term import TranslatedTerm
+from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.router import search as search_module
 from bioterms.router.expand import ExpandRequestV1, expand_terms_v1, expand_terms_v2
 from bioterms.router.map import MapRequestV1, map_terms_v1, map_terms_v2
 from bioterms.router.search import search_terms_v1
+from bioterms.router import similarity as similarity_router_module
 from bioterms.router.similarity import SimilarityRequestV1, TranslateRequestV1, get_similar_terms_v1, \
     get_similar_terms_v2, translate_terms_v1, translate_terms_v2
 from bioterms.router.trace import trace_terms_v1
@@ -26,6 +28,24 @@ from bioterms.search import hybrid as hybrid_module
 async def collect_streaming_json(response):
     body = b''.join([chunk async for chunk in response.body_iterator])
     return json.loads(body.decode())
+
+
+async def _skip_similarity_availability_check(prefix, cache=None, doc_db=None, graph_db=None):
+    """Stand-in for `ensure_similarity_available` in tests that exercise query-parameter
+    plumbing against a `FakeGraphDatabase`, not the availability gate itself (which is
+    covered separately in tests/unit_test/similarity)."""
+
+
+def fake_get_vocabulary_status_with_vector_count(vector_count):
+    """Stand-in for `bioterms.vocabulary.get_vocabulary_status`, used by `hybrid_search` to
+    decide (from the cached vocabulary status, not a live `vector_db.count_vectors` call)
+    whether to skip embedding the query -- see tests below exercising that branch."""
+    async def _fake(prefix, cache=None, doc_db=None, graph_db=None, vector_db=None, **kwargs):
+        return VocabularyStatus(
+            prefix=prefix, name=prefix.value.upper(), loaded=True, conceptCount=1,
+            vectorCount=vector_count,
+        )
+    return _fake
 
 
 def make_concept(concept_id, label):
@@ -75,10 +95,17 @@ class FakeDocumentDatabase:
 
 
 class FakeVectorDatabase:
-    def __init__(self, alias_hits=None, definition_hits=None):
+    def __init__(self, alias_hits=None, definition_hits=None, vector_count=1):
         self.alias_hits = alias_hits or []
         self.definition_hits = definition_hits or []
+        # hybrid_search only embeds the query and runs the vector recall arms when this is
+        # positive -- defaults to 1 so existing tests exercising vector recall don't need to
+        # pass it explicitly; a test of the no-embeddings-loaded path sets it to 0.
+        self.vector_count = vector_count
         self.calls = []
+
+    async def count_vectors(self, prefix):
+        return self.vector_count
 
     async def search_items(self, query_vector, prefix, kind, limit):
         self.calls.append({
@@ -207,6 +234,10 @@ async def test_search_terms_v1_fuses_alias_embedding_recall(monkeypatch):
     ])
     monkeypatch.setattr(search_module, 'get_vocabulary_config', lambda prefix: {'conceptClass': Concept})
     monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
+    )
 
     response = await search_terms_v1(
         prefix=ConceptPrefix.HPO,
@@ -243,6 +274,10 @@ async def test_search_terms_v1_pins_exact_match_ahead_of_fusion(monkeypatch):
     ])
     monkeypatch.setattr(search_module, 'get_vocabulary_config', lambda prefix: {'conceptClass': Concept})
     monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
+    )
 
     response = await search_terms_v1(
         prefix=ConceptPrefix.HPO,
@@ -254,6 +289,39 @@ async def test_search_terms_v1_pins_exact_match_ahead_of_fusion(monkeypatch):
     body = await collect_streaming_json(response)
 
     assert [item['conceptId'] for item in body][0] == '0000001'
+
+
+@pytest.mark.asyncio
+async def test_search_terms_v1_skips_embedding_when_no_vectors_loaded(monkeypatch):
+    concepts = {'0000001': make_concept('0000001', 'First Concept')}
+    doc_db = FakeDocumentDatabase(concepts, lexical_results=[('0000001', 1.0)])
+    vector_db = FakeVectorDatabase(vector_count=0)
+
+    class ExplodingTextTransformer:
+        """Standing in for the real model: instantiating it would mean it ran."""
+        def __init__(self, *args, **kwargs):
+            raise AssertionError(
+                'TextTransformer must not be constructed when the vocabulary has no vectors loaded'
+            )
+
+    monkeypatch.setattr(search_module, 'get_vocabulary_config', lambda prefix: {'conceptClass': Concept})
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', ExplodingTextTransformer)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
+    )
+
+    response = await search_terms_v1(
+        prefix=ConceptPrefix.HPO,
+        query='first',
+        limit=2,
+        doc_db=doc_db,
+        vector_db=vector_db,
+    )
+    body = await collect_streaming_json(response)
+
+    assert [item['conceptId'] for item in body] == ['0000001']
+    assert vector_db.calls == []
 
 
 @pytest.mark.asyncio
@@ -346,7 +414,8 @@ async def test_map_terms_v2_streams_related_terms_and_passes_max_hops():
 
 
 @pytest.mark.asyncio
-async def test_get_similar_terms_v1_flattens_first_similarity_group():
+async def test_get_similar_terms_v1_flattens_first_similarity_group(monkeypatch):
+    monkeypatch.setattr(similarity_router_module, 'ensure_similarity_available', _skip_similarity_availability_check)
     graph_db = FakeGraphDatabase()
 
     result = await get_similar_terms_v1(
@@ -365,7 +434,8 @@ async def test_get_similar_terms_v1_flattens_first_similarity_group():
 
 
 @pytest.mark.asyncio
-async def test_get_similar_terms_v2_passes_filtering_options_and_streams_results():
+async def test_get_similar_terms_v2_passes_filtering_options_and_streams_results(monkeypatch):
+    monkeypatch.setattr(similarity_router_module, 'ensure_similarity_available', _skip_similarity_availability_check)
     graph_db = FakeGraphDatabase()
 
     response = await get_similar_terms_v2(
@@ -388,7 +458,8 @@ async def test_get_similar_terms_v2_passes_filtering_options_and_streams_results
 
 
 @pytest.mark.asyncio
-async def test_translate_terms_v1_uses_term_ids_constraints_and_score():
+async def test_translate_terms_v1_uses_term_ids_constraints_and_score(monkeypatch):
+    monkeypatch.setattr(similarity_router_module, 'ensure_similarity_available', _skip_similarity_availability_check)
     graph_db = FakeGraphDatabase()
 
     result = await translate_terms_v1(
@@ -415,7 +486,8 @@ async def test_translate_terms_v1_uses_term_ids_constraints_and_score():
 
 
 @pytest.mark.asyncio
-async def test_translate_terms_v2_parses_prefixed_constraints_and_streams_results():
+async def test_translate_terms_v2_parses_prefixed_constraints_and_streams_results(monkeypatch):
+    monkeypatch.setattr(similarity_router_module, 'ensure_similarity_available', _skip_similarity_availability_check)
     graph_db = FakeGraphDatabase()
 
     response = await translate_terms_v2(

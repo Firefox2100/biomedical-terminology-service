@@ -13,6 +13,7 @@ from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.base import JsonModel
 from bioterms.model.similar_term import SimilarTerm
 from bioterms.model.translated_term import TranslatedTerm
+from bioterms.similarity import ensure_similarity_available
 from .utils import response_generator
 
 
@@ -157,6 +158,8 @@ async def get_similar_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of similar terms with their similarity scores.
     """
+    await ensure_similarity_available(prefix, graph_db=graph_db)
+
     variant = 'same_prefix'
     SIM_REQS.labels(
         prefix=prefix.value,
@@ -264,6 +267,8 @@ async def get_similar_terms_v2(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of similar terms with their similarity scores.
     """
+    await ensure_similarity_available(prefix, graph_db=graph_db)
+
     variant = 'same_prefix' if same_prefix else 'cross_prefix'
     has_limit = 'yes' if limit is not None else 'no'
     has_method = method is not None
@@ -331,6 +336,8 @@ async def translate_terms_v1(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of translated terms with their similarity scores.
     """
+    await ensure_similarity_available(prefix, graph_db=graph_db)
+
     constraint_prefix = translate_request.constraint_prefix or prefix
 
     translate_iter = graph_db.translate_terms_iter(
@@ -401,6 +408,8 @@ async def translate_terms_v2(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :return: A list of translated terms with their similarity scores.
     """
+    await ensure_similarity_available(prefix, graph_db=graph_db)
+
     constraint_dict = {}
     for concept in constraint_concepts:
         try:

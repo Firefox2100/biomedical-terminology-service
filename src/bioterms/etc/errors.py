@@ -42,3 +42,31 @@ class VocabularyNotLoaded(BtsError):
                  status_code: int = 400
                  ):
         super().__init__(message, status_code)
+
+
+class SimilarityNotSupported(BtsError):
+    """
+    Raised when a similarity/translate query targets a vocabulary that defines no similarity
+    methods at all -- a capability gap, distinct from `SimilarityDataNotAvailable` (supported,
+    but nothing has been computed/loaded).
+    """
+    def __init__(self,
+                 message: str = 'Vocabulary does not support any similarity methods',
+                 status_code: int = 422
+                 ):
+        super().__init__(message, status_code)
+
+
+class SimilarityDataNotAvailable(BtsError):
+    """
+    Raised when a similarity/translate query targets a vocabulary that does support similarity
+    methods, but none of them currently have any computed/loaded similarity relationships --
+    distinct from `SimilarityNotSupported` (the vocabulary type has no similarity methods at
+    all).
+    """
+    def __init__(self,
+                 message: str = 'Vocabulary supports similarity, but no similarity data is '
+                                'currently available',
+                 status_code: int = 422
+                 ):
+        super().__init__(message, status_code)

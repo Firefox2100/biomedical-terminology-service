@@ -11,6 +11,7 @@ from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.etc.utils import verbose_print
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
     get_active_graph_db
+from bioterms.etc.errors import SimilarityNotSupported, SimilarityDataNotAvailable
 from bioterms.vocabulary import get_vocabulary_status
 from bioterms.vocabulary.utils import load_graph_from_file, load_annotation_from_file
 from bioterms.annotation import get_annotation_status
@@ -383,6 +384,45 @@ async def get_similarity_status(prefix: ConceptPrefix,
     await cache.save_similarity_status(
         status=status,
     )
+
+    return status
+
+
+async def ensure_similarity_available(prefix: ConceptPrefix,
+                                      cache: Cache = None,
+                                      doc_db: DocumentDatabase = None,
+                                      graph_db: GraphDatabase = None,
+                                      ) -> None:
+    """
+    Raise before running a similarity/translate query if the vocabulary cannot currently
+    answer one, rather than letting either cause below silently fall through to an empty
+    result list:
+    - `SimilarityNotSupported`: the vocabulary defines no similarity methods at all (a
+      capability gap -- this vocabulary type was never meant to support similarity).
+    - `SimilarityDataNotAvailable`: it does support similarity methods, but none of them
+      currently have any computed/loaded similarity relationships (a data gap -- similarity
+      just hasn't been built/restored yet).
+    :param prefix: The vocabulary prefix about to be queried for similarity.
+    :param cache: The cache instance.
+    :param doc_db: The document database instance.
+    :param graph_db: The graph database instance.
+    :raises SimilarityNotSupported: If the vocabulary supports no similarity methods.
+    :raises SimilarityDataNotAvailable: If similarity is supported but no data is available.
+    """
+    vocab_status = await get_vocabulary_status(prefix=prefix, cache=cache, doc_db=doc_db, graph_db=graph_db)
+
+    if not vocab_status.similarity_methods:
+        raise SimilarityNotSupported(
+            f'Vocabulary {prefix.value} does not support any similarity methods.'
+        )
+
+    similarity_status = await get_similarity_status(prefix=prefix, cache=cache, doc_db=doc_db, graph_db=graph_db)
+    if not any(count.count > 0 for count in similarity_status.similarity_counts):
+        methods = ', '.join(method.value for method in vocab_status.similarity_methods)
+        raise SimilarityDataNotAvailable(
+            f'Vocabulary {prefix.value} supports similarity methods ({methods}), but no '
+            f'similarity data has been computed or loaded yet.'
+        )
 
 
 def _parse_similarity_dump_filename(path: Path,

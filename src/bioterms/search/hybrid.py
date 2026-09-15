@@ -12,16 +12,24 @@ partial lexical hits, which is the one failure mode this is designed to categori
 This module is the single implementation shared by the REST `/search/v1` endpoint, the
 GraphQL `search` resolver, and the MCP `search_vocabulary` tool -- previously each of the
 three duplicated the same "embed query, run vector search, fetch documents" logic.
+
+When a vocabulary has no embedding items loaded in the vector database (embedding was never
+run, or only ever run offline without a restore), the alias/definition recall arms are skipped
+entirely -- including embedding the query itself -- and search degrades gracefully to
+lexical-only results, rather than paying for a model inference call whose output would be
+discarded.
 """
 import asyncio
 from collections.abc import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, EmbeddingKind
+from bioterms.database import Cache
 from bioterms.database.doc_db import DocumentDatabase
 from bioterms.database.vector_db import VectorDatabase
 from bioterms.embedding import TextTransformer
 from bioterms.model.concept import Concept
+from bioterms.vocabulary import get_vocabulary_status
 
 
 # The lexical recall arm is probed for more results than were actually requested, so that an
@@ -100,6 +108,7 @@ async def hybrid_search(query: str,
                         vector_db: VectorDatabase,
                         model_class: type[Concept] = Concept,
                         limit: int = 10,
+                        cache: Cache = None,
                         ) -> AsyncIterator[Concept]:
     """
     Search a vocabulary for concepts matching `query`, fusing lexical, alias-embedding, and
@@ -111,6 +120,7 @@ async def hybrid_search(query: str,
     :param vector_db: The vector database instance.
     :param model_class: The Concept subclass to instantiate results as.
     :param limit: The maximum number of concepts to return.
+    :param cache: The cache instance.
     :return: An async iterator of matching Concept instances, best match first.
     """
     normalized_query = query.strip()
@@ -120,16 +130,35 @@ async def hybrid_search(query: str,
     query_folded = normalized_query.casefold()
     probe_limit = max(limit, _EXACT_MATCH_PROBE_LIMIT)
 
-    query_vector = TextTransformer().embed_strings([normalized_query])[0]
+    # No embedding items loaded for this vocabulary (offline-only generation, restore not run
+    # yet, or a vocabulary type with no embedding step at all) means the alias/definition recall
+    # arms can only ever come back empty -- so skip embedding the query (and the two vector
+    # searches) entirely rather than paying for a model inference call whose result is
+    # guaranteed to be discarded. The vector count comes off the cached vocabulary status
+    # (`get_vocabulary_status` -- the same one `/data/status` uses, invalidated by
+    # `cache.rotate_dataset_version()` on every embed/restore) rather than a fresh
+    # `vector_db.count_vectors` call on every search request, so the common case (repeated
+    # searches between dataset changes) costs a cache read, not a live DB round trip.
+    vocab_status = await get_vocabulary_status(prefix=prefix, cache=cache, doc_db=doc_db, vector_db=vector_db)
+    vectors_loaded = vocab_status.vector_count > 0
 
-    lexical_results, alias_results, definition_results, exact_id_matches = await asyncio.gather(
-        doc_db.lexical_search(prefix=prefix, query=normalized_query, limit=probe_limit),
-        vector_db.search_items(query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.ALIAS, limit=limit),
-        vector_db.search_items(
-            query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.DEFINITION, limit=limit,
-        ),
-        doc_db.get_terms_by_ids(prefix=prefix, concept_ids=[normalized_query], model_class=model_class),
-    )
+    if vectors_loaded:
+        query_vector = TextTransformer().embed_strings([normalized_query])[0]
+
+        lexical_results, alias_results, definition_results, exact_id_matches = await asyncio.gather(
+            doc_db.lexical_search(prefix=prefix, query=normalized_query, limit=probe_limit),
+            vector_db.search_items(query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.ALIAS, limit=limit),
+            vector_db.search_items(
+                query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.DEFINITION, limit=limit,
+            ),
+            doc_db.get_terms_by_ids(prefix=prefix, concept_ids=[normalized_query], model_class=model_class),
+        )
+    else:
+        alias_results, definition_results = [], []
+        lexical_results, exact_id_matches = await asyncio.gather(
+            doc_db.lexical_search(prefix=prefix, query=normalized_query, limit=probe_limit),
+            doc_db.get_terms_by_ids(prefix=prefix, concept_ids=[normalized_query], model_class=model_class),
+        )
 
     lexical_ranked = [concept_id for concept_id, _score in lexical_results]
     alias_ranked = _dedupe_by_concept(alias_results)
