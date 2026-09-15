@@ -429,6 +429,7 @@ class PostgresGraphDatabase(GraphDatabase):
 
     async def refresh_closure_table(self,
                                     prefix: ConceptPrefix,
+                                    resume: bool = False,
                                     ):
         """
         Rebuild one vocabulary prefix's ancestor/descendant closure table over its current
@@ -436,14 +437,19 @@ class PostgresGraphDatabase(GraphDatabase):
         prefix it just saved; call this directly only if that prefix's hierarchy edges were
         changed through some other path.
         :param prefix: The vocabulary prefix to rebuild the closure table for.
+        :param resume: If True, continue from whatever depth was last committed (see
+            `_build_closure`) instead of truncating and starting over -- e.g. to extend a
+            prefix's closure from depth 2 to depth 5 without redoing the first two layers. Only
+            correct if the underlying edges have not changed since the last (partial) build;
+            use the default (False) whenever edges may have changed.
         """
         async with self.engine.begin() as conn:
             p = await self._ensure_prefix_schema(conn, prefix)
-            await self._build_closure(conn, p)
+        await self._build_closure(p, resume=resume)
 
     async def _build_closure(self,
-                             conn: AsyncConnection,
                              p: str,
+                             resume: bool = False,
                              ):
         """
         (Re)build the ancestor/descendant transitive closure table for one vocabulary prefix,
@@ -472,65 +478,110 @@ class PostgresGraphDatabase(GraphDatabase):
         file space on OHDSI's real hierarchy; a synthetic 7-layer, 12-wide fully-connected
         bipartite chain (864 edges, closure of 3,024 pairs) reproduces the same shape of blowup
         locally and took 56s with the old query against 0.15s here, for byte-identical results.
-        :param conn: The connection to execute on.
-        :param p: The safe table-name suffix for the prefix.
-        """
-        await conn.execute(text(f'TRUNCATE graph_closure_{p}'))
 
+        Each layer commits as its own transaction (on one long-lived connection, so the
+        `frontier` temp table survives across those commits) rather than the whole build being
+        one giant transaction -- OHDSI-scale layers can each take well over an hour, and a
+        single wrapping transaction means killing the process at any point loses *every*
+        layer, not just the in-flight one. `resume=True` picks up from `MAX(depth)` already
+        committed in `graph_closure_{p}` (reconstructing that depth's frontier from the closure
+        rows already recorded at it) instead of truncating, so a build stopped after layer 2 can
+        later be extended to layer 5 without redoing layers 1-2.
+        :param p: The safe table-name suffix for the prefix.
+        :param resume: Continue from the last committed depth instead of truncating. Only valid
+            if edges have not changed since that depth was committed.
+        """
         hierarchy_bind = bindparam('hierarchy_types', expanding=True)
         params = {'hierarchy_types': list(_HIERARCHY_REL_TYPES)}
         materialize_depth = min(CONFIG.postgres_graph_closure_depth, CONFIG.postgres_graph_closure_max_depth)
         frontier = f'closure_frontier_{p}'
 
-        await conn.execute(text(f'DROP TABLE IF EXISTS {frontier}'))
-        await conn.execute(text(
-            f'CREATE TEMP TABLE {frontier} (ancestor_id TEXT NOT NULL, descendant_id TEXT NOT NULL) '
-            f'ON COMMIT DROP'
-        ))
-        await conn.execute(text(f"""
-            INSERT INTO {frontier} (ancestor_id, descendant_id)
-            SELECT DISTINCT target_id, source_id
-            FROM graph_edge_{p}
-            WHERE rel_type IN :hierarchy_types
-        """).bindparams(hierarchy_bind), params)
+        async def advance_frontier() -> None:
+            """
+            Replace `frontier` with the next layer's brand-new candidate pairs: for each
+            current (ancestor, descendant) pair, climb one more hop up from `ancestor` via its
+            own is_a/part_of edges, keeping only pairs not already committed to the closure.
+            """
+            async with conn.begin():
+                next_frontier = f'{frontier}_next'
+                await conn.execute(text(f'DROP TABLE IF EXISTS {next_frontier}'))
+                await conn.execute(text(f"""
+                    CREATE TEMP TABLE {next_frontier} AS
+                    SELECT DISTINCT e.target_id AS ancestor_id, f.descendant_id AS descendant_id
+                    FROM {frontier} f
+                    JOIN graph_edge_{p} e ON e.source_id = f.ancestor_id AND e.rel_type IN :hierarchy_types
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM graph_closure_{p} c
+                        WHERE c.ancestor_id = e.target_id AND c.descendant_id = f.descendant_id
+                    )
+                """).bindparams(hierarchy_bind), params)
+                await conn.execute(text(f'DROP TABLE {frontier}'))
+                await conn.execute(text(f'ALTER TABLE {next_frontier} RENAME TO {frontier}'))
 
-        depth = 1
-        while True:
-            result = await conn.execute(text(f"""
-                INSERT INTO graph_closure_{p} (ancestor_id, descendant_id, depth)
-                SELECT ancestor_id, descendant_id, :depth FROM {frontier}
-                ON CONFLICT (ancestor_id, descendant_id) DO NOTHING
-            """), {'depth': depth})
+        async with self.engine.connect() as conn:
+            start_depth = 1
+            if resume:
+                async with conn.begin():
+                    max_depth_done = await conn.scalar(text(f'SELECT max(depth) FROM graph_closure_{p}'))
+                if max_depth_done is not None:
+                    if max_depth_done >= materialize_depth:
+                        return  # already built to (at least) the configured depth -- nothing to do
+                    start_depth = max_depth_done + 1
 
-            if result.rowcount == 0 or depth >= materialize_depth:
-                break
+            async with conn.begin():
+                await conn.execute(text(f'DROP TABLE IF EXISTS {frontier}'))
+                await conn.execute(text(
+                    f'CREATE TEMP TABLE {frontier} (ancestor_id TEXT NOT NULL, descendant_id TEXT NOT NULL)'
+                ))
+                if start_depth == 1:
+                    await conn.execute(text(f'TRUNCATE graph_closure_{p}'))
+                    await conn.execute(text(f"""
+                        INSERT INTO {frontier} (ancestor_id, descendant_id)
+                        SELECT DISTINCT target_id, source_id
+                        FROM graph_edge_{p}
+                        WHERE rel_type IN :hierarchy_types
+                    """).bindparams(hierarchy_bind), params)
+                else:
+                    # Resuming: seed with the pairs already committed at the last completed
+                    # depth, then advance one layer below so `frontier` holds brand-new
+                    # candidates for `start_depth` -- seeding it with the already-committed
+                    # pairs directly would just re-insert them and conflict-out to zero rows,
+                    # wrongly looking like the closure is already exhausted.
+                    await conn.execute(text(f"""
+                        INSERT INTO {frontier} (ancestor_id, descendant_id)
+                        SELECT ancestor_id, descendant_id FROM graph_closure_{p} WHERE depth = :depth
+                    """), {'depth': start_depth - 1})
+            if start_depth > 1:
+                await advance_frontier()
 
-            next_frontier = f'{frontier}_next'
-            await conn.execute(text(f'DROP TABLE IF EXISTS {next_frontier}'))
-            await conn.execute(text(f"""
-                CREATE TEMP TABLE {next_frontier} AS
-                SELECT DISTINCT e.target_id AS ancestor_id, f.descendant_id AS descendant_id
-                FROM {frontier} f
-                JOIN graph_edge_{p} e ON e.source_id = f.ancestor_id AND e.rel_type IN :hierarchy_types
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM graph_closure_{p} c
-                    WHERE c.ancestor_id = e.target_id AND c.descendant_id = f.descendant_id
-                )
-            """).bindparams(hierarchy_bind), params)
+            depth = start_depth
+            is_complete = False
+            while True:
+                async with conn.begin():
+                    result = await conn.execute(text(f"""
+                        INSERT INTO graph_closure_{p} (ancestor_id, descendant_id, depth)
+                        SELECT ancestor_id, descendant_id, :depth FROM {frontier}
+                        ON CONFLICT (ancestor_id, descendant_id) DO NOTHING
+                    """), {'depth': depth})
+                    rowcount = result.rowcount
 
-            await conn.execute(text(f'DROP TABLE {frontier}'))
-            await conn.execute(text(f'ALTER TABLE {next_frontier} RENAME TO {frontier}'))
+                # rowcount == 0 means this layer had nothing new to add -- the closure is
+                # genuinely exhausted, not merely cut off by materialize_depth -- so it's safe
+                # to treat graph_closure_{p} as the complete answer regardless of query depth.
+                if rowcount == 0:
+                    is_complete = True
+                    break
+                if depth >= materialize_depth:
+                    break
 
-            depth += 1
+                await advance_frontier()
+                depth += 1
 
-        # rowcount == 0 means the last attempted layer had nothing new to add -- the closure is
-        # genuinely exhausted, not merely cut off by materialize_depth -- so it's safe to treat
-        # graph_closure_{p} as the complete answer for this prefix regardless of query depth.
-        is_complete = result.rowcount == 0
-        await conn.execute(text("""
-            INSERT INTO graph_closure_status (prefix, is_complete) VALUES (:p, :is_complete)
-            ON CONFLICT (prefix) DO UPDATE SET is_complete = EXCLUDED.is_complete
-        """), {'p': p, 'is_complete': is_complete})
+            async with conn.begin():
+                await conn.execute(text("""
+                    INSERT INTO graph_closure_status (prefix, is_complete) VALUES (:p, :is_complete)
+                    ON CONFLICT (prefix) DO UPDATE SET is_complete = EXCLUDED.is_complete
+                """), {'p': p, 'is_complete': is_complete})
 
     # ------------------------------------------------------------------
     # Vocabulary graph CRUD
@@ -616,9 +667,10 @@ class PostgresGraphDatabase(GraphDatabase):
         # data, since for Neo4j index creation is just a structural, order-independent
         # DDL statement. This driver's closure table is a full recompute of the
         # is_a/part_of transitive closure, which needs the edges above to already exist,
-        # so it is (re)built here, once this call's edges are actually in place.
-        async with self.engine.begin() as conn:
-            await self._build_closure(conn, p)
+        # so it is (re)built here, once this call's edges are actually in place. Not passed
+        # resume=True: a fresh vocabulary save means the edges just changed, so any earlier
+        # partial closure for this prefix must not be trusted -- always rebuild from scratch.
+        await self._build_closure(p)
 
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,

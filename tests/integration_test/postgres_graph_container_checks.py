@@ -322,6 +322,60 @@ async def test_closure_depth_cap_falls_back_to_live_traversal_beyond_it(graph_db
 
 
 @pytest.mark.asyncio
+async def test_refresh_closure_table_resume_extends_without_redoing_earlier_layers(graph_db, monkeypatch):
+    """
+    Each closure layer commits on its own (see `_build_closure`'s per-layer `conn.begin()`
+    blocks) rather than the whole build being one transaction -- so stopping a build partway
+    through must leave the already-committed layers intact, and `resume=True` must be able to
+    pick up from there and reach the same final answer as a non-resumed build to full depth,
+    without re-deriving the layers it already had.
+    """
+    monkeypatch.setattr(CONFIG, 'postgres_graph_closure_depth', 2)
+
+    # A 5-node straight chain, depth 4 end-to-end: n0 -is_a-> n1 -is_a-> ... -is_a-> n4.
+    concepts = [make_concept(ConceptPrefix.HPO, f'n{i}') for i in range(5)]
+    g = nx.MultiDiGraph()
+    for i in range(4):
+        g.add_edge(f'n{i}', f'n{i + 1}', key='is_a', label=ConceptRelationshipType.IS_A)
+
+    await graph_db.save_vocabulary_graph(concepts, g)
+
+    engine = graph_db.engine
+    async with engine.connect() as conn:
+        max_depth_after_first_build = await conn.scalar(text('SELECT max(depth) FROM graph_closure_hpo'))
+        rows_after_first_build = await conn.scalar(text('SELECT count(*) FROM graph_closure_hpo'))
+    assert max_depth_after_first_build == 2
+    assert rows_after_first_build == 7  # depth-1: n0-n1,n1-n2,n2-n3,n3-n4 (4); depth-2: n0-n2,n1-n3,n2-n4 (3)
+
+    # Extend to depth 4 (the chain's real full depth) via resume -- must not touch the two
+    # layers already committed, only add depth 3 and 4.
+    monkeypatch.setattr(CONFIG, 'postgres_graph_closure_depth', 4)
+    await graph_db.refresh_closure_table(ConceptPrefix.HPO, resume=True)
+
+    async with engine.connect() as conn:
+        result = await conn.execute(text('SELECT ancestor_id, descendant_id, depth FROM graph_closure_hpo ORDER BY depth'))
+        final_rows = result.all()
+    by_depth = {}
+    for r in final_rows:
+        by_depth.setdefault(r.depth, set()).add((r.ancestor_id, r.descendant_id))
+
+    assert by_depth[1] == {('n1', 'n0'), ('n2', 'n1'), ('n3', 'n2'), ('n4', 'n3')}
+    assert by_depth[2] == {('n2', 'n0'), ('n3', 'n1'), ('n4', 'n2')}
+    assert by_depth[3] == {('n3', 'n0'), ('n4', 'n1')}
+    assert by_depth[4] == {('n4', 'n0')}
+
+    # Resuming again once already-complete is a safe no-op.
+    await graph_db.refresh_closure_table(ConceptPrefix.HPO, resume=True)
+    async with engine.connect() as conn:
+        unchanged_rows = await conn.scalar(text('SELECT count(*) FROM graph_closure_hpo'))
+    assert unchanged_rows == 10  # 4 + 3 + 2 + 1
+
+    # And it matches a from-scratch build to the same final depth.
+    ancestors = await graph_db.trace_ancestors(ConceptPrefix.HPO, ['n0'])
+    assert set(ancestors[0].related_concepts) == {'n1', 'n2', 'n3', 'n4'}
+
+
+@pytest.mark.asyncio
 async def test_save_vocabulary_graph_keeps_nodes_and_edges_if_closure_build_fails(graph_db, monkeypatch):
     """
     Nodes and edges are committed as their own batches, ahead of the final closure rebuild --
@@ -330,7 +384,7 @@ async def test_save_vocabulary_graph_keeps_nodes_and_edges_if_closure_build_fail
     node/edge data that was already saved, so a retry only has to redo the closure, not
     potentially hours of node/edge upserts.
     """
-    async def failing_build_closure(self, conn, p):
+    async def failing_build_closure(self, p, resume=False):
         raise RuntimeError('simulated closure failure')
 
     monkeypatch.setattr(type(graph_db), '_build_closure', failing_build_closure)
