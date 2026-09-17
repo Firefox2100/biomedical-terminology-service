@@ -1,7 +1,6 @@
 import runpy
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from bioterms.etc.consts import CONFIG

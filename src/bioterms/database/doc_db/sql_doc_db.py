@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 from sqlalchemy import Column, ForeignKey, Index, MetaData, String, DateTime, Table, Text, and_, \
-    bindparam, case, delete, func, insert, intersect, literal_column, or_, update, literal, select, text
+    case, delete, func, insert, intersect, literal_column, or_, update, literal, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert

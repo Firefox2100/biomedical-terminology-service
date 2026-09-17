@@ -6,7 +6,7 @@ os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 import pytest
 
-from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptRelationshipType, ConceptStatus, \
+from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, \
     EmbeddingKind, SimilarityMethod
 from bioterms.model.concept import Concept
 from bioterms.model.concept_path import ConceptPath, NodeInPath

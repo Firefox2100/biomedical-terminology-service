@@ -1,6 +1,4 @@
 import json
-import os
-
 import pytest
 
 from bioterms.etc.consts import CONFIG

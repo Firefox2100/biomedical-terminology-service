@@ -12,7 +12,7 @@ import hashlib
 import base64
 from typing import Annotated
 from uuid import UUID
-from urllib.parse import urlencode, urlparse, quote
+from urllib.parse import urlencode, urlparse
 from markdown import markdown
 from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse

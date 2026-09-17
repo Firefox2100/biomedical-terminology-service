@@ -8,7 +8,6 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
-from .hgnc import download_vocabulary
 from .utils import write_concepts_to_file, write_graph_to_file
 
 

@@ -3,14 +3,11 @@ Router for mapping concepts between different vocabularies.
 """
 
 from typing import Annotated, List
-from pydantic import Field, ConfigDict
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType, AnnotationType
-from bioterms.etc.metrics import MAP_REQS, MAP_ROOTS, MAP_HOPS, MAP_LIMIT
 from bioterms.database import GraphDatabase, get_active_graph_db
-from bioterms.model.base import JsonModel
 from bioterms.model.concept_path import ConceptPath
 from .utils import response_generator
 

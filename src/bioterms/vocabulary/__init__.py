@@ -591,25 +591,11 @@ async def restore_vocabulary(prefix: ConceptPrefix,
     Restore a vocabulary from offline dump files (produced by `load_vocabulary(prefix,
     offline=True)`) into the live databases.
 
-    Unlike the standalone `scripts/load_offline_vocabulary.py` script this replaces, restoring
-    goes through the same `DocumentDatabase`/`GraphDatabase`/`VectorDatabase` interfaces as a
-    normal (non-offline) `load_vocabulary` call, so it automatically adapts to whichever
-    concrete drivers are configured (MongoDB or SQL for documents, Neo4j or PostgreSQL for the
-    graph, Qdrant/MongoDB/PostgreSQL for vectors) instead of assuming MongoDB+Neo4j+Qdrant --
-    including the native-vs-fallback auto-complete search indexing chosen per document database
-    backend (see `DocumentDatabase.create_index`), which this picks up for free by reusing
-    `create_indexes`/`save_terms` rather than hand-rolling an "nGrams" index.
+    Restoration uses the configured document, graph, and vector database interfaces.
 
-    Similarity dumps are restored separately, via `similarity.restore_similarity` -- similarity
-    is not part of a vocabulary's core data (it may not exist yet, may be recomputed with a
-    different method later, and is keyed by target vocabulary rather than owned by it the way
-    documents/graph edges are), so it gets its own CLI command rather than a flag here.
+    Similarity dumps are restored separately with `similarity.restore_similarity`.
 
-    Restoring proceeds in three independent steps -- documents (`.doc.dump`), then graph nodes
-    (`.node_ids.dump`), then graph edges (`.graph.dump`) -- deliberately not short-circuited by
-    one another, so a masked/partial restore where one dump is empty (e.g. rebuilding only the
-    graph half, with an empty `.doc.dump`) still restores whichever dumps do have content
-    instead of silently dropping or mis-prefixing the graph nodes.
+    Documents, graph nodes, and graph edges restore independently so partial dumps are valid.
     :param prefix: The prefix of the vocabulary to restore.
     :param overwrite: Whether to drop any existing data for this vocabulary before restoring.
         When False (default), documents/graph edges/embeddings are safely upserted into

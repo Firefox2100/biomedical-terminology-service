@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""
-Fine-tune a ColBERT-style late-interaction reranker on the query-group JSONL + concept-store
-JSONL produced by `build_training_data.py`. Standalone: no bioterms/database dependency, only
-the ML stack (pylate, sentence-transformers, datasets, torch) -- runs on an HPC cluster with
-no access to the production databases.
+"""Train and evaluate a ColBERT-style reranker from mined query groups.
 
-Pipeline: mined query group -> concept-grouped split -> temperature-balanced vocabulary
-sampling -> preferred-label-query downsampling -> per-occurrence render augmentation -> gold +
-distinct hard-negative concepts -> ColBERT contrastive training -> candidate-set ranking
-evaluation. See README.md for the full design and rationale.
+This standalone script depends on the ML stack but not the service or its databases.
 """
 import argparse
 import hashlib
@@ -445,7 +438,7 @@ def _build_eval_triplets(groups: list[dict],
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Fine-tune a ColBERT-style late-interaction concept-normalisation reranker. See README.md.',
+        description='Fine-tune a ColBERT-style late-interaction concept-normalisation reranker.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -475,7 +468,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         '--preferred-label-query-keep-probability', type=float, default=0.1,
-        help='Fraction of preferred-label queries (query == gold label) to keep; the rest are dropped -- see README.',
+        help='Fraction of preferred-label queries (query == gold label) to keep.',
     )
     parser.add_argument(
         '--max-aliases-rendered', type=int, default=6,

@@ -1,38 +1,9 @@
 #!/usr/bin/env python3
-"""Download and load the NHS Read v2 data migration package as a transient overlay.
+"""Load NHS Read v2 migration mappings as a transient graph overlay.
 
-Read v2 itself is a retired vocabulary this project cannot obtain or license directly
-(see docs/CLAUDE.md's provenance notes) -- OHDSI's own 'read' sub-vocabulary is the only
-Read v2 content already in this graph, and its nodes have no path at all to CTV3 or SNOMED
-(degree exactly 1, connected only to their own OHDSI standard-concept mapping). NHS's data
-migration package (TRUD item 9) is still downloadable, though, and contains "Clinically
-Assured" mapping tables between Read v2, CTV3, and SNOMED CT that were produced specifically
-to support migrating legacy Read v2 systems onto SNOMED CT.
-
-This script loads four of those mapping tables as ANNOTATED_WITH annotations directly onto
-the existing OHDSI 'read'/CTV3/SNOMED nodes, each tagged with
-properties={'source': 'nhs_read_v2_migration_29.0.0', ...raw NHS map metadata...} so they
-are trivially identifiable and strippable later. This is NOT a canonical bts vocabulary:
-it is not registered in bioterms.vocabulary.utils.ALL_VOCABULARIES, does not get its own
-ConceptPrefix, and is not part of the normal `bioterms-cli vocabulary` load flow -- run this
-script directly instead. It exists to give the research project
-(biomedical-graph-research) a structural signal for the previously-undetectable
-OHDSI-read/CTV3/SNOMED shared-lineage risk; production bts does not depend on it.
-
-Four mapping directions are loaded:
-  - v2 -> v3   (rctctv3map_uk_*.txt)
-  - v3 -> v2   (ctv3rctmap_uk_*.txt, backward mapping)
-  - v2 -> SNOMED (rcsctmap2_uk_*.txt)
-  - v3 -> SNOMED (ctv3sctmap2_uk_*.txt) -- redundant with the *native* ctv3<->snomed
-    annotated_with edges snomed.py already loads from SNOMED's own RF2 release, kept
-    deliberately: comparing the two is itself a research signal for whether they share
-    origin, which is the open question this overlay exists to make inspectable.
-
-Read v2 mapping-file rows are versioned like RF2 (a MAPID/MapId repeats across historical
-revisions, distinguished by EFFECTIVEDATE/EffectiveDate); only the latest revision per id,
-with MAPSTATUS/MapStatus == '1' (currently active), is loaded -- confirmed against real
-release data that an inactivated row is not always the same as the first one encountered
-for a given id.
+The overlay links existing OHDSI Read, CTV3, and SNOMED nodes in four directions and tags
+each annotation with its NHS source metadata. It is not a registered vocabulary or part of
+the normal vocabulary load flow. Only the latest active revision of each mapping is loaded.
 
 Usage:
     python scripts/load_read_v2_migration.py [--skip-download] [--download-only]
@@ -70,11 +41,7 @@ TRUD_ITEM_ID = 9
 
 
 async def download_migration_package(download_client: httpx.AsyncClient = None):
-    """
-    Download the NHS data migration package (TRUD item 9) and extract the four mapping
-    tables this overlay needs, under data/read_v2_migration/.
-    :param download_client: Optional httpx.AsyncClient to use for downloading.
-    """
+    """Download and extract the required NHS migration tables."""
     if check_files_exist(list(FILE_PATHS.values())):
         verbose_print('Read v2 migration files already present, skipping download.')
         return
@@ -110,17 +77,7 @@ def _load_current_rows(file_path: str,
                        effective_date_column: str,
                        status_column: str,
                        ) -> pd.DataFrame:
-    """
-    Read an NHS mapping table and keep only the latest revision (by effective date) of each
-    mapping id, filtered to currently-active rows (status == '1'). Mirrors
-    bioterms.etc.utils.rf2_dataframe_deduplicate's convention, applied to these
-    differently-named/differently-cased NHS columns rather than RF2's own.
-    :param file_path: Path to the mapping table file.
-    :param id_column: Name of the column identifying one logical mapping across revisions.
-    :param effective_date_column: Name of the column giving each revision's effective date.
-    :param status_column: Name of the column whose '1' value means "currently active".
-    :return: The deduplicated, active-only dataframe.
-    """
+    """Return the latest active revision of each mapping."""
     df = pd.read_csv(file_path, sep='\t', dtype=str)
     df = df.sort_values(by=[id_column, effective_date_column], ascending=[True, False])
     df = df.drop_duplicates(subset=[id_column], keep='first')
@@ -129,32 +86,14 @@ def _load_current_rows(file_path: str,
 
 
 def _read_v2_full_code(concept_code, term_code) -> str:
-    """
-    Build the full 7-character Read v2 term code (5-char concept code + 2-char term code)
-    OHDSI uses as its 'Read' vocabulary_id concept_code. Confirmed against real data: NHS's
-    migration tables carry the Read v2 concept code and term code as SEPARATE columns
-    (e.g. V2_CONCEPTID='0....', V2_TERMID='00'), but OHDSI's CONCEPT.csv concatenates them
-    into one 7-char code ('0....00') -- joining on V2_CONCEPTID alone silently matches
-    almost nothing (empirically: 1 of ~160k rows in the real release).
-    :param concept_code: The 5-character Read v2 concept code column value.
-    :param term_code: The 2-character Read v2 term code column value (may be NaN/None).
-    :return: The concatenated 7-character code.
-    """
+    """Build the seven-character Read code used by OHDSI."""
     if pd.isna(term_code):
         term_code = ''
     return f'{concept_code}{term_code}'
 
 
 def _load_ohdsi_read_code_lookup() -> dict[str, str]:
-    """
-    Build a Read v2 code -> OHDSI internal concept_id lookup, restricted to OHDSI's own
-    'Read' vocabulary_id rows (its 'read' sub-vocabulary). This is the join needed to attach
-    the migration package's raw Read v2 codes onto the actual OHDSI nodes already in the
-    graph -- bts's OhdsiConcept nodes are keyed by OHDSI's own concept_id, not by the Read
-    code itself.
-    :return: A dict mapping Read v2 code (OHDSI's concept_code) to OHDSI's concept_id.
-    :raises FilesNotFound: If OHDSI's CONCEPT.csv is not present.
-    """
+    """Map Read v2 codes to OHDSI concept IDs."""
     concept_path = os.path.join(CONFIG.data_dir, OHDSI_CONCEPT_FILE)
     if not os.path.exists(concept_path):
         raise FilesNotFound(
@@ -186,12 +125,7 @@ def _build_annotation(prefix_from: ConceptPrefix,
                       map_type: str | None,
                       is_assured: str | None,
                       ) -> Annotation:
-    """
-    Build one overlay Annotation, tagged with the raw NHS map metadata rather than any
-    identity-preservation judgment -- whether a given direction/map_type combination should
-    be treated as identity-preserving is a relations.yaml decision for the consuming
-    project, not something asserted here.
-    """
+    """Build an overlay annotation without asserting identity preservation."""
     return Annotation(
         prefixFrom=prefix_from,
         conceptIdFrom=concept_id_from,
@@ -208,11 +142,7 @@ def _build_annotation(prefix_from: ConceptPrefix,
 
 
 def build_overlay_annotations() -> list[Annotation]:
-    """
-    Read all four mapping tables and the OHDSI Read v2 code lookup, and build the full list
-    of overlay Annotation instances to save.
-    :return: The list of built Annotation instances.
-    """
+    """Build annotations from all four migration mapping tables."""
     ohdsi_read_lookup = _load_ohdsi_read_code_lookup()
     verbose_print(f'Loaded {len(ohdsi_read_lookup)} OHDSI Read-vocabulary concept codes.')
 

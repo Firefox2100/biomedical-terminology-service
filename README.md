@@ -46,7 +46,7 @@ In some countries or regions, usage of this software or the data it intends to w
 
 For complete installation instructions, refer to the [Installation Guide](https://biomedical-terminology-service.readthedocs.io/en/latest/installation.html). Below is a quick start using docker-compose:
 
-This software releases pre-built images on [Docker Hub](https://hub.docker.com/r/firefox2100/biomedical-terminology-service). The easiest way to get started is to use the provided `docker-compose.yml` file. You can run the following command in the terminal:
+This software releases pre-built images on [Docker Hub](https://hub.docker.com/r/firefox2100/biomedical-terminology-service). The easiest way to get started is to use the provided `docker-compose.yaml` file. You can run the following command in the terminal:
 
 ```bash
 git clone https://github.com/Firefox2100/biomedical-terminology-service.git

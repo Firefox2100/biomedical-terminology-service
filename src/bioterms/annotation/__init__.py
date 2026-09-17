@@ -351,8 +351,7 @@ async def get_annotation_status(prefix_1: ConceptPrefix,
 
 def _infer_annotation_dump_prefixes(path: Path) -> tuple[str | None, str | None]:
     """
-    Infer zero, one, or two fallback prefixes from an annotation dump filename, mirroring
-    `scripts/load_offline_annotations.py`'s `infer_prefixes`.
+    Infer zero, one, or two fallback prefixes from an annotation dump filename.
     :param path: The annotation dump file path.
     :return: The (source, target) prefix strings inferred from the filename, or None each if
         the filename carries no prefix information (a bare `.annotation.dump`).
@@ -375,10 +374,7 @@ def _infer_annotation_dump_prefixes(path: Path) -> tuple[str | None, str | None]
 
 def _canonical_annotation_prefix(value: str | ConceptPrefix | None) -> str | ConceptPrefix | None:
     """
-    Normalise a prefix value to a `ConceptPrefix` where possible, or a lowercase string for
-    vocabularies not registered as a `ConceptPrefix` (e.g. an external vocabulary such as MeSH
-    appearing only in a cross-reference annotation), mirroring the original script's
-    `canonical_prefix`.
+    Normalise a prefix to a `ConceptPrefix` or a lowercase string for external vocabularies.
     :param value: The raw prefix value (string or ConceptPrefix), or None.
     :return: The normalised prefix, or None if `value` was None/blank.
     """
@@ -403,13 +399,12 @@ async def restore_annotation(dump_path: str | os.PathLike,
     Restore an annotation dump file (produced by `load_annotation(..., offline=True)`, i.e.
     `write_annotations_to_file`) into the live graph database.
 
-    Each row carries its own source/target prefix and CURIE columns, so -- like
-    `scripts/load_offline_annotations.py`, which this replaces -- restoring does not require
-    knowing the (prefix_1, prefix_2) annotation pair up front: `source_prefix`/`target_prefix`
+    Each row carries source/target prefix and CURIE columns, so restoring does not require
+    knowing the annotation pair up front. `source_prefix` and `target_prefix`
     (explicit, or inferred from the dump filename when omitted) are used only as a fallback for
     rows where a prefix column is empty. This goes through `GraphDatabase.save_annotations`
     (the same interface `load_annotation` itself uses when not offline) rather than talking to
-    Neo4j directly, so it works unmodified against the PostgreSQL graph driver too.
+    Neo4j directly, so it also works with the PostgreSQL graph driver.
     :param dump_path: Path to a `<prefix1>[-<prefix2>].annotation.dump` file.
     :param source_prefix: Fallback source prefix, overriding filename inference.
     :param target_prefix: Fallback target prefix, overriding filename inference.

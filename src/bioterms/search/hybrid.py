@@ -1,23 +1,7 @@
-"""
-Hybrid concept search: fuses three independent recall arms -- lexical (BM25/native full-text
-ranking, or n-gram overlap where a backend has neither), alias-embedding (a concept's label
-and each of its synonyms, individually embedded), and definition-embedding -- into a single
-ranked list of concepts, via Reciprocal Rank Fusion (RRF).
+"""Hybrid lexical and vector concept search using Reciprocal Rank Fusion.
 
-An exact match (the query string equals a concept's ID, label, or a synonym, case-
-insensitively) bypasses RRF entirely and is pinned to the front of the results: rank-based
-fusion can otherwise bury a short, exact term under a flood of merely-similar embeddings or
-partial lexical hits, which is the one failure mode this is designed to categorically avoid.
-
-This module is the single implementation shared by the REST `/search/v1` endpoint, the
-GraphQL `search` resolver, and the MCP `search_vocabulary` tool -- previously each of the
-three duplicated the same "embed query, run vector search, fetch documents" logic.
-
-When a vocabulary has no embedding items loaded in the vector database (embedding was never
-run, or only ever run offline without a restore), the alias/definition recall arms are skipped
-entirely -- including embedding the query itself -- and search degrades gracefully to
-lexical-only results, rather than paying for a model inference call whose output would be
-discarded.
+Exact ID, label, and synonym matches are pinned first. Vocabularies without embeddings fall
+back to lexical search without running the embedding model.
 """
 import asyncio
 from collections.abc import AsyncIterator
@@ -32,32 +16,21 @@ from bioterms.model.concept import Concept
 from bioterms.vocabulary import get_vocabulary_status
 
 
-# The lexical recall arm is probed for more results than were actually requested, so that an
-# exact label/synonym match -- which lexical scoring puts at or near the top of its own
-# ranking -- is reliably present for the exact-match check below even when `limit` is small.
-# This avoids needing a dedicated normalised-equality index/column across every document
-# database backend just to guarantee exact-match recall.
+# Probe beyond the requested limit so lexical exact matches remain available for pinning.
 _EXACT_MATCH_PROBE_LIMIT = 50
 
 
 def _reciprocal_rank_fusion(ranked_lists: list[list[str]],
                             k: int,
                             ) -> list[str]:
-    """
-    Fuse several best-first ranked lists of concept IDs into one, by Reciprocal Rank Fusion:
-    score(c) = sum, over every list containing c, of 1 / (k + rank), rank being 1-based.
-    :param ranked_lists: The recall arms' ranked concept ID lists.
-    :param k: The RRF k constant (see `BTS_SEARCH_RRF_K`).
-    :return: Concept IDs ordered by fused score, best first.
-    """
+    """Fuse best-first concept rankings using Reciprocal Rank Fusion."""
     scores: dict[str, float] = {}
 
     for ranked in ranked_lists:
         seen: set[str] = set()
         for rank, concept_id in enumerate(ranked, start=1):
             if concept_id in seen:
-                # A recall arm should not repeat a concept ID, but guard anyway so a
-                # misbehaving arm can't double-count itself.
+                # Do not let one recall arm count the same concept twice.
                 continue
             seen.add(concept_id)
             scores[concept_id] = scores.get(concept_id, 0.0) + 1.0 / (k + rank)
@@ -66,13 +39,7 @@ def _reciprocal_rank_fusion(ranked_lists: list[list[str]],
 
 
 def _dedupe_by_concept(items: list[tuple[str, str, float]]) -> list[str]:
-    """
-    Collapse a vector search arm's (concept_id, item_text, score) hits -- several items (e.g.
-    two different synonyms) can belong to the same concept -- into one best-first concept ID
-    ranking, keeping each concept's first (best-scoring) occurrence.
-    :param items: (concept_id, item_text, score) tuples, best match first.
-    :return: A best-first list of distinct concept IDs.
-    """
+    """Keep the best-ranked vector hit for each concept."""
     seen: set[str] = set()
     ordered: list[str] = []
 
@@ -88,13 +55,7 @@ def _dedupe_by_concept(items: list[tuple[str, str, float]]) -> list[str]:
 def _is_exact_match(concept: Concept,
                     query_folded: str,
                     ) -> bool:
-    """
-    Whether a concept's ID, label, or any synonym exactly matches the query (concept ID
-    compared as-is, since IDs are not casing-conventional; label/synonyms case-insensitively).
-    :param concept: The concept to check.
-    :param query_folded: The case-folded query string.
-    :return: True if this is an exact match.
-    """
+    """Return whether the ID, label, or a synonym exactly matches the query."""
     if concept.concept_id.casefold() == query_folded:
         return True
 
