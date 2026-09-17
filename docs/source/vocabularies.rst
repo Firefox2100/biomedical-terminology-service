@@ -23,7 +23,9 @@ OHDSI                        Supported          No public download API. The rele
 OMIM                         Supported          Downloaded from the BioPortal API.
 ORDO                         Supported          Downloaded from the BioPortal API.
 Reactome                     Supported          Reactome only releases a Neo4j/SQL dump; this project provides a script
-                                                 to convert that dump into the CSV import format it expects.
+                                                 to convert that dump into the CSV import format it expects. Pathways,
+                                                 reactions, genes, complexes, entity sets, simple entities, drugs,
+                                                 polymers, cells, and other stable physical entities are first-class.
 SNOMED CT                    Supported          Downloaded from the NHS TRUD API, including its historical Association
                                                  Reference Set files (SAME_AS/REPLACED_BY/WAS_A/etc, loaded as
                                                  ``snomed_association`` relationships).
@@ -78,10 +80,14 @@ Mondo - OMIM          Derived from cross-references in the Mondo release.
 Mondo - ORDO          Derived from cross-references in the Mondo release.
 Mondo - SNOMED        Derived from cross-references in the Mondo release.
 NCIT - OHDSI          Derived from the OHDSI release.
+NCIT - Reactome       Reactome ReferenceEntity records for stable Reactome drug entities.
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
-Reactome - UniProt    UniProt accession Reactome's own gene/protein records reference. Loaded explicitly as a normal annotation.
+Reactome - Ensembl    Reactome ReferenceEntity records plus Reactome's Ensembl2Reactome pathway mapping.
+Reactome - HGNC       Reactome ReferenceEntity ``referenceGene`` records.
+Reactome - OMIM       Reactome ReferenceEntity ``referenceGene`` records.
+Reactome - UniProt    UniProt accessions from Reactome ReferenceEntity records.
 ===================== =====================================================================================================================================================
 
 Annotation pairs that are derived from a vocabulary's own release files (Mondo's cross-references, or a vocabulary's own gene/mapping file) do not require a separate download step or credential beyond what the parent vocabulary already needs.

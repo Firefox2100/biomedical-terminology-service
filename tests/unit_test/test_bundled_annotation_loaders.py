@@ -2,7 +2,8 @@ import gzip
 
 import pytest
 
-from bioterms.annotation import gene_omim, gene_uniprot, reactome_uniprot
+from bioterms.annotation import gene_omim, gene_uniprot, hgnc_reactome, ncit_reactome, \
+    omim_reactome, reactome_uniprot
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
 
@@ -92,8 +93,8 @@ DR   HGNC; HGNC:1; TEST1.
 async def test_explicit_reactome_uniprot_load(monkeypatch, tmp_path):
     reactome_dir = tmp_path / 'reactome'
     reactome_dir.mkdir()
-    (reactome_dir / 'gene_mapping.csv').write_text(
-        'gene_id,symbol\nR-HSA-1,P68104\n'
+    (reactome_dir / 'uniprot_mapping.csv').write_text(
+        'reactome_id,external_id\nR-HSA-1,P68104\n'
     )
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
     graph_db = FakeGraphDb()
@@ -107,4 +108,34 @@ async def test_explicit_reactome_uniprot_load(monkeypatch, tmp_path):
     assert annotation.concept_id_from == 'R-HSA-1'
     assert annotation.concept_id_to == 'P68104'
     assert annotation.annotation_type == AnnotationType.EXACT
-    assert annotation.properties == {'source': 'Reactome UniProt mapping'}
+    assert annotation.properties == {'source': 'Reactome ReferenceEntity'}
+
+
+@pytest.mark.asyncio
+async def test_reactome_reference_entity_hgnc_and_omim_loaders(monkeypatch, tmp_path):
+    reactome_dir = tmp_path / 'reactome'
+    reactome_dir.mkdir()
+    (reactome_dir / 'hgnc_mapping.csv').write_text(
+        'reactome_id,external_id\nR-HSA-1,3189\n'
+    )
+    (reactome_dir / 'omim_mapping.csv').write_text(
+        'reactome_id,external_id\nR-HSA-1,130590\n'
+    )
+    (reactome_dir / 'ncit_mapping.csv').write_text(
+        'reactome_id,external_id\nR-ALL-2,C119619\n'
+    )
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    graph_db = FakeGraphDb()
+
+    await hgnc_reactome.load_annotation_from_file(graph_db=graph_db)
+    await omim_reactome.load_annotation_from_file(graph_db=graph_db)
+    await ncit_reactome.load_annotation_from_file(graph_db=graph_db)
+
+    assert [(a.prefix_to, a.concept_id_to) for a in graph_db.annotations] == [
+        (ConceptPrefix.HGNC, '3189'),
+        (ConceptPrefix.OMIM, '130590'),
+        (ConceptPrefix.NCIT, 'C119619'),
+    ]
+    assert graph_db.annotations[0].properties is None
+    assert graph_db.annotations[1].properties == {'source': 'Reactome ReferenceEntity'}
+    assert graph_db.annotations[2].properties == {'source': 'Reactome ReferenceEntity'}

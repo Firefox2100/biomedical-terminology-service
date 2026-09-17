@@ -102,6 +102,11 @@ async def test_uniprot_mapping_targets_proteins_and_excludes_isoforms(monkeypatc
 async def test_reactome_mapping_filters_to_human_ensembl_ids(monkeypatch, tmp_path):
     path = tmp_path / 'ensembl' / 'mapping'
     path.mkdir(parents=True)
+    reactome_path = tmp_path / 'reactome'
+    reactome_path.mkdir()
+    (reactome_path / 'ensembl_mapping.csv').write_text(
+        'reactome_id,external_id\nR-HSA-3,ENST1\n'
+    )
     (path / 'reactome.tsv').write_text(
         'ENSG1\tR-HSA-1\turl\tPathway\tTAS\tHomo sapiens\n'
         'ENSG2\tR-MMU-1\turl\tPathway\tIEA\tMus musculus\n'
@@ -112,10 +117,14 @@ async def test_reactome_mapping_filters_to_human_ensembl_ids(monkeypatch, tmp_pa
 
     await ensembl_reactome.load_annotation_from_file(graph)
 
-    assert [(a.concept_id_from, a.concept_id_to) for a in graph.annotations] == [('R-HSA-1', 'ENSG1')]
-    assert graph.annotations[0].prefix_from == ConceptPrefix.REACTOME
-    assert graph.annotations[0].prefix_to == ConceptPrefix.ENSEMBL
-    assert graph.annotations[0].properties['source'] == 'Reactome Ensembl2Reactome'
+    assert {(a.concept_id_from, a.concept_id_to) for a in graph.annotations} == {
+        ('R-HSA-1', 'ENSG1'), ('R-HSA-3', 'ENST1'),
+    }
+    assert all(a.prefix_from == ConceptPrefix.REACTOME for a in graph.annotations)
+    assert all(a.prefix_to == ConceptPrefix.ENSEMBL for a in graph.annotations)
+    assert {a.properties['source'] for a in graph.annotations} == {
+        'Reactome Ensembl2Reactome', 'Reactome ReferenceEntity',
+    }
 
 
 @pytest.mark.asyncio

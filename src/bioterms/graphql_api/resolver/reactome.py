@@ -15,6 +15,7 @@ REACTOME_CONCEPT = InterfaceType('ReactomeConcept')
 REACTOME_PATHWAY = ObjectType('ReactomePathway')
 REACTOME_REACTION = ObjectType('ReactomeReaction')
 REACTOME_GENE = ObjectType('ReactomeGene')
+REACTOME_PHYSICAL_ENTITY = ObjectType('ReactomePhysicalEntity')
 REACTOME_QUERY = ObjectType('ReactomeQuery')
 
 
@@ -30,6 +31,10 @@ REACTOME_QUERY = ObjectType('ReactomeQuery')
 @REACTOME_GENE.field('label')
 @REACTOME_GENE.field('inferred')
 @REACTOME_GENE.field('status')
+@REACTOME_PHYSICAL_ENTITY.field('prefix')
+@REACTOME_PHYSICAL_ENTITY.field('label')
+@REACTOME_PHYSICAL_ENTITY.field('inferred')
+@REACTOME_PHYSICAL_ENTITY.field('status')
 async def resolve_reactome_info_fields(obj, info):
     """
     Resolve Reactome concept info fields.
@@ -157,6 +162,7 @@ async def resolve_reactome_reaction_outputs(obj, info):
 
 
 @REACTOME_GENE.field('isInput')
+@REACTOME_PHYSICAL_ENTITY.field('isInput')
 async def resolve_reactome_gene_is_input(obj, info):
     """
     Resolve Reactome gene isInput field.
@@ -173,6 +179,7 @@ async def resolve_reactome_gene_is_input(obj, info):
 
 
 @REACTOME_GENE.field('isOutput')
+@REACTOME_PHYSICAL_ENTITY.field('isOutput')
 async def resolve_reactome_gene_is_output(obj, info):
     """
     Resolve Reactome gene isOutput field.
@@ -207,6 +214,7 @@ async def resolve_reactome_gene_symbols(obj, info):
 @REACTOME_PATHWAY.field('similarConcepts')
 @REACTOME_REACTION.field('similarConcepts')
 @REACTOME_GENE.field('similarConcepts')
+@REACTOME_PHYSICAL_ENTITY.field('similarConcepts')
 async def resolve_reactome_similar_concepts(obj,
                                             info,
                                             threshold: float = 1.0,
@@ -229,6 +237,7 @@ async def resolve_reactome_similar_concepts(obj,
 @REACTOME_PATHWAY.field('pathsTo')
 @REACTOME_REACTION.field('pathsTo')
 @REACTOME_GENE.field('pathsTo')
+@REACTOME_PHYSICAL_ENTITY.field('pathsTo')
 async def resolve_reactome_concept_paths_to(obj,
                                             info,
                                             target_prefix: str,
@@ -265,6 +274,10 @@ def reactome_concept_type_resolver(obj, *_):
         return 'ReactomeReaction'
     if concept_type == 'gene':
         return 'ReactomeGene'
+    if concept_type in {
+        'complex', 'entity_set', 'simple_entity', 'drug', 'polymer', 'cell', 'other_entity',
+    }:
+        return 'ReactomePhysicalEntity'
 
     raise ValueError(f'Unknown Reactome concept type: {concept_type}')
 

@@ -7,8 +7,7 @@ from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
 from bioterms.etc.utils import check_files_exist, iter_progress
-from .ensembl_utils import download_current_ensembl_tsv
-from .utils import AnnotationSource, assert_pre_requisite
+from .utils import AnnotationSource, assert_pre_requisite, download_current_ensembl_tsv
 
 
 ANNOTATION_NAME = 'Ensembl Protein Mapping to UniProtKB'

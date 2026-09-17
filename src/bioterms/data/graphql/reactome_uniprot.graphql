@@ -1,0 +1,2 @@
+extend type ReactomeGene { annotatedUniProt: [UniProtConcept!]! }
+extend type UniProtConcept { annotatedReactome: [ReactomeConcept!]! }

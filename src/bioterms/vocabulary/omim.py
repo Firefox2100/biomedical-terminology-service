@@ -22,6 +22,7 @@ ANNOTATIONS = [
     ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.MONDO,
     ConceptPrefix.ORDO,
+    ConceptPrefix.REACTOME,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,

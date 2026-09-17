@@ -11,7 +11,7 @@ import json
 from neo4j import GraphDatabase, Driver, EagerResult
 
 
-neo4j_uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
+neo4j_uri = os.getenv('NEO4J_URI', 'bolt://localhost:27687')
 neo4j_user = os.getenv('NEO4J_USER', 'neo4j')
 neo4j_password = os.getenv('NEO4J_PASSWORD', 'password')
 output_dir = os.getenv('OUTPUT_DIR', '../data/reactome')
@@ -180,32 +180,139 @@ def extract_genes(driver: Driver):
         query_result=gene_reaction_result,
     )
 
-    gene_symbol_result = driver.execute_query(
+    uniprot_mapping_result = driver.execute_query(
         """
         MATCH (g:GenomeEncodedEntity {speciesName: "Homo sapiens"})
             -[:referenceEntity]->
             (rg:ReferenceGeneProduct)
-        RETURN DISTINCT g.stId as gene_id,
-            rg.identifier as symbol;
+            -[:referenceDatabase]->
+            (db:ReferenceDatabase {displayName: "UniProt"})
+        RETURN DISTINCT g.stId as reactome_id,
+            rg.identifier as external_id;
         """
     )
 
     write_to_csv(
-        file_path=f'{output_dir}/gene_mapping.csv',
-        field_names=['gene_id', 'symbol'],
-        query_result=gene_symbol_result,
+        file_path=f'{output_dir}/uniprot_mapping.csv',
+        field_names=['reactome_id', 'external_id'],
+        query_result=uniprot_mapping_result,
     )
+
+
+def extract_physical_entities(driver: Driver):
+    """Extract stable non-genome physical entities used by the human Reactome graph."""
+    entity_result = driver.execute_query(
+        """
+        MATCH (entity:PhysicalEntity)
+        WHERE NOT entity:GenomeEncodedEntity
+            AND (entity.stId STARTS WITH "R-HSA-" OR entity.stId STARTS WITH "R-ALL-")
+        RETURN entity.dbId AS db_id,
+            entity.stId AS st_id,
+            entity.displayName AS display_name,
+            entity.name AS synonyms,
+            entity.schemaClass AS schema_class
+        """
+    )
+    write_to_csv(
+        file_path=f'{output_dir}/physical_entity.csv',
+        field_names=['db_id', 'st_id', 'display_name', 'synonyms', 'schema_class'],
+        query_result=entity_result,
+    )
+
+    relationship_result = driver.execute_query(
+        """
+        MATCH (reaction:ReactionLikeEvent {speciesName: "Homo sapiens"})
+            -[relationship]->(entity:PhysicalEntity)
+        WHERE type(relationship) IN ["input", "output"]
+        RETURN DISTINCT entity.stId AS entity_id,
+            type(relationship) AS relationship,
+            reaction.stId AS reaction_id
+        """
+    )
+    write_to_csv(
+        file_path=f'{output_dir}/physical_entity_reaction.csv',
+        field_names=['entity_id', 'relationship', 'reaction_id'],
+        query_result=relationship_result,
+    )
+
+
+def extract_external_reference_annotations(driver: Driver):
+    """Extract supported mappings published in Reactome ReferenceEntity records."""
+    ensembl_result = driver.execute_query(
+        """
+        MATCH (g:GenomeEncodedEntity {speciesName: "Homo sapiens"})
+            -[:referenceEntity]->(direct:ReferenceEntity)
+            -[:referenceDatabase]->(:ReferenceDatabase {displayName: "ENSEMBL"})
+        RETURN g.stId AS reactome_id, direct.identifier AS external_id
+        UNION
+        MATCH (g:GenomeEncodedEntity {speciesName: "Homo sapiens"})
+            -[:referenceEntity]->(:ReferenceGeneProduct)
+            -[:referenceGene|referenceTranscript]->(reference:ReferenceEntity)
+            -[:referenceDatabase]->(:ReferenceDatabase {displayName: "ENSEMBL"})
+        RETURN g.stId AS reactome_id, reference.identifier AS external_id
+        """
+    )
+    write_to_csv(
+        file_path=f'{output_dir}/ensembl_mapping.csv',
+        field_names=['reactome_id', 'external_id'],
+        query_result=ensembl_result,
+    )
+
+    for database_name, file_name in (
+        ('HGNC', 'hgnc_mapping.csv'),
+        ('OMIM', 'omim_mapping.csv'),
+    ):
+        result = driver.execute_query(
+            """
+            MATCH (g:GenomeEncodedEntity {speciesName: "Homo sapiens"})
+                -[:referenceEntity]->(:ReferenceGeneProduct)
+                -[:referenceGene]->(reference:ReferenceEntity)
+                -[:referenceDatabase]->(:ReferenceDatabase {displayName: $database_name})
+            RETURN DISTINCT g.stId AS reactome_id,
+                reference.identifier AS external_id
+            """,
+            database_name=database_name,
+        )
+        write_to_csv(
+            file_path=f'{output_dir}/{file_name}',
+            field_names=['reactome_id', 'external_id'],
+            query_result=result,
+        )
+
+    for database_name, file_name in (
+        ('ChEBI', 'chebi_mapping.csv'),
+        ('NCIthesaurus', 'ncit_mapping.csv'),
+    ):
+        result = driver.execute_query(
+            """
+            MATCH (entity:PhysicalEntity)-[:referenceEntity]->(reference:ReferenceEntity)
+                -[:referenceDatabase]->(:ReferenceDatabase {displayName: $database_name})
+            WHERE entity.stId STARTS WITH "R-HSA-" OR entity.stId STARTS WITH "R-ALL-"
+            RETURN DISTINCT entity.stId AS reactome_id,
+                reference.identifier AS external_id
+            """,
+            database_name=database_name,
+        )
+        write_to_csv(
+            file_path=f'{output_dir}/{file_name}',
+            field_names=['reactome_id', 'external_id'],
+            query_result=result,
+        )
 
 
 def extract_reactome_data():
     driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+    try:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-
-    extract_pathway(driver)
-    extract_reactions(driver)
-    extract_genes(driver)
+        extract_pathway(driver)
+        extract_reactions(driver)
+        extract_genes(driver)
+        extract_physical_entities(driver)
+        extract_external_reference_annotations(driver)
+    finally:
+        driver.close()
 
 
 if __name__ == '__main__':

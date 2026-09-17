@@ -1,0 +1,2 @@
+extend type NcitConcept { annotatedReactome: [ReactomeConcept!]! }
+extend type ReactomePhysicalEntity { annotatedNcit: [NcitConcept!]! }

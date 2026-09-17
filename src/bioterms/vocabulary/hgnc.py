@@ -19,6 +19,7 @@ VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC
 ANNOTATIONS = [
     ConceptPrefix.MONDO,
+    ConceptPrefix.REACTOME,
 ]
 SIMILARITY_METHODS = []
 FILE_PATHS = [

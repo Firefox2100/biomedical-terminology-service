@@ -64,6 +64,13 @@ class ConceptType(Enum):
     TRANSCRIPT = 'transcript'
     EXON = 'exon'
     PROTEIN = 'protein'
+    COMPLEX = 'complex'
+    ENTITY_SET = 'entity_set'
+    SIMPLE_ENTITY = 'simple_entity'
+    DRUG = 'drug'
+    POLYMER = 'polymer'
+    CELL = 'cell'
+    OTHER_ENTITY = 'other_entity'
 
 
 class ConceptRelationshipType(Enum):

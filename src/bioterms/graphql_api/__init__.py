@@ -92,7 +92,8 @@ _VOCABULARY_GRAPHQL_MODULES: dict[ConceptPrefix, tuple[str, str, list[str], str]
     ConceptPrefix.ORDO: ('ORDO_SCHEMA', 'ordo', ['ORDO_CONCEPT'], 'ORDO_QUERY'),
     ConceptPrefix.REACTOME: (
         'REACTOME_SCHEMA', 'reactome',
-        ['REACTOME_CONCEPT', 'REACTOME_PATHWAY', 'REACTOME_REACTION', 'REACTOME_GENE'],
+        ['REACTOME_CONCEPT', 'REACTOME_PATHWAY', 'REACTOME_REACTION', 'REACTOME_GENE',
+         'REACTOME_PHYSICAL_ENTITY'],
         'REACTOME_QUERY',
     ),
     ConceptPrefix.SNOMED: ('SNOMED_SCHEMA', 'snomed', ['SNOMED_CONCEPT'], 'SNOMED_QUERY'),
@@ -116,15 +117,21 @@ _ANNOTATION_GRAPHQL_SCHEMAS: dict[tuple[ConceptPrefix, ConceptPrefix], tuple[str
     (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM): ('GENE_OMIM_SCHEMA', 'gene_omim'),
     (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO): ('GENE_ORDO_SCHEMA', 'gene_ordo'),
     (ConceptPrefix.HGNC, ConceptPrefix.MONDO): ('HGNC_MONDO_SCHEMA', 'hgnc_mondo'),
+    (ConceptPrefix.HGNC, ConceptPrefix.REACTOME): ('HGNC_REACTOME_SCHEMA', 'hgnc_reactome'),
     (ConceptPrefix.HPO, ConceptPrefix.MONDO): ('HPO_MONDO_SCHEMA', 'hpo_mondo'),
     (ConceptPrefix.MONDO, ConceptPrefix.NCIT): ('MONDO_NCIT_SCHEMA', 'mondo_ncit'),
     (ConceptPrefix.MONDO, ConceptPrefix.OMIM): ('MONDO_OMIM_SCHEMA', 'mondo_omim'),
     (ConceptPrefix.MONDO, ConceptPrefix.ORDO): ('MONDO_ORDO_SCHEMA', 'mondo_ordo'),
     (ConceptPrefix.MONDO, ConceptPrefix.SNOMED): ('MONDO_SNOMED_SCHEMA', 'mondo_snomed'),
     (ConceptPrefix.NCIT, ConceptPrefix.OHDSI): ('NCIT_OHDSI_SCHEMA', 'ncit_ohdsi'),
+    (ConceptPrefix.NCIT, ConceptPrefix.REACTOME): ('NCIT_REACTOME_SCHEMA', 'ncit_reactome'),
     (ConceptPrefix.OHDSI, ConceptPrefix.SNOMED): ('OHDSI_SNOMED_SCHEMA', 'ohdsi_snomed'),
     (ConceptPrefix.OMIM, ConceptPrefix.ORDO): ('OMIM_ORDO_SCHEMA', 'omim_ordo'),
+    (ConceptPrefix.OMIM, ConceptPrefix.REACTOME): ('OMIM_REACTOME_SCHEMA', 'omim_reactome'),
     (ConceptPrefix.ORDO, ConceptPrefix.SNOMED): ('ORDO_SNOMED_SCHEMA', 'ordo_snomed'),
+    (ConceptPrefix.REACTOME, ConceptPrefix.UNIPROT): (
+        'REACTOME_UNIPROT_SCHEMA', 'reactome_uniprot',
+    ),
 }
 
 
@@ -209,6 +216,7 @@ async def create_graphql_app() -> ASGIApp:
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.ORDO),
         (ConceptPrefix.HGNC, ConceptPrefix.MONDO),
+        (ConceptPrefix.HGNC, ConceptPrefix.REACTOME),
         (ConceptPrefix.HPO, ConceptPrefix.MONDO),
         (ConceptPrefix.HPO, ConceptPrefix.ORDO),
         (ConceptPrefix.MONDO, ConceptPrefix.NCIT),
@@ -216,9 +224,12 @@ async def create_graphql_app() -> ASGIApp:
         (ConceptPrefix.MONDO, ConceptPrefix.ORDO),
         (ConceptPrefix.MONDO, ConceptPrefix.SNOMED),
         (ConceptPrefix.NCIT, ConceptPrefix.OHDSI),
+        (ConceptPrefix.NCIT, ConceptPrefix.REACTOME),
         (ConceptPrefix.OHDSI, ConceptPrefix.SNOMED),
         (ConceptPrefix.OMIM, ConceptPrefix.ORDO),
+        (ConceptPrefix.OMIM, ConceptPrefix.REACTOME),
         (ConceptPrefix.ORDO, ConceptPrefix.SNOMED),
+        (ConceptPrefix.REACTOME, ConceptPrefix.UNIPROT),
     ]
     annotation_status_list = await asyncio.gather(*(
         get_annotation_status(

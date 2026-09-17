@@ -11,7 +11,7 @@ ANNOTATION_NAME = 'Reactome Mapping to UniProt'
 VOCABULARY_PREFIX_1 = ConceptPrefix.REACTOME
 VOCABULARY_PREFIX_2 = ConceptPrefix.UNIPROT
 FILE_PATHS = [
-    'reactome/gene_mapping.csv',
+    'reactome/uniprot_mapping.csv',
 ]
 
 

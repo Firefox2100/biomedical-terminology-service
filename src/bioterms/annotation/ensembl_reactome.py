@@ -7,21 +7,26 @@ from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist, download_file, iter_progress
+from bioterms.vocabulary.reactome import build_reference_annotations, download_vocabulary
 from .utils import AnnotationSource, assert_pre_requisite
 
 
 ANNOTATION_NAME = 'Ensembl Mapping to Reactome Pathways'
 VOCABULARY_PREFIX_1 = ConceptPrefix.ENSEMBL
 VOCABULARY_PREFIX_2 = ConceptPrefix.REACTOME
-FILE_PATHS = ['ensembl/mapping/reactome.tsv']
+FILE_PATHS = [
+    'reactome/ensembl_mapping.csv',
+    'ensembl/mapping/reactome.tsv',
+]
 _REACTOME = AnnotationSource('Reactome Ensembl2Reactome', ConceptPrefix.REACTOME, ConceptPrefix.ENSEMBL)
 
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
-    if not check_files_exist(FILE_PATHS):
+    await download_vocabulary(download_client=download_client)
+    if not check_files_exist([FILE_PATHS[1]]):
         await download_file(
             url='https://reactome.org/download/current/Ensembl2Reactome.txt',
-            file_path=FILE_PATHS[0], download_client=download_client,
+            file_path=FILE_PATHS[1], download_client=download_client,
         )
 
 
@@ -30,9 +35,13 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None):
     await assert_pre_requisite(
         ANNOTATION_NAME, VOCABULARY_PREFIX_1, VOCABULARY_PREFIX_2, FILE_PATHS, graph_db,
     )
+    reference_annotations = build_reference_annotations(ConceptPrefix.ENSEMBL)
+    if reference_annotations:
+        await graph_db.save_annotations(reference_annotations)
+
     seen = set()
     for frame in pd.read_csv(
-        os.path.join(CONFIG.data_dir, FILE_PATHS[0]), sep='\t', header=None, dtype=str,
+        os.path.join(CONFIG.data_dir, FILE_PATHS[1]), sep='\t', header=None, dtype=str,
         names=['ensembl_id', 'reactome_id', 'url', 'name', 'evidence', 'species'],
         chunksize=100000,
     ):

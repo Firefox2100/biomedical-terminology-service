@@ -124,7 +124,7 @@ Some vocabularies require an API key to download. The supported credentials are:
 
 And not all vocabularies can be downloaded this way. Particularly:
 
-* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into a Neo4j 4 (note that we use Neo4j 5 for this service, so you may need to install Neo4j 4 separately) instance first, and use the provided script ``scripts/dump_reactome_to_csv.py`` to export the data to CSV files that can be imported into the main database. Reactome's own protein identity is expressed as ``EXACT`` annotations to UniProt (see below), not as a resolved HGNC symbol directly. This mapping is managed as a normal annotation and is loaded explicitly after both vocabularies.
+* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into the Neo4j 4 container in ``scripts/docker-compose.reactome.yaml``, then ``scripts/dump_reactome_to_csv.py`` exports the CSV release consumed here. The export includes stable physical entities (complexes, entity sets, simple entities, drugs, polymers, cells, and other entities), their reaction input/output edges, and separate ReferenceEntity mapping files for UniProt, Ensembl, HGNC, OMIM, NCIt, and ChEBI. ChEBI is exported for forward compatibility but has no annotation loader until ChEBI itself is supported. The supported mappings are normal annotations and are loaded explicitly after both endpoint vocabularies.
 * OHDSI standardized vocabularies are not open for public download, and provides no download API. You need to manually download the latest release from Athena, and unzip it to the data folder.
 * UMLS system provides no way to fetch the latest release files automatically, so the files downloaded from UMLS are using hard-coded URL. If you need a different version, you need to manually download the files from UMLS and place them in the data folder, or open an issue/pull request to notify us of the desired version.
 * UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
@@ -165,8 +165,10 @@ database:
 #. ``uniprot`` - independent of Reactome; load ``annotation load uniprot gene`` explicitly later if the bundled annotation was skipped.
 #. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.
 
-After both Reactome and UniProt are loaded, load their mapping explicitly with
-``bioterms-cli annotation load reactome uniprot``.
+Reactome ReferenceEntity mappings are loaded explicitly after both endpoint vocabularies, for
+example ``bioterms-cli annotation load reactome uniprot``. Ensembl, HGNC, OMIM, and NCIt are
+also available endpoints. The Ensembl annotation combines the graph export with Reactome's
+separate ``Ensembl2Reactome.txt`` pathway mapping while preserving each source independently.
 
 Ensembl mappings are normal, independently managed annotations. Once both endpoint vocabularies
 are loaded, they can be downloaded and loaded for ``ensembl gene``, ``ensembl uniprot``,

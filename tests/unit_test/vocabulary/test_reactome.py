@@ -10,6 +10,10 @@ def test_ann_prefix_is_uniprot_not_hgnc_symbol():
     # The whole point of the change: Reactome must no longer resolve straight to
     # HGNC_SYMBOL -- that duplication is what caused the double-counted vote.
     assert ConceptPrefix.UNIPROT in reactome.ANNOTATIONS
+    assert ConceptPrefix.ENSEMBL in reactome.ANNOTATIONS
+    assert ConceptPrefix.HGNC in reactome.ANNOTATIONS
+    assert ConceptPrefix.NCIT in reactome.ANNOTATIONS
+    assert ConceptPrefix.OMIM in reactome.ANNOTATIONS
     assert ConceptPrefix.HGNC_SYMBOL not in reactome.ANNOTATIONS
     assert ConceptPrefix.REACTOME in uniprot.ANNOTATIONS
 
@@ -27,14 +31,28 @@ async def test_load_vocabulary_from_file_does_not_build_uniprot_annotations(monk
         'st_id,display_name,synonyms\nR-HSA-1,EEF1A1,\n'
     )
     (reactome_dir / 'gene_reaction.csv').write_text('reaction_id,gene_id,relationship\n')
+    (reactome_dir / 'physical_entity.csv').write_text(
+        'db_id,st_id,display_name,synonyms,schema_class\n'
+        '1,R-ALL-1,Test drug,"[""Test drug""]",ChemicalDrug\n'
+    )
+    (reactome_dir / 'physical_entity_reaction.csv').write_text(
+        'entity_id,relationship,reaction_id\n'
+    )
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+
+    written_concepts = []
+
+    async def capture_concepts(**kwargs):
+        written_concepts.extend(kwargs['concepts'])
 
     async def ignore_write(**_kwargs):
         pass
 
-    monkeypatch.setattr(reactome, 'write_concepts_to_file', ignore_write)
+    monkeypatch.setattr(reactome, 'write_concepts_to_file', capture_concepts)
     monkeypatch.setattr(reactome, 'write_graph_to_file', ignore_write)
 
     await reactome.load_vocabulary_from_file(offline=True, build_search_index=False)
 
     assert not (tmp_path / 'offline' / 'reactome-uniprot.annotation.dump').exists()
+    drug = next(c for c in written_concepts if c.concept_id == 'R-ALL-1')
+    assert drug.concept_types == [reactome.ConceptType.DRUG]
