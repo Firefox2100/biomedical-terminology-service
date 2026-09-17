@@ -1,6 +1,7 @@
 import csv
 import os
 from datetime import datetime, timezone
+from functools import lru_cache
 import httpx
 import networkx as nx
 import pandas as pd
@@ -12,6 +13,7 @@ from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import OhdsiDrugStrength, OhdsiConcept
 from bioterms.model.annotation import Annotation
+from bioterms.annotation.utils import AnnotationSource, is_gene_annotation_prefix
 from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
 
 
@@ -42,6 +44,11 @@ CONCEPT_CLASS = OhdsiConcept
 _CANONICAL_RELATIONSHIP_CACHE: dict[str, str] = {}
 
 
+@lru_cache
+def _ohdsi_annotation_source(target_prefix: ConceptPrefix | str) -> AnnotationSource:
+    return AnnotationSource('OHDSI Athena', VOCABULARY_PREFIX, target_prefix)
+
+
 def map_vocabulary_prefix(vocabulary_id: str,
                           ) -> ConceptPrefix | str:
     """
@@ -52,6 +59,7 @@ def map_vocabulary_prefix(vocabulary_id: str,
     :return: The mapped ConceptPrefix or string.
     """
     mapping = {
+        'HGNC': ConceptPrefix.HGNC,
         'NCIt': ConceptPrefix.NCIT,
         'SNOMED': ConceptPrefix.SNOMED,
     }
@@ -542,13 +550,21 @@ def _process_annotations() -> list[Annotation]:
                 # not even have a unique concept code.
                 continue
 
-            annotation = Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=str(row['concept_id']),
-                conceptIdTo=str(row['concept_code']),
-                annotationType=AnnotationType.EXACT,
-            )
+            # Gene-vocabulary links remain outside provenance-managed annotations.
+            if is_gene_annotation_prefix(vocabulary_prefix):
+                annotation = Annotation(
+                    prefixFrom=VOCABULARY_PREFIX,
+                    prefixTo=vocabulary_prefix,
+                    conceptIdFrom=str(row['concept_id']),
+                    conceptIdTo=str(row['concept_code']),
+                    annotationType=AnnotationType.EXACT,
+                )
+            else:
+                annotation = _ohdsi_annotation_source(vocabulary_prefix).create(
+                    publisher_concept_id=str(row['concept_id']),
+                    other_concept_id=str(row['concept_code']),
+                    annotation_type=AnnotationType.EXACT,
+                )
             annotations.append(annotation)
 
     return annotations

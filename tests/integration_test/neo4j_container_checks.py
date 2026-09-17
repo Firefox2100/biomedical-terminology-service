@@ -182,6 +182,41 @@ async def test_save_query_and_delete_annotations(graph_db):
     assert await graph_db.count_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO) == 0
 
 
+@pytest.mark.asyncio
+async def test_annotation_provenance_and_direction_are_preserved(graph_db):
+    await graph_db.save_annotations([
+        Annotation(
+            conceptIdFrom='O1', prefixFrom=ConceptPrefix.ORDO,
+            conceptIdTo='H1', prefixTo=ConceptPrefix.HPO,
+            properties={'source': 'HOOM', 'frequency': 'frequent'},
+        ),
+        Annotation(
+            conceptIdFrom='H1', prefixFrom=ConceptPrefix.HPO,
+            conceptIdTo='O1', prefixTo=ConceptPrefix.ORDO,
+            properties={'source': 'phenotype.hpoa'},
+        ),
+    ])
+
+    assert await graph_db.count_annotations(ConceptPrefix.HPO, ConceptPrefix.ORDO) == 2
+    graph = await graph_db.get_annotation_graph(ConceptPrefix.HPO, ConceptPrefix.ORDO)
+    assert graph.edges['ordo:O1', 'hpo:H1']['source'] == 'HOOM'
+    assert graph.edges['hpo:H1', 'ordo:O1']['source'] == 'phenotype.hpoa'
+
+    await graph_db.save_annotations([
+        Annotation(
+            conceptIdFrom='O1', prefixFrom=ConceptPrefix.ORDO,
+            conceptIdTo='H1', prefixTo=ConceptPrefix.HPO,
+            properties={'source': 'HOOM', 'evidence': 'curated'},
+        ),
+    ])
+    graph = await graph_db.get_annotation_graph(ConceptPrefix.ORDO, ConceptPrefix.HPO)
+    assert graph.edges['ordo:O1', 'hpo:H1']['frequency'] == 'frequent'
+    assert graph.edges['ordo:O1', 'hpo:H1']['evidence'] == 'curated'
+
+    await graph_db.delete_annotations(ConceptPrefix.HPO, ConceptPrefix.ORDO)
+    assert await graph_db.count_annotations(ConceptPrefix.ORDO, ConceptPrefix.HPO) == 0
+
+
 # ---------------------------------------------------------------------------------------
 # similarity scores -- MERGE + SET rel[prop] (no dynamic type needed, but validates the
 # apoc.merge.relationship removal didn't change the on-match/on-create semantics)

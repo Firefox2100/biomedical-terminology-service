@@ -1,92 +1,70 @@
+import networkx as nx
 import pandas as pd
 
-from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import AnnotationType
+from bioterms.etc.enums import ConceptType
 import bioterms.vocabulary.ensembl as ensembl
 
 
-def test_load_hgnc_ensembl_symbol_lookup_reads_crosswalk(monkeypatch, tmp_path):
-    hgnc_dir = tmp_path / 'hgnc'
-    hgnc_dir.mkdir()
-    (hgnc_dir / 'symbol.txt').write_text(
-        'hgnc_id\tsymbol\tensembl_gene_id\n'
-        'HGNC:5\tA1BG\tENSG00000121410\n'
-        'HGNC:6\tA1BG-AS1\t\n'
+def test_gene_feature_is_first_class_and_does_not_emit_annotation():
+    genes = {}
+    graph = nx.DiGraph()
+    ensembl._handle_gene_feature(
+        {
+            'gene_id': 'ENSG1', 'gene_version': '3', 'gene_name': 'GENE1',
+            'gene_biotype': 'protein_coding', 'gene_source': 'ensembl_havana',
+        },
+        pd.Series({'start': 10, 'end': 90, 'seqname': '1', 'strand': '+',
+                   'source': 'ensembl_havana'}),
+        genes,
+        graph,
     )
-    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
 
-    lookup = ensembl._load_hgnc_ensembl_symbol_lookup()
-
-    assert lookup == {'ENSG00000121410': 'A1BG'}
-
-
-def test_load_hgnc_ensembl_symbol_lookup_missing_file_returns_empty(monkeypatch, tmp_path):
-    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
-
-    lookup = ensembl._load_hgnc_ensembl_symbol_lookup()
-
-    assert lookup == {}
+    concept = genes['ENSG1']
+    assert concept.concept_types == [ConceptType.GENE]
+    assert concept.version == '3'
+    assert concept.strand == '+'
+    assert concept.source == 'ensembl_havana'
+    assert list(graph.nodes) == ['ENSG1']
 
 
-def test_handle_gene_feature_tags_edge_matching_hgnc_crosswalk():
-    import networkx as nx
-
-    attributes = {'gene_id': 'ENSG00000121410', 'gene_name': 'A1BG', 'gene_biotype': 'protein_coding'}
-    row = pd.Series({'start': 100, 'end': 200, 'seqname': '19'})
-    genes = {}
+def test_transcript_exon_and_protein_relationships_and_metadata():
     graph = nx.DiGraph()
-    annotations = []
-    lookup = {'ENSG00000121410': 'A1BG'}
+    transcripts = {}
+    exons = {}
+    proteins = {}
+    row = pd.Series({'start': 20, 'end': 40, 'seqname': '1', 'strand': '-',
+                     'source': 'havana'})
+    attributes = {
+        'gene_id': 'ENSG1', 'transcript_id': 'ENST1', 'transcript_version': '2',
+        'transcript_name': 'GENE1-201', 'transcript_biotype': 'protein_coding',
+        'transcript_source': 'havana', 'transcript_support_level': '1',
+        'exon_id': 'ENSE1', 'exon_version': '4',
+        'protein_id': 'ENSP1', 'protein_version': '5',
+    }
 
-    ensembl._handle_gene_feature(attributes, row, genes, graph, annotations, lookup)
+    ensembl._handle_transcript_feature(attributes, row, transcripts, graph)
+    ensembl._handle_exon_feature(attributes, row, exons, graph)
+    ensembl._handle_cds_feature(attributes, row, proteins, graph)
+    ensembl._handle_cds_feature(
+        attributes,
+        pd.Series({'start': 60, 'end': 80, 'seqname': '1', 'strand': '-', 'source': 'havana'}),
+        proteins,
+        graph,
+    )
 
-    assert len(annotations) == 1
-    assert annotations[0].annotation_type == AnnotationType.HAS_SYMBOL
-    assert annotations[0].properties == {'derivation': 'hgnc_ensembl_gene_id_xref'}
-
-
-def test_handle_gene_feature_does_not_tag_when_symbol_mismatches_hgnc():
-    import networkx as nx
-
-    attributes = {'gene_id': 'ENSG00000121410', 'gene_name': 'SOME_OTHER_NAME', 'gene_biotype': 'protein_coding'}
-    row = pd.Series({'start': 100, 'end': 200, 'seqname': '19'})
-    genes = {}
-    graph = nx.DiGraph()
-    annotations = []
-    lookup = {'ENSG00000121410': 'A1BG'}
-
-    ensembl._handle_gene_feature(attributes, row, genes, graph, annotations, lookup)
-
-    assert len(annotations) == 1
-    assert annotations[0].properties is None
-
-
-def test_handle_gene_feature_does_not_tag_when_gene_not_in_lookup():
-    import networkx as nx
-
-    attributes = {'gene_id': 'ENSG_UNKNOWN', 'gene_name': 'FOO', 'gene_biotype': 'protein_coding'}
-    row = pd.Series({'start': 100, 'end': 200, 'seqname': '19'})
-    genes = {}
-    graph = nx.DiGraph()
-    annotations = []
-
-    ensembl._handle_gene_feature(attributes, row, genes, graph, annotations, {})
-
-    assert len(annotations) == 1
-    assert annotations[0].properties is None
+    assert transcripts['ENST1'].concept_types == [ConceptType.TRANSCRIPT]
+    assert transcripts['ENST1'].transcript_support_level == '1'
+    assert exons['ENSE1'].concept_types == [ConceptType.EXON]
+    assert proteins['ENSP1'].concept_types == [ConceptType.PROTEIN]
+    assert (proteins['ENSP1'].start, proteins['ENSP1'].end) == (20, 80)
+    assert set(graph.edges) == {('ENST1', 'ENSG1'), ('ENSE1', 'ENST1'), ('ENSP1', 'ENST1')}
 
 
-def test_handle_gene_feature_defaults_lookup_to_empty():
-    import networkx as nx
-
-    attributes = {'gene_id': 'ENSG_X', 'gene_name': 'FOO', 'gene_biotype': 'protein_coding'}
-    row = pd.Series({'start': 100, 'end': 200, 'seqname': '19'})
-    genes = {}
-    graph = nx.DiGraph()
-    annotations = []
-
-    # No hgnc_ensembl_lookup argument at all -- must not raise.
-    ensembl._handle_gene_feature(attributes, row, genes, graph, annotations)
-
-    assert len(annotations) == 1
-    assert annotations[0].properties is None
+def test_ensembl_annotation_discovery_is_symmetric():
+    expected = {
+        ensembl.ConceptPrefix.HGNC_SYMBOL,
+        ensembl.ConceptPrefix.OMIM,
+        ensembl.ConceptPrefix.REACTOME,
+        ensembl.ConceptPrefix.UNIPROT,
+    }
+    assert set(ensembl.ANNOTATIONS) == expected

@@ -479,6 +479,41 @@ async def test_annotations(graph_db):
 
 
 @pytest.mark.asyncio
+async def test_annotation_provenance_and_direction_are_preserved(graph_db):
+    await graph_db.save_annotations([
+        Annotation(
+            prefixFrom=ConceptPrefix.ORDO, conceptIdFrom='O1',
+            prefixTo=ConceptPrefix.HPO, conceptIdTo='H1',
+            properties={'source': 'HOOM', 'frequency': 'frequent'},
+        ),
+        Annotation(
+            prefixFrom=ConceptPrefix.HPO, conceptIdFrom='H1',
+            prefixTo=ConceptPrefix.ORDO, conceptIdTo='O1',
+            properties={'source': 'phenotype.hpoa'},
+        ),
+    ])
+
+    assert await graph_db.count_annotations(ConceptPrefix.HPO, ConceptPrefix.ORDO) == 2
+    graph = await graph_db.get_annotation_graph(ConceptPrefix.HPO, ConceptPrefix.ORDO)
+    assert graph.edges['ordo:O1', 'hpo:H1']['source'] == 'HOOM'
+    assert graph.edges['hpo:H1', 'ordo:O1']['source'] == 'phenotype.hpoa'
+
+    await graph_db.save_annotations([
+        Annotation(
+            prefixFrom=ConceptPrefix.ORDO, conceptIdFrom='O1',
+            prefixTo=ConceptPrefix.HPO, conceptIdTo='H1',
+            properties={'source': 'HOOM', 'evidence': 'curated'},
+        ),
+    ])
+    graph = await graph_db.get_annotation_graph(ConceptPrefix.ORDO, ConceptPrefix.HPO)
+    assert graph.edges['ordo:O1', 'hpo:H1']['frequency'] == 'frequent'
+    assert graph.edges['ordo:O1', 'hpo:H1']['evidence'] == 'curated'
+
+    await graph_db.delete_annotations(ConceptPrefix.HPO, ConceptPrefix.ORDO)
+    assert await graph_db.count_annotations(ConceptPrefix.ORDO, ConceptPrefix.HPO) == 0
+
+
+@pytest.mark.asyncio
 async def test_map_terms_multi_hop(graph_db):
     # HGNC:1 -exact-> MONDO:1 -broad-> SNOMED:1 : a 2-hop mapping HGNC -> SNOMED.
     await graph_db.save_annotations([

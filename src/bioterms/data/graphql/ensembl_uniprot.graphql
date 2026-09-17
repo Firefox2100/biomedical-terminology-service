@@ -1,0 +1,2 @@
+extend type EnsemblProtein { uniprotConcepts: [UniProtConcept!]! }
+extend type UniProtConcept { ensemblProteins: [EnsemblProtein!]! }

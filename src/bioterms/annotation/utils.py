@@ -1,7 +1,54 @@
+from dataclasses import dataclass
+from typing import Mapping
+
+from bioterms.etc.enums import AnnotationType
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import VocabularyNotLoaded, FilesNotFound
 from bioterms.etc.utils import check_files_exist, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
+from bioterms.model.annotation import Annotation
+
+
+@dataclass(frozen=True)
+class AnnotationSource:
+    """A published annotation dataset and its publisher-defined direction."""
+
+    name: str
+    publisher_prefix: ConceptPrefix | str
+    other_prefix: ConceptPrefix | str
+
+    def create(self,
+               publisher_concept_id: str,
+               other_concept_id: str,
+               annotation_type: AnnotationType = AnnotationType.ANNOTATED_WITH,
+               properties: Mapping[str, str] | None = None,
+               ) -> Annotation:
+        """Create an annotation with immutable provenance and publisher-first direction."""
+        annotation_properties = dict(properties or {})
+        existing_source = annotation_properties.get('source')
+        if existing_source is not None and existing_source != self.name:
+            raise ValueError(
+                f'Annotation source is managed by AnnotationSource: '
+                f'{existing_source!r} != {self.name!r}'
+            )
+        annotation_properties['source'] = self.name
+        return Annotation(
+            prefixFrom=self.publisher_prefix,
+            conceptIdFrom=publisher_concept_id,
+            prefixTo=self.other_prefix,
+            conceptIdTo=other_concept_id,
+            annotationType=annotation_type,
+            properties=annotation_properties,
+        )
+
+
+def is_gene_annotation_prefix(prefix: ConceptPrefix | str) -> bool:
+    """Return whether a target belongs to the provenance-excluded gene/symbol boundary."""
+    value = prefix.value if isinstance(prefix, ConceptPrefix) else prefix
+    return value.lower() in {
+        ConceptPrefix.HGNC.value,
+        ConceptPrefix.HGNC_SYMBOL.value,
+    }
 
 
 async def assert_vocabulary_loaded(prefix_1: ConceptPrefix,

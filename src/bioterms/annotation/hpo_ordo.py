@@ -7,14 +7,14 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
     verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
-from bioterms.model.annotation import Annotation
-from .utils import assert_pre_requisite
+from .utils import AnnotationSource, assert_pre_requisite
 
 
 ANNOTATION_NAME = 'HPO - ORDO Ontological Module'
 VOCABULARY_PREFIX_1 = ConceptPrefix.ORDO
 VOCABULARY_PREFIX_2 = ConceptPrefix.HPO
 FILE_PATHS = ['hoom/hoom_orphanet.owl']
+_HOOM = AnnotationSource('HOOM', ConceptPrefix.ORDO, ConceptPrefix.HPO)
 
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
@@ -76,11 +76,9 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
             hpo_id = name_components[1].split(':')[1]
             frequency_code = name_components[2].split(':')[1]
 
-            annotations.append(Annotation(
-                prefixFrom=ConceptPrefix.ORDO,
-                conceptIdFrom=ordo_id,
-                prefixTo=ConceptPrefix.HPO,
-                conceptIdTo=hpo_id,
+            annotations.append(_HOOM.create(
+                publisher_concept_id=ordo_id,
+                other_concept_id=hpo_id,
                 properties={'frequency': frequency_code},
             ))
 

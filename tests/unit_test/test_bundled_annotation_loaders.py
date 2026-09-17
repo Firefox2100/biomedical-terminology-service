@@ -107,3 +107,4 @@ async def test_explicit_reactome_uniprot_load(monkeypatch, tmp_path):
     assert annotation.concept_id_from == 'R-HSA-1'
     assert annotation.concept_id_to == 'P68104'
     assert annotation.annotation_type == AnnotationType.EXACT
+    assert annotation.properties == {'source': 'Reactome UniProt mapping'}

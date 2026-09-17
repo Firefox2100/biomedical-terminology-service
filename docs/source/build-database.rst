@@ -149,23 +149,28 @@ write this annotation dump. Pass ``--no-annotation`` to suppress that bundled wo
 release files again; an existing annotation dump can instead be restored directly.
 
 The same ``--no-annotation`` option suppresses cross-vocabulary annotations derived while loading
-Mondo and OHDSI, including their offline annotation dumps. It does not suppress the required links
-from gene vocabularies such as Ensembl and HGNC into the Gene Symbol namespace: those links are
-part of the vocabulary model, and those vocabularies continue to require Gene Symbol online.
+Mondo and OHDSI, including their offline annotation dumps. HGNC's own relationship to the Gene
+Symbol namespace remains part of the HGNC vocabulary model. Ensembl is a heterogeneous genomic
+feature vocabulary and has no bundled annotations or Gene Symbol prerequisite.
 
 Vocabulary load order
 ^^^^^^^^^^^^^^^^^^^^^
 
-``bioterms-cli vocabulary load --all`` does **not** load in dependency order - it iterates ``ConceptPrefix`` in its declared enum order, which loads Ensembl before HGNC_SYMBOL and will fail ``ensure_gene_symbol_loaded()``'s check. Load vocabularies individually, in this order:
+``bioterms-cli vocabulary load --all`` does **not** load in dependency order. HGNC still requires
+the Gene Symbol vocabulary, so load vocabularies individually in this order when building a fresh
+database:
 
-#. ``hgnc_symbol`` first - HGNC and Ensembl require it. UniProt itself does not, but only emits its bundled gene-symbol annotation online when the target vocabulary is present.
-#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon`` - independent of each other and of step 1's ordering constraint, any order among these is fine.
-#. ``ensembl`` - requires ``hgnc_symbol`` from step 1.
+#. ``hgnc_symbol`` first - HGNC requires it. UniProt itself does not, but only emits its bundled gene-symbol annotation online when the target vocabulary is present.
+#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon``, ``ensembl`` - independent of each other except for HGNC's step 1 requirement; any order among the others is fine.
 #. ``uniprot`` - independent of Reactome; load ``annotation load uniprot gene`` explicitly later if the bundled annotation was skipped.
 #. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.
 
 After both Reactome and UniProt are loaded, load their mapping explicitly with
 ``bioterms-cli annotation load reactome uniprot``.
+
+Ensembl mappings are normal, independently managed annotations. Once both endpoint vocabularies
+are loaded, they can be downloaded and loaded for ``ensembl gene``, ``ensembl uniprot``,
+``ensembl reactome``, and ``ensembl omim``. Ensembl loading itself never creates these mappings.
 
 The Read v2 migration overlay (below) is a separate script, not part of this load order, but expects ``ohdsi``, ``ctv3``, and ``snomed`` to already be loaded for a clean result.
 

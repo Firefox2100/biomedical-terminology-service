@@ -1,0 +1,2 @@
+extend type EnsemblGene { annotatedOmim: [OmimConcept!]! }
+extend type OmimConcept { annotatedEnsemblGenes: [EnsemblGene!]! }

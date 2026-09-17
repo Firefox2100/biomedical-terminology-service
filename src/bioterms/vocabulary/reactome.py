@@ -12,6 +12,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
     iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
+from bioterms.annotation.utils import AnnotationSource
 from bioterms.model.concept import ReactomeConcept
 from .utils import write_concepts_to_file, write_graph_to_file
 
@@ -19,6 +20,7 @@ from .utils import write_concepts_to_file, write_graph_to_file
 VOCABULARY_NAME = 'Reactome Pathways'
 VOCABULARY_PREFIX = ConceptPrefix.REACTOME
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
     ConceptPrefix.UNIPROT,
 ]
 SIMILARITY_METHODS = []
@@ -35,6 +37,9 @@ _GENE_MAPPING_FILE_PATH = 'reactome/gene_mapping.csv'
 _DOWNLOAD_FILE_PATHS = [*FILE_PATHS, _GENE_MAPPING_FILE_PATH]
 TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = ReactomeConcept
+_UNIPROT_MAPPING = AnnotationSource(
+    'Reactome UniProt mapping', ConceptPrefix.REACTOME, ConceptPrefix.UNIPROT,
+)
 
 
 async def delete_vocabulary_files():
@@ -258,12 +263,10 @@ def build_uniprot_annotations() -> list[Annotation]:
         description='Processing Reactome UniProt mappings',
         total=len(mapping_df),
     ):
-        annotations.append(Annotation(
-            prefixFrom=ConceptPrefix.REACTOME,
-            prefixTo=ConceptPrefix.UNIPROT,
-            conceptIdFrom=str(row['gene_id']),
-            conceptIdTo=str(row['symbol']),
-            annotationType=AnnotationType.EXACT,
+        annotations.append(_UNIPROT_MAPPING.create(
+            publisher_concept_id=str(row['gene_id']),
+            other_concept_id=str(row['symbol']),
+            annotation_type=AnnotationType.EXACT,
         ))
     return annotations
 

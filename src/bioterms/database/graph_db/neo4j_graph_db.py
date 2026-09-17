@@ -758,22 +758,43 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             verbose_print(f'Inserting {len(annotations)} annotations into Neo4j...')
             for annotation_batch in batch_iterable(annotations):
-                await _execute_query_with_retry(
-                    query="""
-                    UNWIND $annotations AS annotation
-                    MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
-                    MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
-                    WITH source,
-                        target,
-                        coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
-                        coalesce(annotation.properties, {}) AS props
-                    MERGE (source)-[rel:$(rel_type)]->(target)
-                    SET rel += props
-                    RETURN count(rel) AS created
-                    """,
-                    session=session,
-                    parameters={'annotations': [annotation.model_dump() for annotation in annotation_batch]},
-                )
+                serialized = [annotation.model_dump() for annotation in annotation_batch]
+                sourced = [a for a in serialized if (a.get('properties') or {}).get('source')]
+                unsourced = [a for a in serialized if not (a.get('properties') or {}).get('source')]
+                if sourced:
+                    await _execute_query_with_retry(
+                        query="""
+                        UNWIND $annotations AS annotation
+                        MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
+                        MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                        WITH source,
+                            target,
+                            coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
+                            annotation.properties AS props
+                        MERGE (source)-[rel:$(rel_type) {source: props.source}]->(target)
+                        SET rel += props
+                        RETURN count(rel) AS created
+                        """,
+                        session=session,
+                        parameters={'annotations': sourced},
+                    )
+                if unsourced:
+                    await _execute_query_with_retry(
+                        query="""
+                        UNWIND $annotations AS annotation
+                        MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
+                        MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                        WITH source,
+                            target,
+                            coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
+                            coalesce(annotation.properties, {}) AS props
+                        MERGE (source)-[rel:$(rel_type)]->(target)
+                        SET rel += props
+                        RETURN count(rel) AS created
+                        """,
+                        session=session,
+                        parameters={'annotations': unsourced},
+                    )
 
     async def get_annotation_graph(self,
                                    prefix_1: ConceptPrefix,
@@ -804,8 +825,10 @@ class Neo4jGraphDatabase(GraphDatabase):
             result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
-                RETURN DISTINCT source.id AS source_id,
-                    target.id AS target_id,
+                RETURN DISTINCT startNode(r).prefix AS source_prefix,
+                    startNode(r).id AS source_id,
+                    endNode(r).prefix AS target_prefix,
+                    endNode(r).id AS target_id,
                     type(r) AS rel_label,
                     properties(r) AS rel_props
                 """,
@@ -822,8 +845,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 total=annotation_count,
             ):
                 annotation_graph.add_edge(
-                    f'{prefix_1.value}:{record["source_id"]}',
-                    f'{prefix_2.value}:{record["target_id"]}',
+                    f'{record["source_prefix"]}:{record["source_id"]}',
+                    f'{record["target_prefix"]}:{record["target_id"]}',
                     label=AnnotationType(record['rel_label']),
                     **record['rel_props']
                 )
@@ -848,7 +871,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             while True:
                 result = await _execute_query_with_retry(
                     query="""
-                    MATCH (:Concept {prefix: $prefix_1})-[r]->(:Concept {prefix: $prefix_2})
+                    MATCH (:Concept {prefix: $prefix_1})-[r]-(:Concept {prefix: $prefix_2})
                     WITH r LIMIT $batch_size
                     DELETE r
                     RETURN count(r) AS deleted
@@ -876,7 +899,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             result = await _execute_query_with_retry(
                 query="""
-                MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
+                MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
                 RETURN count(r) AS annotation_count
                 """,
                 session=session,

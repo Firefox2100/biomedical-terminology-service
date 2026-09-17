@@ -70,10 +70,12 @@ def test_xref_annotation_gets_mapping_source_from_lookup():
 
     assert len(annotations) == 1
     assert annotations[0].annotation_type == AnnotationType.EXACT
-    assert annotations[0].properties == {'mappingSource': 'MONDO:equivalentTo'}
+    assert annotations[0].properties == {
+        'mappingSource': 'MONDO:equivalentTo', 'source': 'Mondo',
+    }
 
 
-def test_xref_annotation_has_no_properties_when_untagged():
+def test_xref_annotation_has_only_dataset_provenance_when_untagged():
     mondo_class = _fake_mondo_class(
         exact_match=['http://purl.obolibrary.org/obo/DOID_4'],
     )
@@ -81,7 +83,7 @@ def test_xref_annotation_has_no_properties_when_untagged():
     annotations = _build_mondo_xref_annotations(mondo_class, '0000001', {})
 
     assert len(annotations) == 1
-    assert annotations[0].properties is None
+    assert annotations[0].properties == {'source': 'Mondo'}
 
 
 def test_hasdbxref_fallback_annotation_also_gets_mapping_source():
@@ -94,14 +96,16 @@ def test_hasdbxref_fallback_annotation_also_gets_mapping_source():
 
     assert len(annotations) == 1
     assert annotations[0].annotation_type == AnnotationType.ANNOTATED_WITH
-    assert annotations[0].properties == {'mappingSource': 'MONDO:exact-label-match'}
+    assert annotations[0].properties == {
+        'mappingSource': 'MONDO:exact-label-match', 'source': 'Mondo',
+    }
 
 
 def test_build_mondo_xref_annotations_defaults_lookup_to_empty():
-    # No lookup argument passed at all -- must not raise, and no annotation is tagged.
+    # No lookup argument passed at all -- only dataset-level provenance is attached.
     mondo_class = _fake_mondo_class(has_db_xref=['ICD9:799.9'])
 
     annotations = _build_mondo_xref_annotations(mondo_class, '0000001')
 
     assert len(annotations) == 1
-    assert annotations[0].properties is None
+    assert annotations[0].properties == {'source': 'Mondo'}

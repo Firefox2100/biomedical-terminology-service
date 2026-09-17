@@ -76,7 +76,12 @@ async def get_context_value(request: Request,
 # constant name(s), query object constant name) in bioterms.graphql_api.schemas / .resolver.
 _VOCABULARY_GRAPHQL_MODULES: dict[ConceptPrefix, tuple[str, str, list[str], str]] = {
     ConceptPrefix.CTV3: ('CTV3_SCHEMA', 'ctv3', ['CTV3_CONCEPT'], 'CTV3_QUERY'),
-    ConceptPrefix.ENSEMBL: ('ENSEMBL_SCHEMA', 'ensembl', ['ENSEMBL_CONCEPT'], 'ENSEMBL_QUERY'),
+    ConceptPrefix.ENSEMBL: (
+        'ENSEMBL_SCHEMA', 'ensembl',
+        ['ENSEMBL_CONCEPT', 'ENSEMBL_GENE', 'ENSEMBL_TRANSCRIPT', 'ENSEMBL_EXON',
+         'ENSEMBL_PROTEIN'],
+        'ENSEMBL_QUERY',
+    ),
     ConceptPrefix.HGNC: ('HGNC_SCHEMA', 'hgnc', ['HGNC_CONCEPT'], 'HGNC_QUERY'),
     ConceptPrefix.HGNC_SYMBOL: ('GENE_SCHEMA', 'gene', ['GENE_CONCEPT'], 'GENE_QUERY'),
     ConceptPrefix.HPO: ('HPO_SCHEMA', 'hpo', ['HPO_CONCEPT'], 'HPO_QUERY'),
@@ -100,6 +105,12 @@ _VOCABULARY_GRAPHQL_MODULES: dict[ConceptPrefix, tuple[str, str, list[str], str]
 _ANNOTATION_GRAPHQL_SCHEMAS: dict[tuple[ConceptPrefix, ConceptPrefix], tuple[str, str]] = {
     (ConceptPrefix.HPO, ConceptPrefix.ORDO): ('HPO_ORDO_SCHEMA', 'hpo_ordo'),
     (ConceptPrefix.CTV3, ConceptPrefix.SNOMED): ('CTV3_SNOMED_SCHEMA', 'ctv3_snomed'),
+    (ConceptPrefix.ENSEMBL, ConceptPrefix.HGNC_SYMBOL): ('ENSEMBL_GENE_SCHEMA', 'ensembl_gene'),
+    (ConceptPrefix.ENSEMBL, ConceptPrefix.OMIM): ('ENSEMBL_OMIM_SCHEMA', 'ensembl_omim'),
+    (ConceptPrefix.ENSEMBL, ConceptPrefix.REACTOME): (
+        'ENSEMBL_REACTOME_SCHEMA', 'ensembl_reactome',
+    ),
+    (ConceptPrefix.ENSEMBL, ConceptPrefix.UNIPROT): ('ENSEMBL_UNIPROT_SCHEMA', 'ensembl_uniprot'),
     (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO): ('GENE_HPO_SCHEMA', 'gene_hpo'),
     (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT): ('GENE_NCIT_SCHEMA', 'gene_ncit'),
     (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM): ('GENE_OMIM_SCHEMA', 'gene_omim'),
@@ -189,6 +200,10 @@ async def create_graphql_app() -> ASGIApp:
     )
     supported_annotations = [
         (ConceptPrefix.CTV3, ConceptPrefix.SNOMED),
+        (ConceptPrefix.ENSEMBL, ConceptPrefix.HGNC_SYMBOL),
+        (ConceptPrefix.ENSEMBL, ConceptPrefix.OMIM),
+        (ConceptPrefix.ENSEMBL, ConceptPrefix.REACTOME),
+        (ConceptPrefix.ENSEMBL, ConceptPrefix.UNIPROT),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.HPO),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.NCIT),
         (ConceptPrefix.HGNC_SYMBOL, ConceptPrefix.OMIM),

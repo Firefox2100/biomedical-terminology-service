@@ -4,6 +4,7 @@ Utility functions for data management, downloading, extraction, and processing.
 
 import asyncio
 import os
+import re
 import io
 import itertools
 import zipfile
@@ -35,6 +36,26 @@ if TYPE_CHECKING:
 _TRANSFORMER: Optional['SentenceTransformer'] = None
 T = TypeVar('T')
 R = TypeVar('R')
+
+
+async def discover_latest_numbered_release(base_url: str,
+                                             download_client: httpx.AsyncClient = None,
+                                             ) -> tuple[int, str]:
+    """Discover the highest ``release-N/`` directory exposed by an HTTP index."""
+    close_client = download_client is None
+    client = download_client or httpx.AsyncClient(follow_redirects=True)
+    try:
+        response = await client.get(base_url)
+        response.raise_for_status()
+        releases = [int(value) for value in re.findall(r'href="release-(\d+)/"', response.text)]
+    finally:
+        if close_client:
+            await client.aclose()
+
+    if not releases:
+        raise ValueError(f'Could not discover a numbered release under {base_url}')
+    release = max(releases)
+    return release, f'{base_url}release-{release}/'
 
 
 def _progress_columns(total_known: bool = True) -> list:

@@ -12,3 +12,12 @@ The HUGO Gene Nomenclature Committee (HGNC) wants to ensure that our information
 
 - [HUGO Gene Nomenclature Committee (HGNC)](https://www.genenames.org/)
 - [HGNC data download page](https://www.genenames.org/download/)
+
+## Additional mapping data published under the same licence
+
+The project also uses the `ensembl_gene_id` cross-reference column from HGNC's complete
+dataset to build the Ensembl gene to HGNC Gene Symbol annotation. This mapping data is
+published by HGNC and is covered by the same CC0 terms described above; it does not have a
+separate licence file.
+
+- [HGNC complete dataset downloads](https://www.genenames.org/download/statistics-and-files/)

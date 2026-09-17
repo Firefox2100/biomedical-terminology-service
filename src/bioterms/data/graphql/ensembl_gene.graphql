@@ -1,0 +1,2 @@
+extend type EnsemblGene { symbols: [HgncSymbolConcept!]! }
+extend type HgncSymbolConcept { ensemblGenes: [EnsemblGene!]! }

@@ -14,6 +14,7 @@ from .utils import write_concepts_to_file, write_graph_to_file
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee Symbol'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC_SYMBOL
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
     ConceptPrefix.HPO,
     ConceptPrefix.NCIT,
     ConceptPrefix.OMIM,

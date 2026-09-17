@@ -24,3 +24,13 @@ For information about how to properly credit data use, please review the [Creati
 
 - [Reactome database](https://reactome.org/)
 - [Data download page](https://reactome.org/download-data)
+
+## Additional mapping data published under the same licence
+
+The project uses Reactome's `Ensembl2Reactome.txt` identifier mapping to build the
+Ensembl–Reactome annotation. Reactome classifies identifier mapping files as annotation
+files, so this dataset is covered by the CC0 terms described above; it does not have a
+separate licence file.
+
+- [Current Reactome download directory](https://reactome.org/download/current/)
+- [Reactome mapping-file documentation](https://reactome.org/download-data)

@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import httpx
 import networkx as nx
 from owlready2 import default_world, ThingClass
@@ -11,6 +13,7 @@ from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
+from bioterms.annotation.utils import AnnotationSource, is_gene_annotation_prefix
 from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
 
 
@@ -32,6 +35,35 @@ SIMILARITY_METHODS = [
 FILE_PATHS = ['mondo/mondo.owl']
 TIMESTAMP_FILE = 'mondo/.timestamp'
 CONCEPT_CLASS = Concept
+
+
+@lru_cache
+def _mondo_annotation_source(target_prefix: ConceptPrefix | str) -> AnnotationSource:
+    return AnnotationSource('Mondo', VOCABULARY_PREFIX, target_prefix)
+
+
+def _create_mondo_annotation(target_prefix: ConceptPrefix | str,
+                             concept_id: str,
+                             target_id: str,
+                             annotation_type: AnnotationType,
+                             properties: dict[str, str] | None,
+                             ) -> Annotation:
+    # HGNC is a gene-vocabulary link and intentionally retains the legacy, provenance-free form.
+    if is_gene_annotation_prefix(target_prefix):
+        return Annotation(
+            prefixFrom=VOCABULARY_PREFIX,
+            prefixTo=target_prefix,
+            conceptIdFrom=concept_id,
+            conceptIdTo=target_id,
+            annotationType=annotation_type,
+            properties=properties,
+        )
+    return _mondo_annotation_source(target_prefix).create(
+        publisher_concept_id=concept_id,
+        other_concept_id=target_id,
+        annotation_type=annotation_type,
+        properties=properties,
+    )
 
 
 def map_vocabulary_prefix(vocabulary_id: str) -> ConceptPrefix | str:
@@ -228,13 +260,9 @@ def _build_mondo_xref_annotations(mondo_class: ThingClass,
 
             vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
             target_id = curie_id.split(':', 1)[1]
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=concept_id,
-                conceptIdTo=target_id,
-                annotationType=annotation_type,
-                properties=_source_properties(curie_id),
+            annotations.append(_create_mondo_annotation(
+                vocabulary_prefix, concept_id, target_id, annotation_type,
+                _source_properties(curie_id),
             ))
 
     for xref in getattr(mondo_class, 'hasDbXref', []):
@@ -247,13 +275,9 @@ def _build_mondo_xref_annotations(mondo_class: ThingClass,
 
         xref_prefix, target_id = xref.split(':', 1)
         vocabulary_prefix = map_vocabulary_prefix(xref_prefix)
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=vocabulary_prefix,
-            conceptIdFrom=concept_id,
-            conceptIdTo=target_id,
-            annotationType=AnnotationType.ANNOTATED_WITH,
-            properties=_source_properties(xref),
+        annotations.append(_create_mondo_annotation(
+            vocabulary_prefix, concept_id, target_id, AnnotationType.ANNOTATED_WITH,
+            _source_properties(xref),
         ))
 
     return annotations

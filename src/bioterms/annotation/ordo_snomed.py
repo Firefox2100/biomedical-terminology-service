@@ -7,14 +7,16 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_rf2, rf2_dataframe_deduplicate, \
     iter_progress, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
-from bioterms.model.annotation import Annotation
-from .utils import assert_pre_requisite
+from .utils import AnnotationSource, assert_pre_requisite
 
 
 ANNOTATION_NAME = 'SNOMED CT Orphanet Map package'
 VOCABULARY_PREFIX_1 = ConceptPrefix.SNOMED
 VOCABULARY_PREFIX_2 = ConceptPrefix.ORDO
 FILE_PATHS = ['snomed/orphanet_map/mapping.txt']
+_SNOMED_ORPHANET_MAP = AnnotationSource(
+    'SNOMED CT Orphanet Map', ConceptPrefix.SNOMED, ConceptPrefix.ORDO,
+)
 
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
@@ -78,11 +80,9 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         desc='Processing SNOMED-ORDO annotations',
         total=len(mapping_df),
     ):
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX_1,
-            prefixTo=VOCABULARY_PREFIX_2,
-            conceptIdFrom=str(row['referencedComponentId']),
-            conceptIdTo=str(row['mapTarget']),
+        annotations.append(_SNOMED_ORPHANET_MAP.create(
+            publisher_concept_id=str(row['referencedComponentId']),
+            other_concept_id=str(row['mapTarget']),
         ))
 
     verbose_print(f'Inserting {len(annotations)} SNOMED-ORDO annotations into the database...')

@@ -49,7 +49,7 @@ import asyncio
 import time
 from typing import AsyncIterator, Iterable, Optional
 from sqlalchemy import Float, Text, bindparam, text
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection
 import networkx as nx
 
@@ -87,15 +87,15 @@ def _prefix_str(prefix: ConceptPrefix | str) -> str:
     return prefix.value if isinstance(prefix, ConceptPrefix) else prefix
 
 
-def _array_param(name: str, values: list) -> bindparam:
+def _array_param(name: str, values: list, type_=Text) -> bindparam:
     """
-    Build a bindparam for a Postgres TEXT[] parameter, so it can be used with ANY()/UNNEST() in
-    raw SQL without the driver misinferring its type from a plain Python list.
+    Build a typed Postgres array bindparam for use with ANY()/UNNEST().
     :param name: The bindparam name.
-    :param values: The list of string values.
+    :param values: The array values.
+    :param type_: The SQLAlchemy element type; TEXT by default.
     :return: The bindparam.
     """
-    return bindparam(name, value=values, type_=ARRAY(Text))
+    return bindparam(name, value=values, type_=ARRAY(type_))
 
 
 def _float_array_param(name: str, values: list[float]) -> bindparam:
@@ -366,8 +366,33 @@ class PostgresGraphDatabase(GraphDatabase):
                 prefix_to TEXT NOT NULL,
                 concept_to TEXT NOT NULL,
                 rel_type TEXT NOT NULL,
-                PRIMARY KEY (prefix_from, concept_from, prefix_to, concept_to, rel_type)
+                source TEXT NOT NULL DEFAULT '',
+                properties JSONB NOT NULL DEFAULT '{}'::jsonb,
+                PRIMARY KEY (prefix_from, concept_from, prefix_to, concept_to, rel_type, source)
             ) PARTITION BY LIST (prefix_from)
+        """))
+        # Upgrade databases created before annotation provenance was persisted.
+        await conn.execute(text(
+            "ALTER TABLE graph_annotation ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT ''"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE graph_annotation ADD COLUMN IF NOT EXISTS properties JSONB NOT NULL DEFAULT '{}'::jsonb"
+        ))
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'graph_annotation'::regclass
+                      AND conname = 'graph_annotation_pkey'
+                      AND pg_get_constraintdef(oid) NOT LIKE '%source%'
+                ) THEN
+                    ALTER TABLE graph_annotation DROP CONSTRAINT graph_annotation_pkey;
+                    ALTER TABLE graph_annotation ADD PRIMARY KEY
+                        (prefix_from, concept_from, prefix_to, concept_to, rel_type, source);
+                END IF;
+            END $$
         """))
         await conn.execute(text(
             'CREATE INDEX IF NOT EXISTS ix_graph_annotation_reverse ON graph_annotation (prefix_to, concept_to)'
@@ -853,15 +878,23 @@ class PostgresGraphDatabase(GraphDatabase):
 
             for batch in batch_iterable(annotations):
                 await conn.execute(text("""
-                    INSERT INTO graph_annotation (prefix_from, concept_from, prefix_to, concept_to, rel_type)
-                    SELECT * FROM UNNEST(:prefixes_from, :concepts_from, :prefixes_to, :concepts_to, :rel_types)
-                    ON CONFLICT (prefix_from, concept_from, prefix_to, concept_to, rel_type) DO NOTHING
+                    INSERT INTO graph_annotation
+                        (prefix_from, concept_from, prefix_to, concept_to, rel_type, source, properties)
+                    SELECT * FROM UNNEST(
+                        :prefixes_from, :concepts_from, :prefixes_to, :concepts_to,
+                        :rel_types, :sources, :properties
+                    )
+                    ON CONFLICT
+                        (prefix_from, concept_from, prefix_to, concept_to, rel_type, source)
+                    DO UPDATE SET properties = graph_annotation.properties || EXCLUDED.properties
                 """).bindparams(
                     _array_param('prefixes_from', [_prefix_str(a.prefix_from) for a in batch]),
                     _array_param('concepts_from', [a.concept_id_from for a in batch]),
                     _array_param('prefixes_to', [_prefix_str(a.prefix_to) for a in batch]),
                     _array_param('concepts_to', [a.concept_id_to for a in batch]),
                     _array_param('rel_types', [a.annotation_type.value for a in batch]),
+                    _array_param('sources', [(a.properties or {}).get('source', '') for a in batch]),
+                    _array_param('properties', [a.properties or {} for a in batch], type_=JSONB),
                 ))
 
     async def get_annotation_graph(self,
@@ -881,7 +914,7 @@ class PostgresGraphDatabase(GraphDatabase):
                 return annotation_graph
 
             result = await conn.execute(text("""
-                SELECT prefix_from, concept_from, prefix_to, concept_to, rel_type
+                SELECT prefix_from, concept_from, prefix_to, concept_to, rel_type, properties
                 FROM graph_annotation
                 WHERE (prefix_from = :p1 AND prefix_to = :p2) OR (prefix_from = :p2 AND prefix_to = :p1)
             """), {'p1': prefix_1.value, 'p2': prefix_2.value})
@@ -891,6 +924,7 @@ class PostgresGraphDatabase(GraphDatabase):
                     f'{row.prefix_from}:{row.concept_from}',
                     f'{row.prefix_to}:{row.concept_to}',
                     label=AnnotationType(row.rel_type),
+                    **row.properties,
                 )
 
         return annotation_graph
@@ -908,7 +942,9 @@ class PostgresGraphDatabase(GraphDatabase):
             if not await self._table_exists(conn, 'graph_annotation'):
                 return
             await conn.execute(text(
-                'DELETE FROM graph_annotation WHERE prefix_from = :p1 AND prefix_to = :p2'
+                'DELETE FROM graph_annotation '
+                'WHERE (prefix_from = :p1 AND prefix_to = :p2) '
+                'OR (prefix_from = :p2 AND prefix_to = :p1)'
             ), {'p1': prefix_1.value, 'p2': prefix_2.value})
 
     async def count_annotations(self,
@@ -925,7 +961,9 @@ class PostgresGraphDatabase(GraphDatabase):
             if not await self._table_exists(conn, 'graph_annotation'):
                 return 0
             result = await conn.execute(text(
-                'SELECT count(*) FROM graph_annotation WHERE prefix_from = :p1 AND prefix_to = :p2'
+                'SELECT count(*) FROM graph_annotation '
+                'WHERE (prefix_from = :p1 AND prefix_to = :p2) '
+                'OR (prefix_from = :p2 AND prefix_to = :p1)'
             ), {'p1': prefix_1.value, 'p2': prefix_2.value})
             return int(result.scalar_one())
 

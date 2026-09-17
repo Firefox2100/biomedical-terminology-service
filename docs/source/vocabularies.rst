@@ -11,10 +11,10 @@ This software aims to support a wide range of biomedical vocabularies and ontolo
 Vocabulary                   Status             Note
 ============================ ================== ===========================================================================
 CTV3                         Supported          Downloaded from the NHS TRUD API.
-Ensembl                      Supported          Downloaded via FTP from Ensembl.
+Ensembl                      Supported          Current human GTF downloaded via FTP; genes, transcripts, exons, and
+                                                 proteins are first-class concepts. External mappings are separate annotations.
 HGNC                         Supported          Downloaded from the HGNC release on Google Drive.
-HGNC Symbol (``gene``)       Supported          Derived automatically from the HGNC release when HGNC or Ensembl is
-                                                 loaded; it is not downloaded separately.
+HGNC Symbol (``gene``)       Supported          Derived from the HGNC release. Ensembl mapping is independently managed.
 HPO                          Supported          Downloaded from a GitHub release.
 Mondo                        Supported          Downloaded from a GitHub release.
 NCIT                         Supported          Downloaded via FTP from NIH.
