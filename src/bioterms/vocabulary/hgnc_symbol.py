@@ -1,4 +1,5 @@
 import os
+import httpx
 import networkx as nx
 import pandas as pd
 
@@ -30,6 +31,13 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'hgnc/.timestamp'
 CONCEPT_CLASS = Concept
+
+
+async def download_vocabulary(download_client: httpx.AsyncClient = None):
+    """Reuse the HGNC release that defines approved, alias, and withdrawn gene symbols."""
+    from .hgnc import download_vocabulary as download_hgnc
+
+    await download_hgnc(download_client=download_client)
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,

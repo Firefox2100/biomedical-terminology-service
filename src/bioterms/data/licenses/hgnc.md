@@ -15,9 +15,11 @@ The HUGO Gene Nomenclature Committee (HGNC) wants to ensure that our information
 
 ## Additional mapping data published under the same licence
 
-The project also uses the `ensembl_gene_id` cross-reference column from HGNC's complete
-dataset to build the Ensembl gene to HGNC Gene Symbol annotation. This mapping data is
-published by HGNC and is covered by the same CC0 terms described above; it does not have a
-separate licence file.
+The project also uses cross-reference columns from HGNC's complete dataset to build mappings
+from HGNC identifiers to Ensembl genes, UniProt entries, and OMIM gene entries. It additionally
+uses the approved, alias, and previous-symbol fields for the built-in HGNC-to-gene-symbol links.
+These data are published by HGNC and covered by the same CC0 terms described above; they do not
+have separate licence files. HGNC documents `ensembl_gene_id` as curated by HGNC, while the
+`uniprot_ids` and `omim_id` mapped fields are supplied by UniProt and OMIM respectively.
 
 - [HGNC complete dataset downloads](https://www.genenames.org/download/statistics-and-files/)

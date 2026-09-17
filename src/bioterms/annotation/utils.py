@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import aiofiles
 import httpx
+import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType
@@ -141,6 +142,37 @@ def load_hpoa_negated_pairs() -> set[tuple[str, str]]:
             if row.get('qualifier') == 'NOT':
                 pairs.add((row['database_id'], row['hpo_id']))
     return pairs
+
+
+def load_hgnc_mapping(column: str,
+                      target_prefix: ConceptPrefix,
+                      annotation_type: AnnotationType,
+                      ) -> list[Annotation]:
+    """Build one HGNC-published cross-reference projection from the complete HGNC dataset."""
+    frame = pd.read_csv(
+        os.path.join(CONFIG.data_dir, 'hgnc/symbol.txt'),
+        sep='\t',
+        dtype=str,
+        usecols=['hgnc_id', column],
+        keep_default_na=False,
+    )
+    annotations = []
+    seen = set()
+    for _, row in frame.iterrows():
+        hgnc_id = row['hgnc_id'].split(':', 1)[-1]
+        for target_id in filter(None, row[column].split('|')):
+            key = (hgnc_id, target_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            annotations.append(Annotation(
+                prefixFrom=ConceptPrefix.HGNC,
+                conceptIdFrom=hgnc_id,
+                prefixTo=target_prefix,
+                conceptIdTo=target_id,
+                annotationType=annotation_type,
+            ))
+    return annotations
 
 
 def is_gene_annotation_prefix(prefix: ConceptPrefix | str) -> bool:

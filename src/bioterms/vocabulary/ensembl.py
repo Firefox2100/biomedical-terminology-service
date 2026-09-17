@@ -20,6 +20,7 @@ from .utils import write_concepts_to_file, write_graph_to_file
 VOCABULARY_NAME = 'Ensembl'
 VOCABULARY_PREFIX = ConceptPrefix.ENSEMBL
 ANNOTATIONS = [
+    ConceptPrefix.HGNC,
     ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.OMIM,
     ConceptPrefix.REACTOME,

@@ -19,6 +19,7 @@ VOCABULARY_NAME = 'UniProtKB'
 VOCABULARY_PREFIX = ConceptPrefix.UNIPROT
 ANNOTATIONS = [
     ConceptPrefix.ENSEMBL,
+    ConceptPrefix.HGNC,
     ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.REACTOME,
 ]
