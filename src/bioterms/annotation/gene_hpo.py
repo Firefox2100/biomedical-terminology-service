@@ -8,13 +8,13 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
     verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
-from .utils import assert_pre_requisite
+from .utils import assert_pre_requisite, download_hpoa, hpoa_file_path, load_hpoa_negated_pairs
 
 
-ANNOTATION_NAME = 'HGNC Gene Symbol Mapping to HPO'
-VOCABULARY_PREFIX_1 = ConceptPrefix.HGNC_SYMBOL
-VOCABULARY_PREFIX_2 = ConceptPrefix.HPO
-FILE_PATHS = ['hpo/gene_mapping.txt']
+ANNOTATION_NAME = 'HPO Mapping to HGNC Gene Symbol'
+VOCABULARY_PREFIX_1 = ConceptPrefix.HPO
+VOCABULARY_PREFIX_2 = ConceptPrefix.HGNC_SYMBOL
+FILE_PATHS = ['hpo/gene_mapping.txt', hpoa_file_path()]
 
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
@@ -35,6 +35,7 @@ async def download_annotation(download_client: httpx.AsyncClient = None):
         file_path=FILE_PATHS[0],
         download_client=download_client,
     )
+    await download_hpoa(download_client=download_client)
 
 
 async def load_annotation_from_file(graph_db: GraphDatabase = None,
@@ -58,18 +59,25 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         os.path.join(CONFIG.data_dir, FILE_PATHS[0]),
         sep='\t',
     )
+    negated_pairs = load_hpoa_negated_pairs()
 
-    verbose_print('HGNC symbol to HPO annotation file loaded from disk, processing annotations...')
+    verbose_print('HPO to HGNC symbol annotation file loaded from disk, processing annotations...')
 
     annotations = []
 
     for _, row in iter_progress(
         mapping_df.iterrows(),
-        description='Processing HGNC to HPO annotations',
+        description='Processing HPO to HGNC symbol annotations',
         total=len(mapping_df),
     ):
         if row['gene_symbol'] == '-':
             # No corresponding HGNC code
+            continue
+
+        if (row['disease_id'], row['hpo_id']) in negated_pairs:
+            # The projection drops phenotype.hpoa's NOT qualifier. Without a disease node on
+            # this edge, retaining it would turn an explicitly absent phenotype into a positive
+            # HPO-to-gene traversal.
             continue
 
         frequency = 'UN'
@@ -101,8 +109,8 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         annotations.append(Annotation(
             prefixFrom=VOCABULARY_PREFIX_1,
             prefixTo=VOCABULARY_PREFIX_2,
-            conceptIdFrom=row['gene_symbol'],
-            conceptIdTo=row['hpo_id'].split(':')[-1],
+            conceptIdFrom=row['hpo_id'].split(':')[-1],
+            conceptIdTo=row['gene_symbol'],
             properties={'frequency': frequency},
         ))
 

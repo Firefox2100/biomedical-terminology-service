@@ -20,6 +20,7 @@ VOCABULARY_PREFIX = ConceptPrefix.OMIM
 ANNOTATIONS = [
     ConceptPrefix.ENSEMBL,
     ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.HPO,
     ConceptPrefix.MONDO,
     ConceptPrefix.ORDO,
     ConceptPrefix.REACTOME,

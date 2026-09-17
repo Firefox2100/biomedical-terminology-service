@@ -7,13 +7,14 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
     verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
-from .utils import AnnotationSource, assert_pre_requisite
+from .utils import AnnotationSource, assert_pre_requisite, download_hpoa, hpoa_file_path, \
+    load_hpoa_annotations
 
 
-ANNOTATION_NAME = 'HPO - ORDO Ontological Module'
+ANNOTATION_NAME = 'HPO and ORDO phenotype annotations'
 VOCABULARY_PREFIX_1 = ConceptPrefix.ORDO
 VOCABULARY_PREFIX_2 = ConceptPrefix.HPO
-FILE_PATHS = ['hoom/hoom_orphanet.owl']
+FILE_PATHS = ['hoom/hoom_orphanet.owl', hpoa_file_path()]
 _HOOM = AnnotationSource('HOOM', ConceptPrefix.ORDO, ConceptPrefix.HPO)
 
 
@@ -22,22 +23,20 @@ async def download_annotation(download_client: httpx.AsyncClient = None):
     Download the HOOM files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
-        return
+    if not check_files_exist([FILE_PATHS[0]]):
+        ensure_data_directory()
 
-    ensure_data_directory()
+        if not CONFIG.bioportal_api_key:
+            raise ValueError('BioPortal API key is required to download HOOM mapping.')
 
-    owl_url = 'https://data.bioontology.org/ontologies/HOOM/download'
+        await download_file(
+            url='https://data.bioontology.org/ontologies/HOOM/download',
+            file_path=FILE_PATHS[0],
+            headers={'Authorization': f'apikey token={CONFIG.bioportal_api_key}'},
+            download_client=download_client,
+        )
 
-    if not CONFIG.bioportal_api_key:
-        raise ValueError('BioPortal API key is required to download HOOM mapping.')
-
-    await download_file(
-        url=owl_url,
-        file_path=FILE_PATHS[0],
-        headers={'Authorization': f'apikey token={CONFIG.bioportal_api_key}'},
-        download_client=download_client,
-    )
+    await download_hpoa(download_client=download_client)
 
 
 async def load_annotation_from_file(graph_db: GraphDatabase = None,
@@ -82,7 +81,11 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
                 properties={'frequency': frequency_code},
             ))
 
-    verbose_print(f'Processed {len(annotations)} HOOM annotations. Saving to database...')
+    annotations.extend(load_hpoa_annotations('ORPHA', ConceptPrefix.ORDO))
+
+    verbose_print(
+        f'Processed {len(annotations)} HOOM and HPO-published annotations. Saving to database...'
+    )
 
     await graph_db.save_annotations(
         annotations=annotations

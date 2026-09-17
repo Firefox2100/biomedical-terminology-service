@@ -16,6 +16,7 @@ VOCABULARY_PREFIX = ConceptPrefix.HPO
 ANNOTATIONS = [
     ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.MONDO,
+    ConceptPrefix.OMIM,
     ConceptPrefix.ORDO,
 ]
 SIMILARITY_METHODS = [

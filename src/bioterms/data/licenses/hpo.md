@@ -26,3 +26,8 @@ All of the following license restrictions apply to all files provided by the HPO
 The project utilises the following additional data published by the same entity, under the same licence terms; these data will not have a separate licence file:
 
 - [HPO-Gene annotations](https://github.com/obophenotype/human-phenotype-ontology/releases)
+- [HPO disease-phenotype annotations (`phenotype.hpoa`)](https://github.com/obophenotype/human-phenotype-ontology/releases)
+
+The HPO documentation notes that annotations electronically derived from OMIM require users to
+contact OMIM before reusing them in other software products. The applicable OMIM terms are also
+reported with the OMIM vocabulary licence in this service.

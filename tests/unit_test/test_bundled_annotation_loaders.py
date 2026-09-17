@@ -2,8 +2,8 @@ import gzip
 
 import pytest
 
-from bioterms.annotation import gene_omim, gene_uniprot, hgnc_reactome, ncit_reactome, \
-    omim_reactome, reactome_uniprot
+from bioterms.annotation import gene_hpo, gene_omim, gene_uniprot, hgnc_reactome, hpo_omim, \
+    hpo_ordo, ncit_reactome, omim_reactome, reactome_uniprot
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
 
@@ -20,6 +20,20 @@ class FakeGraphDb:
 
     async def save_annotations(self, annotations):
         self.annotations.extend(annotations)
+
+
+def _write_hpoa(path):
+    path.write_text(
+        '#version: 2026-09-02\n'
+        'database_id\tdisease_name\tqualifier\thpo_id\treference\tevidence\tonset\t'
+        'frequency\tsex\tmodifier\taspect\tbiocuration\n'
+        'OMIM:1\tDisease one\t\tHP:0000001\tPMID:1\tPCS\tHP:0003577\t1/2\t'
+        'FEMALE\tHP:0012825\tP\tHPO:test[2026-01-01]\n'
+        'MIM:2\tDisease two\t\tHP:0000002\tOMIM:2\tTAS\t\t\t\t\tP\t'
+        'HPO:test[2026-01-01]\n'
+        'ORPHA:3\tDisease three\tNOT\tHP:0000003\tORPHA:3\tTAS\t\t\t\t\tP\t'
+        'ORPHA:test[2026-01-01]\n'
+    )
 
 
 @pytest.mark.asyncio
@@ -87,6 +101,92 @@ DR   HGNC; HGNC:1; TEST1.
     assert annotation.concept_id_from == 'P12345'
     assert annotation.concept_id_to == 'TEST1'
     assert annotation.annotation_type == AnnotationType.HAS_SYMBOL
+
+
+@pytest.mark.asyncio
+async def test_hpo_omim_loads_hpoa_in_release_direction_with_metadata(monkeypatch, tmp_path):
+    hpo_dir = tmp_path / 'hpo'
+    hpo_dir.mkdir()
+    _write_hpoa(hpo_dir / 'phenotype.hpoa')
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    graph_db = FakeGraphDb()
+
+    await hpo_omim.load_annotation_from_file(graph_db=graph_db)
+
+    assert [(a.concept_id_from, a.concept_id_to) for a in graph_db.annotations] == [
+        ('0000001', '1'), ('0000002', '2'),
+    ]
+    annotation = graph_db.annotations[0]
+    assert annotation.prefix_from == ConceptPrefix.HPO
+    assert annotation.prefix_to == ConceptPrefix.OMIM
+    assert annotation.properties == {
+        'reference': 'PMID:1',
+        'evidence': 'PCS',
+        'onset': 'HP:0003577',
+        'frequency': '1/2',
+        'sex': 'FEMALE',
+        'modifier': 'HP:0012825',
+        'aspect': 'P',
+        'biocuration': 'HPO:test[2026-01-01]',
+        'source': 'phenotype.hpoa',
+    }
+
+
+@pytest.mark.asyncio
+async def test_hpo_ordo_keeps_hpoa_opposite_to_hoom(monkeypatch, tmp_path):
+    hpo_dir = tmp_path / 'hpo'
+    hpo_dir.mkdir()
+    _write_hpoa(hpo_dir / 'phenotype.hpoa')
+    hoom_dir = tmp_path / 'hoom'
+    hoom_dir.mkdir()
+    (hoom_dir / 'hoom_orphanet.owl').write_text('')
+
+    class EmptyOntology:
+        def load(self):
+            return self
+
+        def classes(self):
+            return []
+
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    monkeypatch.setattr(hpo_ordo, 'get_ontology', lambda _: EmptyOntology())
+    graph_db = FakeGraphDb()
+
+    await hpo_ordo.load_annotation_from_file(graph_db=graph_db)
+
+    assert len(graph_db.annotations) == 1
+    annotation = graph_db.annotations[0]
+    assert annotation.prefix_from == ConceptPrefix.HPO
+    assert annotation.concept_id_from == '0000003'
+    assert annotation.prefix_to == ConceptPrefix.ORDO
+    assert annotation.concept_id_to == '3'
+    assert annotation.properties['source'] == 'phenotype.hpoa'
+    assert annotation.properties['qualifier'] == 'NOT'
+
+
+@pytest.mark.asyncio
+async def test_hpo_gene_projection_uses_hpo_direction_and_filters_hpoa_negation(
+    monkeypatch, tmp_path,
+):
+    hpo_dir = tmp_path / 'hpo'
+    hpo_dir.mkdir()
+    _write_hpoa(hpo_dir / 'phenotype.hpoa')
+    (hpo_dir / 'gene_mapping.txt').write_text(
+        'ncbi_gene_id\tgene_symbol\thpo_id\thpo_name\tfrequency\tdisease_id\n'
+        '1\tGENE1\tHP:0000001\tAll\t1/2\tOMIM:1\n'
+        '2\tGENE2\tHP:0000003\tFeature\t-\tORPHA:3\n'
+    )
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    graph_db = FakeGraphDb()
+
+    await gene_hpo.load_annotation_from_file(graph_db=graph_db)
+
+    assert len(graph_db.annotations) == 1
+    annotation = graph_db.annotations[0]
+    assert annotation.prefix_from == ConceptPrefix.HPO
+    assert annotation.concept_id_from == '0000001'
+    assert annotation.prefix_to == ConceptPrefix.HGNC_SYMBOL
+    assert annotation.concept_id_to == 'GENE1'
 
 
 @pytest.mark.asyncio

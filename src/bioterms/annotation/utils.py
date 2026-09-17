@@ -1,5 +1,6 @@
 import os
 import re
+import csv
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import quote
@@ -15,6 +16,10 @@ from bioterms.etc.utils import check_files_exist, discover_latest_numbered_relea
     ensure_data_directory, extract_file_from_gzip, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
+
+
+_HPOA_FILE_PATH = 'hpo/phenotype.hpoa'
+_HPOA_SOURCE = 'phenotype.hpoa'
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,94 @@ class AnnotationSource:
             annotationType=annotation_type,
             properties=annotation_properties,
         )
+
+
+async def download_hpoa(download_client: httpx.AsyncClient = None):
+    """Download the disease-to-phenotype annotations published in the HPO release."""
+    if check_files_exist([_HPOA_FILE_PATH]):
+        return
+
+    ensure_data_directory()
+    await download_file(
+        url=(
+            'https://github.com/obophenotype/human-phenotype-ontology/'
+            'releases/latest/download/phenotype.hpoa'
+        ),
+        file_path=_HPOA_FILE_PATH,
+        download_client=download_client,
+    )
+
+
+def hpoa_file_path() -> str:
+    """Return the shared relative path of the HPO annotation release."""
+    return _HPOA_FILE_PATH
+
+
+def load_hpoa_annotations(disease_namespace: str,
+                          disease_prefix: ConceptPrefix,
+                          ) -> list[Annotation]:
+    """
+    Load one disease namespace from ``phenotype.hpoa``.
+
+    HPO publishes the combined file, so HPO is deliberately the source side even for rows
+    contributed upstream by another organisation. This keeps the release distinct from datasets
+    published in the opposite direction, such as HOOM (ORDO -> HPO).
+    """
+    source = AnnotationSource(_HPOA_SOURCE, ConceptPrefix.HPO, disease_prefix)
+    path = os.path.join(CONFIG.data_dir, _HPOA_FILE_PATH)
+    records: dict[tuple[str, str], dict[str, list[str]]] = {}
+
+    accepted_namespaces = {disease_namespace.upper()}
+    if disease_namespace.upper() == 'OMIM':
+        # Older releases and the format documentation use MIM; current releases use OMIM.
+        accepted_namespaces.add('MIM')
+
+    with open(path, encoding='utf-8', newline='') as stream:
+        rows = csv.DictReader(
+            (line for line in stream if not line.startswith('#')),
+            delimiter='\t',
+        )
+        for row in rows:
+            namespace, separator, disease_id = row['database_id'].partition(':')
+            if separator and namespace.upper() in accepted_namespaces:
+                hpo_id = row['hpo_id'].split(':', 1)[-1]
+                property_values = records.setdefault((hpo_id, disease_id), {})
+                for key in (
+                    'qualifier', 'reference', 'evidence', 'onset', 'frequency', 'sex',
+                    'modifier', 'aspect', 'biocuration',
+                ):
+                    value = row.get(key)
+                    values = property_values.setdefault(key, [])
+                    if value and value not in values:
+                        values.append(value)
+
+    return [
+        source.create(
+            publisher_concept_id=hpo_id,
+            other_concept_id=disease_id,
+            properties={
+                key: ';'.join(values)
+                for key, values in property_values.items()
+                if values
+            },
+        )
+        for (hpo_id, disease_id), property_values in records.items()
+    ]
+
+
+def load_hpoa_negated_pairs() -> set[tuple[str, str]]:
+    """Return ``(disease CURIE, HPO CURIE)`` pairs explicitly qualified as absent."""
+    pairs = set()
+    path = os.path.join(CONFIG.data_dir, _HPOA_FILE_PATH)
+    with open(path, encoding='utf-8', newline='') as stream:
+        rows = csv.DictReader(
+            (line for line in stream if not line.startswith('#')),
+            delimiter='\t',
+        )
+        for row in rows:
+            if row.get('qualifier') == 'NOT':
+                pairs.add((row['database_id'], row['hpo_id']))
+    return pairs
 
 
 def is_gene_annotation_prefix(prefix: ConceptPrefix | str) -> bool:
