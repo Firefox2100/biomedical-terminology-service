@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import DocDatabaseDriverType, ConceptPrefix
 from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
@@ -375,6 +375,7 @@ async def get_active_doc_db() -> DocumentDatabase:
         doc_db = MongoDocumentDatabase()
         await doc_db.initialize()
         _active_doc_db = doc_db
+        LOGGER.info('Initialized document database backend: mongodb')
 
         return _active_doc_db
 
@@ -404,6 +405,7 @@ async def get_active_doc_db() -> DocumentDatabase:
         doc_db = SqlDocumentDatabase(sql_engine, batch_size=CONFIG.sql_batch_size)
         await doc_db.initialize()
         _active_doc_db = doc_db
+        LOGGER.info('Initialized document database backend: sql (%s)', sql_engine.dialect.name)
 
         return _active_doc_db
 

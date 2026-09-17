@@ -4,7 +4,7 @@ from pytheus.backends import load_backend
 from pytheus.backends.redis import MultiProcessRedisBackend
 from pytheus.metrics import Counter, Histogram
 
-from .consts import CONFIG
+from .consts import CONFIG, LOGGER
 from .enums import CacheDriverType
 
 
@@ -123,7 +123,7 @@ def initialize_metrics() -> None:
     DOCDB_OP_ERRORS = Counter(
         "docdb_op_errors_total",
         "Document DB operation errors.",
-        required_labels=['backend', 'op', 'prefix', 'result'],
+        required_labels=['backend', 'op', 'prefix', 'error_type'],
     )
 
     GRAPHDB_OP_DURATION = Histogram(
@@ -335,3 +335,7 @@ def initialize_metrics() -> None:
     for name, proxy in proxies.items():
         proxy.bind(created_metrics[name])
     _metrics_initialized = True
+    LOGGER.info(
+        'Initialized metrics backend: %s',
+        'redis' if CONFIG.cache_driver == CacheDriverType.REDIS else 'in-memory',
+    )

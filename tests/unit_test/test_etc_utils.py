@@ -5,7 +5,8 @@ import pytest
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import aiter_progress, download_file, extract_file_from_zip, iter_progress
+from bioterms.etc import utils
+from bioterms.etc.utils import aiter_progress, batch_iterable, download_file, extract_file_from_zip, iter_progress
 
 
 async def _agen(n):
@@ -37,6 +38,19 @@ def test_iter_progress_yields_all_items_when_progress_bar_disabled(monkeypatch):
     items = list(iter_progress(range(5), description='test'))
 
     assert items == [0, 1, 2, 3, 4]
+
+
+def test_iter_progress_accepts_tqdm_style_desc_alias(monkeypatch):
+    monkeypatch.setattr(CONFIG, 'disable_progress_bar', False)
+
+    assert list(iter_progress(range(2), desc='test', total=2)) == [0, 1]
+
+
+def test_batch_iterable_does_not_construct_progress_when_disabled(monkeypatch):
+    monkeypatch.setattr(CONFIG, 'disable_progress_bar', True)
+    monkeypatch.setattr(utils, 'Progress', lambda *args, **kwargs: pytest.fail('progress constructed'))
+
+    assert list(batch_iterable(range(5), batch_size=2)) == [[0, 1], [2, 3], [4]]
 
 
 class _FakeStreamResponse:

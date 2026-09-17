@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import CacheDriverType, ConceptPrefix
 from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.model.annotation_status import AnnotationStatus
@@ -153,6 +153,7 @@ def get_active_cache() -> Cache:
         )
         RedisCache.set_client(redis_client)
         _active_cache = RedisCache()
+        LOGGER.info('Initialized cache backend: redis')
 
         return _active_cache
 

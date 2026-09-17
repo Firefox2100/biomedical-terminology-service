@@ -9,7 +9,7 @@ import aiofiles
 import aiofiles.os
 
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.utils import check_files_exist
 from bioterms.etc.restore import batched_write
 from bioterms.database import Cache, GraphDatabase, get_active_cache, get_active_graph_db
@@ -164,6 +164,10 @@ async def download_annotation(prefix_1: ConceptPrefix,
     :param redownload: Whether to redownload the files even if they exist.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
+    LOGGER.info(
+        'Downloading annotation %s -> %s (redownload=%s)',
+        prefix_1.value, prefix_2.value, redownload,
+    )
     annotation_module = get_annotation_module(prefix_1, prefix_2)
 
     if redownload:
@@ -177,6 +181,7 @@ async def download_annotation(prefix_1: ConceptPrefix,
     result = download_func(download_client=download_client)
     if inspect.iscoroutine(result):
         await result
+    LOGGER.info('Annotation download complete: %s -> %s', prefix_1.value, prefix_2.value)
 
 
 async def delete_annotation(prefix_1: ConceptPrefix,
@@ -189,6 +194,7 @@ async def delete_annotation(prefix_1: ConceptPrefix,
     :param prefix_2: The second prefix.
     :param graph_db: Optional GraphDatabase instance to use.
     """
+    LOGGER.info('Deleting annotation %s -> %s', prefix_1.value, prefix_2.value)
     annotation_module = get_annotation_module(prefix_1, prefix_2)
     cache = get_active_cache()
 
@@ -211,6 +217,7 @@ async def delete_annotation(prefix_1: ConceptPrefix,
             await result
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Annotation deletion complete: %s -> %s', prefix_1.value, prefix_2.value)
 
 
 def _offline_dump_already_exists(annotation_module,
@@ -243,6 +250,10 @@ async def load_annotation(prefix_1: ConceptPrefix,
     :param offline: Whether to write output to offline dump file instead of graph database.
     :param graph_db: Optional GraphDatabase instance to use.
     """
+    LOGGER.info(
+        'Loading annotation %s -> %s (overwrite=%s, offline=%s)',
+        prefix_1.value, prefix_2.value, overwrite, offline,
+    )
     annotation_module = get_annotation_module(prefix_1, prefix_2)
 
     if not check_files_exist(annotation_module.FILE_PATHS):
@@ -288,11 +299,13 @@ async def load_annotation(prefix_1: ConceptPrefix,
             return
 
     if offline:
+        LOGGER.info('Annotation load complete: %s -> %s (offline)', prefix_1.value, prefix_2.value)
         return
 
     cache = get_active_cache()
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Annotation load complete: %s -> %s', prefix_1.value, prefix_2.value)
 
 
 async def get_annotation_status(prefix_1: ConceptPrefix,
@@ -418,6 +431,10 @@ async def restore_annotation(dump_path: str | os.PathLike,
     :return: The number of annotations restored.
     """
     dump_path = Path(dump_path)
+    LOGGER.info(
+        'Restoring annotations from %s (overwrite=%s, batch_size=%s)',
+        dump_path, overwrite, batch_size,
+    )
     if not dump_path.is_file():
         raise ValueError(f'Annotation dump not found: {dump_path}')
 
@@ -477,5 +494,7 @@ async def restore_annotation(dump_path: str | os.PathLike,
         cache = get_active_cache()
 
     await cache.rotate_dataset_version()
+
+    LOGGER.info('Annotation restore complete: %s (%s annotations)', dump_path, total)
 
     return total

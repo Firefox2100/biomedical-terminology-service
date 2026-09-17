@@ -1,14 +1,14 @@
-import traceback
 from pathlib import Path
 from typing import Annotated, Optional
 from rich.table import Table
 import typer
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.utils import iter_progress
 from bioterms.vocabulary import get_vocabulary_config
 from bioterms.annotation import download_annotation, load_annotation, delete_annotation, get_annotation_status, \
     get_annotation_config, restore_annotation
-from .utils import CONSOLE, run_async
+from .utils import CONSOLE, observe_cli_exception, run_async, verbose_cli
 
 
 app = typer.Typer(help='Manage biomedical vocabulary annotations.')
@@ -83,9 +83,12 @@ async def download_command(prefix_1: Annotated[
                            ] = False,
                            ):
     annotations = _resolve_annotation_targets(prefix_1, prefix_2, download_all)
+    verbose_cli(f'download annotation: selected {len(annotations):,} pair(s)')
 
-    for prefix_a, prefix_b in annotations:
+    for prefix_a, prefix_b in iter_progress(annotations, description='Downloading annotations'):
         try:
+            verbose_cli(f'downloading annotation {prefix_a.value} -> {prefix_b.value} '
+                        f'(redownload={redownload})')
             await download_annotation(
                 prefix_1=prefix_a,
                 prefix_2=prefix_b,
@@ -96,11 +99,11 @@ async def download_command(prefix_1: Annotated[
                 f'{prefix_a.value} and {prefix_b.value}.[/green]'
             )
         except Exception as e:
+            observe_cli_exception('download annotation', e)
             CONSOLE.print(
                 f'[red]Failed to download annotation between '
                 f'{prefix_a.value} and {prefix_b.value}: {e}[/red]'
             )
-            traceback.print_exc()
 
 
 async def _load_one_annotation(prefix_a: ConceptPrefix,
@@ -116,6 +119,10 @@ async def _load_one_annotation(prefix_a: ConceptPrefix,
     :param offline: Whether to write output to an offline dump file instead of the database.
     """
     try:
+        verbose_cli(
+            f'loading annotation {prefix_a.value} -> {prefix_b.value} '
+            f'(overwrite={overwrite}, offline={offline})'
+        )
         await download_annotation(
             prefix_1=prefix_a,
             prefix_2=prefix_b,
@@ -138,12 +145,12 @@ async def _load_one_annotation(prefix_a: ConceptPrefix,
                 f'{prefix_a.value} and {prefix_b.value} into the database.[/green]'
             )
     except Exception as e:
+        observe_cli_exception('load annotation', e)
         destination = 'offline dump file' if offline else 'database'
         CONSOLE.print(
             f'[red]Failed to load annotation between '
             f'{prefix_a.value} and {prefix_b.value} into the {destination}: {e}[/red]'
         )
-        traceback.print_exc()
 
 
 @app.command(name='load', help='Load a vocabulary annotation into database.')
@@ -184,8 +191,9 @@ async def load_command(prefix_1: Annotated[
                        ] = False,
                        ):
     annotations = _resolve_annotation_targets(prefix_1, prefix_2, load_all)
+    verbose_cli(f'load annotation: selected {len(annotations):,} pair(s)')
 
-    for prefix_a, prefix_b in annotations:
+    for prefix_a, prefix_b in iter_progress(annotations, description='Loading annotations'):
         await _load_one_annotation(prefix_a, prefix_b, overwrite, offline)
 
 
@@ -230,6 +238,10 @@ async def restore_command(annotation_dump: Annotated[
                           ] = 5000,
                           ):
     try:
+        verbose_cli(
+            f'restoring annotations from {annotation_dump} '
+            f'(overwrite={overwrite}, batch_size={batch_size:,})'
+        )
         count = await restore_annotation(
             dump_path=annotation_dump,
             source_prefix=source_prefix,
@@ -241,8 +253,8 @@ async def restore_command(annotation_dump: Annotated[
             f'[green]Successfully restored {count} annotations from {annotation_dump}.[/green]'
         )
     except Exception as e:
+        observe_cli_exception('restore annotation', e)
         CONSOLE.print(f'[red]Failed to restore annotations from {annotation_dump}: {e}[/red]')
-        traceback.print_exc()
 
 
 @app.command(name='delete', help='Delete a vocabulary annotation from database.')
@@ -270,9 +282,11 @@ async def delete_command(prefix_1: Annotated[
                          ] = False,
                          ):
     annotations = _resolve_annotation_targets(prefix_1, prefix_2, delete_all)
+    verbose_cli(f'delete annotation: selected {len(annotations):,} pair(s)')
 
-    for prefix_a, prefix_b in annotations:
+    for prefix_a, prefix_b in iter_progress(annotations, description='Deleting annotations'):
         try:
+            verbose_cli(f'deleting annotation {prefix_a.value} -> {prefix_b.value}')
             await delete_annotation(
                 prefix_1=prefix_a,
                 prefix_2=prefix_b,
@@ -282,11 +296,11 @@ async def delete_command(prefix_1: Annotated[
                 f'{prefix_a.value} and {prefix_b.value} from the database.[/green]'
             )
         except Exception as e:
+            observe_cli_exception('delete annotation', e)
             CONSOLE.print(
                 f'[red]Failed to delete annotation between '
                 f'{prefix_a.value} and {prefix_b.value} from the database: {e}[/red]'
             )
-            traceback.print_exc()
 
 
 @app.command(name='status', help='Get the status of a vocabulary annotation.')
@@ -313,6 +327,8 @@ async def status_command(prefix_1: Annotated[
     else:
         annotations = _get_all_annotations()
 
+    verbose_cli(f'checking status for {len(annotations):,} annotation pair(s)')
+
     table = Table(
         'Source Prefix',
         'Target Prefix',
@@ -320,7 +336,7 @@ async def status_command(prefix_1: Annotated[
         'Loaded in DB',
         'Number of Mappings',
     )
-    for prefix_a, prefix_b in annotations:
+    for prefix_a, prefix_b in iter_progress(annotations, description='Checking annotation status'):
         status = await get_annotation_status(prefix_a, prefix_b)
         table.add_row(
             prefix_a.value,
