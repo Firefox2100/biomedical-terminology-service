@@ -1,0 +1,48 @@
+type UberonConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    comment: String
+    status: ConceptStatus!
+
+    replaces: [UberonConcept!]!
+    replacedBy: [UberonConcept!]!
+    children: [UberonConcept!]!
+    parents: [UberonConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarUberonConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
+}
+
+type SimilarUberonConcept implements SimilarConcept {
+    from: UberonConcept!
+    to: UberonConcept!
+    score: Float!
+}
+
+type UberonConceptResponse {
+    error: QueryError
+    data: UberonConcept
+}
+
+type UberonConceptListResponse {
+    error: QueryError
+    data: [UberonConcept]
+}
+
+type UberonQuery {
+    uberonConcept(conceptId: String!): UberonConceptResponse
+    autoComplete(query: String!, limit: Int): UberonConceptListResponse
+    search(query: String!, limit: Int): UberonConceptListResponse
+}
+
+extend type Query {
+    uberon: UberonQuery
+}

@@ -563,7 +563,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
 
         if prefix in [
             ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.MONDO, ConceptPrefix.NCIT,
-            ConceptPrefix.OMIM, ConceptPrefix.ORDO, ConceptPrefix.SNOMED
+            ConceptPrefix.OMIM, ConceptPrefix.ORDO, ConceptPrefix.SNOMED, ConceptPrefix.UBERON
         ]:
             params = {
                 'ontology': prefix.value,

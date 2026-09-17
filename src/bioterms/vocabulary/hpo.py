@@ -1,13 +1,11 @@
-import os
 import httpx
 import networkx as nx
-from owlready2 import get_ontology, ThingClass
+from owlready2 import ThingClass
 
-from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
-    verbose_print
+from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter_progress, \
+    load_obo_owl_classes, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 from .utils import write_concepts_to_file, write_graph_to_file
@@ -35,15 +33,11 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     Download the HPO vocabulary files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
-        return
-
-    ensure_data_directory()
-
-    owl_url = 'https://github.com/obophenotype/human-phenotype-ontology/releases/latest/download/hp.owl'
-
-    await download_file(
-        url=owl_url,
+    await download_obo_owl_release(
+        release_url=(
+            'https://github.com/obophenotype/human-phenotype-ontology/'
+            'releases/latest/download/hp.owl'
+        ),
         file_path=FILE_PATHS[0],
         download_client=download_client,
     )
@@ -133,13 +127,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('HPO owl file not found')
 
-    full_ontology_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
-    verbose_print(f'Loading HPO ontology from {full_ontology_path}')
-
-    owl_file_path = f'file://{full_ontology_path}'
-
-    hpo_ontology = get_ontology(owl_file_path).load()
-    hpo_classes = list(hpo_ontology.classes())
+    verbose_print('Loading HPO ontology')
+    _, hpo_classes = load_obo_owl_classes(FILE_PATHS[0], 'HP_')
     verbose_print('HPO ontology read from file')
 
     hpo_graph = nx.DiGraph()

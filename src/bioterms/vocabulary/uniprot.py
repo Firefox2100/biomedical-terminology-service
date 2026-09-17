@@ -30,9 +30,7 @@ FILE_PATHS = [
 TIMESTAMP_FILE = 'uniprot/.timestamp'
 CONCEPT_CLASS = UniProtConcept
 
-UNIPROT_FTP_BASE = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete'
-
-BATCH_SIZE = 100000
+_BATCH_SIZE = 100000
 
 _ID_LINE = re.compile(r'^ID\s+\S+\s+(Reviewed|Unreviewed);')
 _DE_NAME_LINE = re.compile(r'^DE\s+(?:RecName|SubName): Full=(.+?);?\s*$')
@@ -67,7 +65,10 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
         filename = os.path.basename(file_path)
         verbose_print(f'Downloading {filename} (this file may be very large)...')
         await download_file(
-            url=f'{UNIPROT_FTP_BASE}/{filename}',
+            url=(
+                'https://ftp.uniprot.org/pub/databases/uniprot/current_release/'
+                f'knowledgebase/complete/{filename}'
+            ),
             file_path=file_path,
             download_client=download_client,
         )
@@ -306,7 +307,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                 if annotation is not None:
                     annotations.append(annotation)
 
-            if len(concepts) >= BATCH_SIZE:
+            if len(concepts) >= _BATCH_SIZE:
                 await _flush_batch(
                     concepts, annotations,
                     is_first_batch=(total_batches == 0),

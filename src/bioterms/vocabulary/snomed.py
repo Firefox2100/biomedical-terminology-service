@@ -48,7 +48,7 @@ FILE_PATHS: list[str] = [
 # release downloaded before this was added won't have these files yet, and that must not
 # block the rest of SNOMED from loading -- _process_associations is skipped per-release
 # when its association file is absent.
-ASSOCIATION_FILE_PATHS: list[str] = [
+_ASSOCIATION_FILE_PATHS: list[str] = [
     'snomed/international/association.txt',
     'snomed/uk_clinical/association.txt',
     'snomed/uk_drug/association.txt',
@@ -61,7 +61,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     """
     Download the SNOMED vocabulary files.
 
-    Gated on FILE_PATHS only, not ASSOCIATION_FILE_PATHS: the association files are
+    Gated on FILE_PATHS only, not _ASSOCIATION_FILE_PATHS: the association files are
     extracted with required=False (see the file_mapping entries below), so a release whose
     exact filename this doesn't match yet would otherwise make this check permanently False
     and re-trigger a full multi-GB re-download of everything on every call, forever, even
@@ -101,7 +101,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             ('SnomedCT_InternationalRF2*/Full/Terminology/sct2_Relationship_*.txt',
              os.path.join(CONFIG.data_dir, FILE_PATHS[3])),
             ('SnomedCT_InternationalRF2*/Full/Refset/Content/der2_*Refset_Association*Full*.txt',
-             os.path.join(CONFIG.data_dir, ASSOCIATION_FILE_PATHS[0]), False),
+             os.path.join(CONFIG.data_dir, _ASSOCIATION_FILE_PATHS[0]), False),
         ],
         download_client=download_client,
     )
@@ -118,7 +118,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             ('SnomedCT_UKClinicalRF2*/Full/Terminology/sct2_Relationship_*.txt',
              os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
             ('SnomedCT_UKClinicalRF2*/Full/Refset/Content/der2_*Refset_Association*Full*.txt',
-             os.path.join(CONFIG.data_dir, ASSOCIATION_FILE_PATHS[1]), False),
+             os.path.join(CONFIG.data_dir, _ASSOCIATION_FILE_PATHS[1]), False),
         ],
         download_client=download_client,
     )
@@ -135,7 +135,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             ('SnomedCT_UKDrugRF2*/Full/Terminology/sct2_Relationship_*.txt',
              os.path.join(CONFIG.data_dir, FILE_PATHS[11])),
             ('SnomedCT_UKDrugRF2*/Full/Refset/Content/der2_*Refset_Association*Full*.txt',
-             os.path.join(CONFIG.data_dir, ASSOCIATION_FILE_PATHS[2]), False),
+             os.path.join(CONFIG.data_dir, _ASSOCIATION_FILE_PATHS[2]), False),
         ],
         download_client=download_client,
     )
@@ -144,13 +144,13 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 async def delete_vocabulary_files():
     """
     Delete the SNOMED release files, including the historical Association Reference Set
-    files -- ASSOCIATION_FILE_PATHS is deliberately kept out of the vocabulary/__init__.py
+    files -- _ASSOCIATION_FILE_PATHS is deliberately kept out of the vocabulary/__init__.py
     default fallback's FILE_PATHS-only deletion (see its module comment), so a --redownload
     would otherwise leave stale association files on disk after this override didn't exist.
     They would still get overwritten correctly on the next download regardless (extraction
     always truncates), so this is a cleanliness fix rather than a correctness one.
     """
-    for file_path in FILE_PATHS + ASSOCIATION_FILE_PATHS:
+    for file_path in FILE_PATHS + _ASSOCIATION_FILE_PATHS:
         try:
             await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
         except OSError:
@@ -454,7 +454,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description_file=FILE_PATHS[1],
         definition_file=FILE_PATHS[2],
         relationship_file=FILE_PATHS[3],
-        association_file=ASSOCIATION_FILE_PATHS[0],
+        association_file=_ASSOCIATION_FILE_PATHS[0],
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
@@ -468,7 +468,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description_file=FILE_PATHS[5],
         definition_file=FILE_PATHS[6],
         relationship_file=FILE_PATHS[7],
-        association_file=ASSOCIATION_FILE_PATHS[1],
+        association_file=_ASSOCIATION_FILE_PATHS[1],
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,
@@ -481,7 +481,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         description_file=FILE_PATHS[9],
         definition_file=FILE_PATHS[10],
         relationship_file=FILE_PATHS[11],
-        association_file=ASSOCIATION_FILE_PATHS[2],
+        association_file=_ASSOCIATION_FILE_PATHS[2],
         doc_db=doc_db,
         graph_db=graph_db,
         offline=offline,

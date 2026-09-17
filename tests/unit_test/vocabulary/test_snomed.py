@@ -81,17 +81,17 @@ def test_process_relationships_and_associations_coexist_on_same_pair(tmp_path):
 
 
 def test_association_file_paths_are_registered_for_all_three_releases():
-    assert len(snomed.ASSOCIATION_FILE_PATHS) == 3
-    assert all('association.txt' in path for path in snomed.ASSOCIATION_FILE_PATHS)
+    assert len(snomed._ASSOCIATION_FILE_PATHS) == 3
+    assert all('association.txt' in path for path in snomed._ASSOCIATION_FILE_PATHS)
     # Deliberately excluded from FILE_PATHS/check_files_exist -- see module comment.
-    assert not any(path in snomed.FILE_PATHS for path in snomed.ASSOCIATION_FILE_PATHS)
+    assert not any(path in snomed.FILE_PATHS for path in snomed._ASSOCIATION_FILE_PATHS)
 
 
 @pytest.mark.asyncio
 async def test_delete_vocabulary_files_removes_association_files_too(monkeypatch, tmp_path):
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
 
-    all_paths = snomed.FILE_PATHS + snomed.ASSOCIATION_FILE_PATHS + [snomed.TIMESTAMP_FILE]
+    all_paths = snomed.FILE_PATHS + snomed._ASSOCIATION_FILE_PATHS + [snomed.TIMESTAMP_FILE]
     for path in all_paths:
         full_path = tmp_path / path
         full_path.parent.mkdir(parents=True, exist_ok=True)

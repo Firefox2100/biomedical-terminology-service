@@ -17,7 +17,7 @@ from collections.abc import MutableSequence, Iterable, Sized
 from pathlib import Path
 from itertools import islice
 from concurrent.futures import Executor
-from typing import Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar, TYPE_CHECKING
+from typing import Any, Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar, TYPE_CHECKING
 import aiofiles
 import aiofiles.os
 import httpx
@@ -79,6 +79,93 @@ def check_files_exist(files: list[str]) -> bool:
             return False
 
     return True
+
+
+async def download_obo_owl_release(release_url: str,
+                                   file_path: str,
+                                   download_client: httpx.AsyncClient = None,
+                                   ):
+    """Download one canonical OWL product from an OBO ontology release."""
+    if check_files_exist([file_path]):
+        return
+
+    ensure_data_directory()
+    await download_file(
+        url=release_url,
+        file_path=file_path,
+        download_client=download_client,
+    )
+
+
+def load_obo_owl_classes(file_path: str,
+                         class_name_prefix: str,
+                         ) -> tuple[Any, list[Any]]:
+    """
+    Load an OBO OWL release into an isolated owlready2 World and return only classes in
+    the ontology's own identifier namespace. Release products commonly include imported
+    classes from BFO, RO, CHEBI, GO, and other ontologies; those must not become concepts
+    in the vocabulary being loaded.
+    """
+    from owlready2 import World
+
+    absolute_path = os.path.join(CONFIG.data_dir, file_path)
+    ontology = World().get_ontology(Path(absolute_path).resolve().as_uri()).load()
+    classes = [
+        ontology_class
+        for ontology_class in ontology.classes()
+        if ontology_class.name.startswith(class_name_prefix)
+    ]
+    return ontology, classes
+
+
+def obo_entity_local_id(entity: Any,
+                        id_prefix: str,
+                        ) -> str | None:
+    """Return the local ID for an OBO entity/CURIE/IRI when it belongs to ``id_prefix``."""
+    value = getattr(entity, 'name', None) or str(entity)
+    underscore_prefix = f'{id_prefix}_'
+    curie_prefix = f'{id_prefix}:'
+
+    if value.startswith(underscore_prefix):
+        return value[len(underscore_prefix):]
+    if value.startswith(curie_prefix):
+        return value[len(curie_prefix):]
+
+    iri_marker = f'/{underscore_prefix}'
+    if iri_marker in value:
+        return value.rsplit(iri_marker, 1)[1]
+    return None
+
+
+def obo_class_metadata(ontology_class: Any) -> dict[str, Any]:
+    """Extract the common descriptive fields encoded by OBO OWL release products."""
+    def first_value(*attribute_names: str) -> str | None:
+        for attribute_name in attribute_names:
+            values = getattr(ontology_class, attribute_name, [])
+            if values:
+                return str(values[0])
+        return None
+
+    synonyms = []
+    for attribute_name in (
+        'hasExactSynonym',
+        'hasBroadSynonym',
+        'hasNarrowSynonym',
+        'hasRelatedSynonym',
+    ):
+        synonyms.extend(str(value) for value in getattr(ontology_class, attribute_name, []))
+
+    # Preserve release order while removing duplicates and a synonym identical to the label.
+    label = first_value('label')
+    synonyms = list(dict.fromkeys(value for value in synonyms if value != label))
+
+    return {
+        'label': label,
+        'definition': first_value('IAO_0000115', 'definition'),
+        'comment': first_value('comment'),
+        'deprecated': bool(getattr(ontology_class, 'deprecated', [])),
+        'synonyms': synonyms or None,
+    }
 
 
 def ensure_data_directory():

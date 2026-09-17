@@ -159,7 +159,7 @@ Vocabulary load order
 ``bioterms-cli vocabulary load --all`` does **not** load in dependency order - it iterates ``ConceptPrefix`` in its declared enum order, which loads Ensembl before HGNC_SYMBOL and will fail ``ensure_gene_symbol_loaded()``'s check. Load vocabularies individually, in this order:
 
 #. ``hgnc_symbol`` first - HGNC and Ensembl require it. UniProt itself does not, but only emits its bundled gene-symbol annotation online when the target vocabulary is present.
-#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi`` - independent of each other and of step 1's ordering constraint, any order among these is fine.
+#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon`` - independent of each other and of step 1's ordering constraint, any order among these is fine.
 #. ``ensembl`` - requires ``hgnc_symbol`` from step 1.
 #. ``uniprot`` - independent of Reactome; load ``annotation load uniprot gene`` explicitly later if the bundled annotation was skipped.
 #. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.

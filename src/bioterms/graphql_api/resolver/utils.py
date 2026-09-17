@@ -62,6 +62,7 @@ def prefix_to_concept_type(prefix: ConceptPrefix) -> str:
         ConceptPrefix.ORDO: 'OrdoConcept',
         ConceptPrefix.REACTOME: 'ReactomeConcept',
         ConceptPrefix.SNOMED: 'SnomedConcept',
+        ConceptPrefix.UNIPROT: 'UniProtConcept',
     }
     
     if prefix in mapping:

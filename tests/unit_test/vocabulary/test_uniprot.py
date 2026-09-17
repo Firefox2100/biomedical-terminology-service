@@ -4,6 +4,8 @@ import pytest
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
+from bioterms.graphql_api import _VOCABULARY_GRAPHQL_MODULES
+from bioterms.vocabulary import get_vocabulary_license
 import bioterms.vocabulary.uniprot as uniprot
 
 
@@ -60,6 +62,16 @@ SQ   SEQUENCE   1 AA;  1 MW;  0 CRC64;
      M
 //
 """
+
+
+def test_uniprot_has_graphql_and_license_support():
+    assert _VOCABULARY_GRAPHQL_MODULES[ConceptPrefix.UNIPROT] == (
+        'UNIPROT_SCHEMA',
+        'uniprot',
+        ['UNIPROT_CONCEPT'],
+        'UNIPROT_QUERY',
+    )
+    assert 'Creative Commons Attribution 4.0' in get_vocabulary_license(ConceptPrefix.UNIPROT)
 
 
 def _write_gz(path, content: str):
@@ -163,7 +175,7 @@ def test_build_symbol_annotation_present_and_absent():
 async def test_load_vocabulary_from_file_streams_in_batches_offline(monkeypatch, tmp_path):
     # Four records total, batch size forced to 3 -- exercises both a full-size flush and a
     # final partial flush, and confirms the second batch APPENDS rather than overwriting.
-    monkeypatch.setattr(uniprot, 'BATCH_SIZE', 3)
+    monkeypatch.setattr(uniprot, '_BATCH_SIZE', 3)
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
 
     uniprot_dir = tmp_path / 'uniprot'
@@ -326,4 +338,7 @@ async def test_download_vocabulary_skips_files_that_already_exist(monkeypatch, t
     assert len(downloaded) == 1
     url, file_path = downloaded[0]
     assert file_path == 'uniprot/uniprot_trembl.dat.gz'
-    assert url == f'{uniprot.UNIPROT_FTP_BASE}/uniprot_trembl.dat.gz'
+    assert url == (
+        'https://ftp.uniprot.org/pub/databases/uniprot/current_release/'
+        'knowledgebase/complete/uniprot_trembl.dat.gz'
+    )

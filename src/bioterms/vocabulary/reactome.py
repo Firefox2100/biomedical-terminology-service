@@ -31,15 +31,15 @@ FILE_PATHS = [
     'reactome/gene.csv',
     'reactome/gene_reaction.csv',
 ]
-GENE_MAPPING_FILE_PATH = 'reactome/gene_mapping.csv'
-DOWNLOAD_FILE_PATHS = [*FILE_PATHS, GENE_MAPPING_FILE_PATH]
+_GENE_MAPPING_FILE_PATH = 'reactome/gene_mapping.csv'
+_DOWNLOAD_FILE_PATHS = [*FILE_PATHS, _GENE_MAPPING_FILE_PATH]
 TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = ReactomeConcept
 
 
 async def delete_vocabulary_files():
     """Delete the complete Reactome download, including its separately managed mapping file."""
-    for file_path in DOWNLOAD_FILE_PATHS:
+    for file_path in _DOWNLOAD_FILE_PATHS:
         try:
             await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
         except FileNotFoundError:
@@ -55,7 +55,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     Download the Reactome vocabulary files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(DOWNLOAD_FILE_PATHS):
+    if check_files_exist(_DOWNLOAD_FILE_PATHS):
         return
 
     ensure_data_directory()
@@ -79,7 +79,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             ('reaction_pathway.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[4])),
             ('gene.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[5])),
             ('gene_reaction.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[6])),
-            ('gene_mapping.csv', os.path.join(CONFIG.data_dir, GENE_MAPPING_FILE_PATH))
+            ('gene_mapping.csv', os.path.join(CONFIG.data_dir, _GENE_MAPPING_FILE_PATH))
         ]
     )
 
@@ -251,7 +251,7 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
 
 def build_uniprot_annotations() -> list[Annotation]:
     """Build Reactome to UniProt identity annotations from ``gene_mapping.csv``."""
-    mapping_df = pd.read_csv(os.path.join(CONFIG.data_dir, GENE_MAPPING_FILE_PATH))
+    mapping_df = pd.read_csv(os.path.join(CONFIG.data_dir, _GENE_MAPPING_FILE_PATH))
     annotations = []
     for _, row in iter_progress(
         mapping_df.iterrows(),

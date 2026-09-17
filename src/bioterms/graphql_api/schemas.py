@@ -32,6 +32,8 @@ OMIM_SCHEMA = load_schema_file('omim')
 ORDO_SCHEMA = load_schema_file('ordo')
 REACTOME_SCHEMA = load_schema_file('reactome')
 SNOMED_SCHEMA = load_schema_file('snomed')
+UBERON_SCHEMA = load_schema_file('uberon')
+UNIPROT_SCHEMA = load_schema_file('uniprot')
 
 CTV3_SNOMED_SCHEMA = load_schema_file('ctv3_snomed')
 GENE_HPO_SCHEMA = load_schema_file('gene_hpo')

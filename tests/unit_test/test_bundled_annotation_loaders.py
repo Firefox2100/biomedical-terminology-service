@@ -2,7 +2,7 @@ import gzip
 
 import pytest
 
-from bioterms.annotation import gene_uniprot, reactome_uniprot
+from bioterms.annotation import gene_omim, gene_uniprot, reactome_uniprot
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
 
@@ -19,6 +19,40 @@ class FakeGraphDb:
 
     async def save_annotations(self, annotations):
         self.annotations.extend(annotations)
+
+
+@pytest.mark.asyncio
+async def test_omim_gene_download_reuses_omim_release(monkeypatch):
+    received_client = object()
+    calls = []
+
+    async def fake_download_vocabulary(download_client=None):
+        calls.append(download_client)
+
+    monkeypatch.setattr(gene_omim, 'download_vocabulary', fake_download_vocabulary)
+
+    await gene_omim.download_annotation(download_client=received_client)
+
+    assert calls == [received_client]
+
+
+@pytest.mark.asyncio
+async def test_explicit_omim_gene_load_uses_mapping_in_omim_csv(monkeypatch, tmp_path):
+    omim_dir = tmp_path / 'omim'
+    omim_dir.mkdir()
+    (omim_dir / 'omim.csv').write_text(
+        'Class ID,Gene Symbol\n'
+        'http://purl.bioontology.org/ontology/OMIM/100100,ADA|ADA2\n'
+    )
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    graph_db = FakeGraphDb()
+
+    await gene_omim.load_annotation_from_file(graph_db=graph_db)
+
+    assert [
+        (annotation.concept_id_from, annotation.concept_id_to)
+        for annotation in graph_db.annotations
+    ] == [('100100', 'ADA'), ('100100', 'ADA2')]
 
 
 @pytest.mark.asyncio

@@ -91,6 +91,8 @@ _VOCABULARY_GRAPHQL_MODULES: dict[ConceptPrefix, tuple[str, str, list[str], str]
         'REACTOME_QUERY',
     ),
     ConceptPrefix.SNOMED: ('SNOMED_SCHEMA', 'snomed', ['SNOMED_CONCEPT'], 'SNOMED_QUERY'),
+    ConceptPrefix.UBERON: ('UBERON_SCHEMA', 'uberon', ['UBERON_CONCEPT'], 'UBERON_QUERY'),
+    ConceptPrefix.UNIPROT: ('UNIPROT_SCHEMA', 'uniprot', ['UNIPROT_CONCEPT'], 'UNIPROT_QUERY'),
 }
 
 # Maps an annotation prefix pair to its (schema constant name, resolver module name). The

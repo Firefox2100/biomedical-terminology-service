@@ -8,7 +8,7 @@ A public demonstration server is hosted by the Brookes Lab, University of Leices
 
 ## Features
 
-* Unified access to multiple biomedical vocabularies and ontologies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, OHDSI, and UniProt.
+* Unified access to multiple biomedical vocabularies and ontologies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, OHDSI, Uberon, and UniProt.
 * Cross-vocabulary annotations and mappings, for normalising subject tagging and translating between term sets.
 * Parent-child and other relationship traversal, for use in external queries.
 * Auto-complete and full-text search across loaded vocabularies.

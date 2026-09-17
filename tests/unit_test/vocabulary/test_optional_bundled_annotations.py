@@ -31,11 +31,7 @@ async def test_mondo_no_annotation_skips_xref_processing(monkeypatch, tmp_path):
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
 
     ontology = types.SimpleNamespace(classes=lambda: [], world=object())
-    monkeypatch.setattr(
-        mondo,
-        'get_ontology',
-        lambda _path: types.SimpleNamespace(load=lambda: ontology),
-    )
+    monkeypatch.setattr(mondo, 'load_obo_owl_classes', lambda *_args: (ontology, []))
 
     def fail_xref_lookup(_world):
         raise AssertionError('Mondo xrefs must not be processed')

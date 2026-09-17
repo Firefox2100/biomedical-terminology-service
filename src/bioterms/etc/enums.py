@@ -42,6 +42,7 @@ class ConceptPrefix(Enum):
     ORDO = 'ordo'
     REACTOME = 'reactome'
     SNOMED = 'snomed'
+    UBERON = 'uberon'
     UNIPROT = 'uniprot'
 
 

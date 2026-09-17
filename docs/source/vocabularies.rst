@@ -27,6 +27,8 @@ Reactome                     Supported          Reactome only releases a Neo4j/S
 SNOMED CT                    Supported          Downloaded from the NHS TRUD API, including its historical Association
                                                  Reference Set files (SAME_AS/REPLACED_BY/WAS_A/etc, loaded as
                                                  ``snomed_association`` relationships).
+Uberon                       Supported          Canonical ``uberon.owl`` product downloaded from the official release.
+                                                 Imported classes from other OBO ontologies are excluded.
 UniProt                      Supported          Downloaded via FTP from UniProt. The **complete** UniProtKB release
                                                  (Swiss-Prot + TrEMBL, every organism) is loaded, not a subset scoped
                                                  to another vocabulary - see :doc:`build-database` for its size and
