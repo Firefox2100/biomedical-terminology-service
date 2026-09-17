@@ -59,15 +59,15 @@ Annotations Support
 
 This software also utilises mappings and annotations between the supported vocabularies to enhance the connectivity and semantic richness of the integrated knowledge graph. These annotations help link concepts across different vocabularies, facilitating more comprehensive queries and analyses. Annotations are loaded with ``bioterms-cli annotation load <vocabulary> <another-vocabulary>``, as described in :doc:`build-database`. Below is a list of supported annotation pairs and their sources:
 
-===================== ======================================================================================
+===================== =====================================================================================================================================================
 Vocabulary Pair       Source
-===================== ======================================================================================
+===================== =====================================================================================================================================================
 CTV3 - SNOMED         SNOMED's CTV3 map file, from the NHS TRUD API (requires an NHS TRUD API key).
 Gene Symbol - HPO     HPO's own gene mapping file, downloaded alongside HPO.
 Gene Symbol - NCIT    NCIT's own gene mapping file, downloaded alongside NCIT.
 Gene Symbol - OMIM    Derived from the OMIM release (BioPortal API).
 Gene Symbol - ORDO    ORDO's own gene mapping file, downloaded alongside ORDO.
-Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference, loaded alongside UniProt.
+Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference. Loaded alongside UniProt by default when Gene Symbol is present, or explicitly as a normal annotation.
 HGNC - Mondo          Derived from cross-references in the Mondo release.
 HPO - Mondo           Derived from cross-references in the Mondo release.
 HPO - ORDO            HPO-ORDO Ontological Module (HOOM), from the BioPortal API (requires a BioPortal API key).
@@ -79,7 +79,7 @@ NCIT - OHDSI          Derived from the OHDSI release.
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
-Reactome - UniProt    UniProt accession Reactome's own gene/protein records reference, loaded alongside Reactome.
-===================== ======================================================================================
+Reactome - UniProt    UniProt accession Reactome's own gene/protein records reference. Loaded explicitly as a normal annotation.
+===================== =====================================================================================================================================================
 
 Annotation pairs that are derived from a vocabulary's own release files (Mondo's cross-references, or a vocabulary's own gene/mapping file) do not require a separate download step or credential beyond what the parent vocabulary already needs.

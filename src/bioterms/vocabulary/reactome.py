@@ -1,18 +1,19 @@
 import os
 import json
+import aiofiles.os
 import httpx
 import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType, AnnotationType
+from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_zip, \
     iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
-from bioterms.model.concept import ReactomeConcept
 from bioterms.model.annotation import Annotation
-from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
+from bioterms.model.concept import ReactomeConcept
+from .utils import write_concepts_to_file, write_graph_to_file
 
 
 VOCABULARY_NAME = 'Reactome Pathways'
@@ -29,10 +30,24 @@ FILE_PATHS = [
     'reactome/reaction_pathway.csv',
     'reactome/gene.csv',
     'reactome/gene_reaction.csv',
-    'reactome/gene_mapping.csv',
 ]
+GENE_MAPPING_FILE_PATH = 'reactome/gene_mapping.csv'
+DOWNLOAD_FILE_PATHS = [*FILE_PATHS, GENE_MAPPING_FILE_PATH]
 TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = ReactomeConcept
+
+
+async def delete_vocabulary_files():
+    """Delete the complete Reactome download, including its separately managed mapping file."""
+    for file_path in DOWNLOAD_FILE_PATHS:
+        try:
+            await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
+        except FileNotFoundError:
+            pass
+    try:
+        await aiofiles.os.remove(os.path.join(CONFIG.data_dir, TIMESTAMP_FILE))
+    except FileNotFoundError:
+        pass
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -40,7 +55,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     Download the Reactome vocabulary files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
+    if check_files_exist(DOWNLOAD_FILE_PATHS):
         return
 
     ensure_data_directory()
@@ -64,7 +79,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             ('reaction_pathway.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[4])),
             ('gene.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[5])),
             ('gene_reaction.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[6])),
-            ('gene_mapping.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[7]))
+            ('gene_mapping.csv', os.path.join(CONFIG.data_dir, GENE_MAPPING_FILE_PATH))
         ]
     )
 
@@ -234,6 +249,25 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
             )
 
 
+def build_uniprot_annotations() -> list[Annotation]:
+    """Build Reactome to UniProt identity annotations from ``gene_mapping.csv``."""
+    mapping_df = pd.read_csv(os.path.join(CONFIG.data_dir, GENE_MAPPING_FILE_PATH))
+    annotations = []
+    for _, row in iter_progress(
+        mapping_df.iterrows(),
+        description='Processing Reactome UniProt mappings',
+        total=len(mapping_df),
+    ):
+        annotations.append(Annotation(
+            prefixFrom=ConceptPrefix.REACTOME,
+            prefixTo=ConceptPrefix.UNIPROT,
+            conceptIdFrom=str(row['gene_id']),
+            conceptIdTo=str(row['symbol']),
+            annotationType=AnnotationType.EXACT,
+        ))
+    return annotations
+
+
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
@@ -250,33 +284,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     concepts, reactome_graph = _process_concept_files()
     _process_relationship_files(reactome_graph)
-
-    verbose_print('Building Reactome -> UniProt identity annotations...')
-
-    # gene_mapping.csv's 'symbol' column is misnamed: it actually holds UniProt accessions
-    # (Reactome's native protein identifier, confirmed against Reactome's own
-    # ReferenceGeneProduct.identifier field), not HGNC gene symbols. This is Reactome's own
-    # identity claim about which protein a GenomeEncodedEntity is -- EXACT is appropriate.
-    # HGNC-symbol resolution for that UniProt accession is the UniProt vocabulary's own
-    # concern (see vocabulary/uniprot.py's has_symbol annotations), not duplicated here --
-    # collapsing Reactome's protein-identity claim and HGNC's nomenclature claim into one
-    # edge was exactly the provenance conflation this change is meant to undo.
-    annotations = []
-    mapping_df = pd.read_csv(
-        str(os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
-    )
-    for _, row in iter_progress(
-        mapping_df.iterrows(),
-        description='Processing Reactome UniProt mappings',
-        total=len(mapping_df),
-    ):
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=ConceptPrefix.UNIPROT,
-            conceptIdFrom=row['gene_id'],
-            conceptIdTo=row['symbol'],
-            annotationType=AnnotationType.EXACT,
-        ))
 
     verbose_print('Reactome concepts constructed, saving to databases...')
 
@@ -295,7 +302,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             graph=reactome_graph,
         )
-        await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -308,8 +314,3 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             vocabulary_graph=reactome_graph,
         )
         del concepts
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            prefix_to=ConceptPrefix.UNIPROT,
-            annotations=annotations,
-        )

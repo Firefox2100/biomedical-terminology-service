@@ -174,7 +174,7 @@ async def test_load_vocabulary_from_file_streams_in_batches_offline(monkeypatch,
     )
     _write_gz(uniprot_dir / 'uniprot_trembl.dat.gz', NO_ACCESSION_MALFORMED_RECORD)
 
-    await uniprot.load_vocabulary_from_file(offline=True)
+    await uniprot.load_vocabulary_from_file(offline=True, build_search_index=False)
 
     doc_dump_path = tmp_path / 'offline' / 'uniprot.doc.dump'
     doc_lines = doc_dump_path.read_text().strip().splitlines()
@@ -194,31 +194,73 @@ async def test_load_vocabulary_from_file_streams_in_batches_offline(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_load_vocabulary_from_file_requires_gene_symbol_loaded_online(monkeypatch, tmp_path):
+async def test_load_vocabulary_from_file_skips_gene_annotation_when_gene_symbol_absent(monkeypatch, tmp_path):
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
     uniprot_dir = tmp_path / 'uniprot'
     uniprot_dir.mkdir()
     _write_gz(uniprot_dir / 'uniprot_sprot.dat.gz', REVIEWED_HUMAN_RECORD)
     _write_gz(uniprot_dir / 'uniprot_trembl.dat.gz', '')
 
-    async def fail_ensure_gene_symbol_loaded(**_kwargs):
-        raise AssertionError('HGNC_SYMBOL not loaded')
+    class FakeDocDb:
+        saved = 0
 
-    monkeypatch.setattr(uniprot, 'ensure_gene_symbol_loaded', fail_ensure_gene_symbol_loaded)
+        async def save_terms(self, terms, no_upsert=False):
+            self.saved += len(terms)
+
+    class FakeGraphDb:
+        saved_annotations = []
+
+        async def count_terms(self, prefix):
+            return 0
+
+        async def save_vocabulary_graph(self, concepts, graph):
+            pass
+
+        async def save_annotations(self, annotations):
+            self.saved_annotations.extend(annotations)
+
+    doc_db = FakeDocDb()
+    graph_db = FakeGraphDb()
+    await uniprot.load_vocabulary_from_file(doc_db=doc_db, graph_db=graph_db, offline=False)
+
+    assert doc_db.saved == 1
+    assert graph_db.saved_annotations == []
+
+
+@pytest.mark.asyncio
+async def test_load_vocabulary_from_file_loads_gene_annotation_when_gene_symbol_present(monkeypatch, tmp_path):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    uniprot_dir = tmp_path / 'uniprot'
+    uniprot_dir.mkdir()
+    _write_gz(uniprot_dir / 'uniprot_sprot.dat.gz', REVIEWED_HUMAN_RECORD)
+    _write_gz(uniprot_dir / 'uniprot_trembl.dat.gz', '')
 
     class FakeDocDb:
         async def save_terms(self, terms, no_upsert=False):
             pass
 
     class FakeGraphDb:
+        def __init__(self):
+            self.saved_annotations = []
+
+        async def count_terms(self, prefix):
+            return 1
+
         async def save_vocabulary_graph(self, concepts, graph):
             pass
 
         async def save_annotations(self, annotations):
-            pass
+            self.saved_annotations.extend(annotations)
 
-    with pytest.raises(AssertionError, match='HGNC_SYMBOL not loaded'):
-        await uniprot.load_vocabulary_from_file(doc_db=FakeDocDb(), graph_db=FakeGraphDb(), offline=False)
+    graph_db = FakeGraphDb()
+    await uniprot.load_vocabulary_from_file(
+        doc_db=FakeDocDb(),
+        graph_db=graph_db,
+        offline=False,
+    )
+
+    assert len(graph_db.saved_annotations) == 1
+    assert graph_db.saved_annotations[0].concept_id_to == 'EEF1A1'
 
 
 @pytest.mark.asyncio
@@ -229,12 +271,34 @@ async def test_load_vocabulary_from_file_skips_gene_symbol_check_offline(monkeyp
     _write_gz(uniprot_dir / 'uniprot_sprot.dat.gz', REVIEWED_HUMAN_RECORD)
     _write_gz(uniprot_dir / 'uniprot_trembl.dat.gz', '')
 
-    async def fail_ensure_gene_symbol_loaded(**_kwargs):
-        raise AssertionError('should not be called in offline mode')
+    await uniprot.load_vocabulary_from_file(offline=True, build_search_index=False)  # must not raise
 
-    monkeypatch.setattr(uniprot, 'ensure_gene_symbol_loaded', fail_ensure_gene_symbol_loaded)
 
-    await uniprot.load_vocabulary_from_file(offline=True)  # must not raise
+@pytest.mark.asyncio
+async def test_load_vocabulary_from_file_no_annotation_skips_offline_dump(monkeypatch, tmp_path):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    uniprot_dir = tmp_path / 'uniprot'
+    uniprot_dir.mkdir()
+    _write_gz(uniprot_dir / 'uniprot_sprot.dat.gz', REVIEWED_HUMAN_RECORD)
+    _write_gz(uniprot_dir / 'uniprot_trembl.dat.gz', '')
+
+    async def ignore_write(**_kwargs):
+        pass
+
+    async def fail_annotation_write(**_kwargs):
+        raise AssertionError('annotation dump must not be written')
+
+    monkeypatch.setattr(uniprot, 'write_concepts_to_file', ignore_write)
+    monkeypatch.setattr(uniprot, 'write_graph_to_file', ignore_write)
+    monkeypatch.setattr(uniprot, 'write_annotations_to_file', fail_annotation_write)
+
+    await uniprot.load_vocabulary_from_file(
+        offline=True,
+        build_search_index=False,
+        load_annotations=False,
+    )
+
+    assert not (tmp_path / 'offline' / 'uniprot-gene.annotation.dump').exists()
 
 
 @pytest.mark.asyncio

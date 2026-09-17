@@ -18,6 +18,7 @@ ANNOTATIONS = [
     ConceptPrefix.NCIT,
     ConceptPrefix.OMIM,
     ConceptPrefix.ORDO,
+    ConceptPrefix.UNIPROT,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.CO_ANNOTATION

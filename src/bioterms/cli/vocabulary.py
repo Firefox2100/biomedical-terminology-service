@@ -92,6 +92,15 @@ async def load_command(vocabulary: Annotated[
                                     'backend (including PostgreSQL), or MongoDB with native Atlas '
                                     'Search, always recomputes these from the concept itself at '
                                     'restore time regardless. Ignored outside offline mode.')
+                       ] = False,
+                       no_annotation: Annotated[
+                           bool,
+                           typer.Option(
+                               '--no-annotation',
+                               help='Do not build optional annotations bundled with the vocabulary '
+                                    'release. Required Gene Symbol links for gene vocabularies '
+                                    'are not affected.'
+                           )
                        ] = False
                        ):
     try:
@@ -106,10 +115,14 @@ async def load_command(vocabulary: Annotated[
         for vocabulary in iter_progress(target_vocabularies, description='Loading vocabularies'):
             verbose_cli(
                 f'loading {vocabulary.value} (overwrite={overwrite}, offline={offline}, '
-                f'build_search_index={not no_index})'
+                f'build_search_index={not no_index}, load_annotations={not no_annotation})'
             )
             await load_vocabulary(
-                vocabulary, drop_existing=overwrite, offline=offline, build_search_index=not no_index,
+                vocabulary,
+                drop_existing=overwrite,
+                offline=offline,
+                build_search_index=not no_index,
+                load_annotations=not no_annotation,
             )
             CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:

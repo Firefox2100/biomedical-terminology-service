@@ -195,6 +195,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
                           drop_existing: bool = True,
                           offline: bool = False,
                           build_search_index: bool = True,
+                          load_annotations: bool = True,
                           cache: Cache = None,
                           doc_db: DocumentDatabase = None,
                           graph_db: GraphDatabase = None,
@@ -208,6 +209,8 @@ async def load_vocabulary(prefix: ConceptPrefix,
         fallback-search `nGrams`/`searchText` fields into the `.doc.dump` (see
         `write_concepts_to_file`). Ignored when `offline` is False. Pass False when the
         eventual restore target doesn't need them (any SQL backend) to skip this work.
+    :param load_annotations: Whether to build optional annotations bundled with the vocabulary
+        release. Vocabulary loaders that do not expose this option are unaffected.
     :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
@@ -241,12 +244,16 @@ async def load_vocabulary(prefix: ConceptPrefix,
     if load_func is None or not callable(load_func):
         raise ValueError(f'Vocabulary module for {prefix} does not have a load_vocabulary_from_file function.')
 
-    result = load_func(
-        doc_db=doc_db,
-        graph_db=graph_db,
-        offline=offline,
-        build_search_index=build_search_index,
-    )
+    load_kwargs = {
+        'doc_db': doc_db,
+        'graph_db': graph_db,
+        'offline': offline,
+        'build_search_index': build_search_index,
+    }
+    if 'load_annotations' in inspect.signature(load_func).parameters:
+        load_kwargs['load_annotations'] = load_annotations
+
+    result = load_func(**load_kwargs)
     if inspect.iscoroutine(result):
         await result
 

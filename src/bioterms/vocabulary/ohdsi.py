@@ -558,6 +558,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
                                     build_search_index: bool = True,
+                                    load_annotations: bool = True,
                                     ):
     """
     Load the OHDSI vocabulary from files into the primary databases.
@@ -602,9 +603,10 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
         del ohdsi_graph
 
-        annotations = _process_annotations()
-        verbose_print(f'Saving {len(annotations)} OHDSI annotations to the database...')
-        await graph_db.save_annotations(annotations)
+        if load_annotations:
+            annotations = _process_annotations()
+            verbose_print(f'Saving {len(annotations)} OHDSI annotations to the database...')
+            await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -619,8 +621,9 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         del concepts
         del ohdsi_graph
 
-        annotations = _process_annotations()
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            annotations=annotations,
-        )
+        if load_annotations:
+            annotations = _process_annotations()
+            await write_annotations_to_file(
+                prefix_from=VOCABULARY_PREFIX,
+                annotations=annotations,
+            )

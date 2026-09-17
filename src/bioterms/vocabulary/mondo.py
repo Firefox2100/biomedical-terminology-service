@@ -285,6 +285,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
                                     build_search_index: bool = True,
+                                    load_annotations: bool = True,
                                     ):
     """
     Load the Mondo vocabulary from a file into the primary databases.
@@ -304,8 +305,14 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     mondo_classes = list(mondo_ontology.classes())
     verbose_print('Mondo ontology read from file')
 
-    xref_source_lookup = _build_xref_source_lookup(mondo_ontology.world)
-    verbose_print(f'Built per-xref provenance lookup for {len(xref_source_lookup)} hasDbXref statements')
+    xref_source_lookup = (
+        _build_xref_source_lookup(mondo_ontology.world)
+        if load_annotations else {}
+    )
+    if load_annotations:
+        verbose_print(
+            f'Built per-xref provenance lookup for {len(xref_source_lookup)} hasDbXref statements'
+        )
 
     mondo_graph = nx.DiGraph()
     concepts = []
@@ -321,7 +328,14 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         mondo_graph.add_node(concept.concept_id)
 
         _add_mondo_is_a_edges(mondo_graph, mondo_class, concept.concept_id)
-        annotations.extend(_build_mondo_xref_annotations(mondo_class, concept.concept_id, xref_source_lookup))
+        if load_annotations:
+            annotations.extend(
+                _build_mondo_xref_annotations(
+                    mondo_class,
+                    concept.concept_id,
+                    xref_source_lookup,
+                )
+            )
 
     if not offline:
         if doc_db is None:
@@ -341,8 +355,9 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             graph=mondo_graph,
         )
 
-        verbose_print(f'Saving {len(annotations)} OHDSI annotations to the database...')
-        await graph_db.save_annotations(annotations)
+        if load_annotations:
+            verbose_print(f'Saving {len(annotations)} Mondo annotations to the database...')
+            await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -354,7 +369,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             vocabulary_graph=mondo_graph,
         )
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            annotations=annotations,
-        )
+        if load_annotations:
+            await write_annotations_to_file(
+                prefix_from=VOCABULARY_PREFIX,
+                annotations=annotations,
+            )

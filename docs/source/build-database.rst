@@ -124,7 +124,7 @@ Some vocabularies require an API key to download. The supported credentials are:
 
 And not all vocabularies can be downloaded this way. Particularly:
 
-* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into a Neo4j 4 (note that we use Neo4j 5 for this service, so you may need to install Neo4j 4 separately) instance first, and use the provided script ``scripts/dump_reactome_to_csv.py`` to export the data to CSV files that can be imported into the main database. Reactome's own protein identity is expressed as ``EXACT`` annotations to UniProt (see below), not as a resolved HGNC symbol directly - it does not need UniProt loaded first for correctness (annotation targets are created as bare stub nodes if missing), but loading UniProt first gives those nodes their full properties immediately instead of on UniProt's next load.
+* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into a Neo4j 4 (note that we use Neo4j 5 for this service, so you may need to install Neo4j 4 separately) instance first, and use the provided script ``scripts/dump_reactome_to_csv.py`` to export the data to CSV files that can be imported into the main database. Reactome's own protein identity is expressed as ``EXACT`` annotations to UniProt (see below), not as a resolved HGNC symbol directly. This mapping is managed as a normal annotation and is loaded explicitly after both vocabularies.
 * OHDSI standardized vocabularies are not open for public download, and provides no download API. You need to manually download the latest release from Athena, and unzip it to the data folder.
 * UMLS system provides no way to fetch the latest release files automatically, so the files downloaded from UMLS are using hard-coded URL. If you need a different version, you need to manually download the files from UMLS and place them in the data folder, or open an issue/pull request to notify us of the desired version.
 * UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
@@ -142,16 +142,30 @@ This reads the vocabulary files from the data folder, processes them and holds t
 
 Additionally, this command supports a ``--offline`` flag, which allows the database to be built without an actual database connection. The results will be written into dump files in the offline directory, which can later be imported into the database using the database import tools provided by the respective database systems. This is useful when building on systems like HPC, which are optimised for computation but not for disk I/O operations, and may have trouble running database processes.
 
+UniProt normally extracts its HGNC gene-symbol annotations during the same streaming pass as
+the vocabulary load when the gene-symbol vocabulary is present. Offline UniProt builds always
+write this annotation dump. Pass ``--no-annotation`` to suppress that bundled work. An explicit
+``bioterms-cli annotation load uniprot gene`` is independent and therefore streams the UniProt
+release files again; an existing annotation dump can instead be restored directly.
+
+The same ``--no-annotation`` option suppresses cross-vocabulary annotations derived while loading
+Mondo and OHDSI, including their offline annotation dumps. It does not suppress the required links
+from gene vocabularies such as Ensembl and HGNC into the Gene Symbol namespace: those links are
+part of the vocabulary model, and those vocabularies continue to require Gene Symbol online.
+
 Vocabulary load order
 ^^^^^^^^^^^^^^^^^^^^^
 
 ``bioterms-cli vocabulary load --all`` does **not** load in dependency order - it iterates ``ConceptPrefix`` in its declared enum order, which loads Ensembl before HGNC_SYMBOL and will fail ``ensure_gene_symbol_loaded()``'s check. Load vocabularies individually, in this order:
 
-#. ``hgnc_symbol`` first, always - HGNC, Ensembl, and UniProt all annotate into it and refuse to load without it (``VocabularyNotLoaded``) outside ``--offline`` mode.
+#. ``hgnc_symbol`` first - HGNC and Ensembl require it. UniProt itself does not, but only emits its bundled gene-symbol annotation online when the target vocabulary is present.
 #. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi`` - independent of each other and of step 1's ordering constraint, any order among these is fine.
 #. ``ensembl`` - requires ``hgnc_symbol`` from step 1.
-#. ``uniprot`` - requires ``hgnc_symbol`` from step 1. No hard ordering constraint versus Reactome (see the download note above), but loading it before Reactome means Reactome's annotations land on fully-populated nodes immediately.
+#. ``uniprot`` - independent of Reactome; load ``annotation load uniprot gene`` explicitly later if the bundled annotation was skipped.
 #. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.
+
+After both Reactome and UniProt are loaded, load their mapping explicitly with
+``bioterms-cli annotation load reactome uniprot``.
 
 The Read v2 migration overlay (below) is a separate script, not part of this load order, but expects ``ohdsi``, ``ctv3``, and ``snomed`` to already be loaded for a clean result.
 
