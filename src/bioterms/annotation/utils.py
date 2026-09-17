@@ -14,7 +14,8 @@ from bioterms.etc.enums import AnnotationType
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import VocabularyNotLoaded, FilesNotFound
 from bioterms.etc.utils import check_files_exist, discover_latest_numbered_release, download_file, \
-    ensure_data_directory, extract_file_from_gzip, verbose_print
+    ensure_data_directory, extract_file_from_gzip, load_obo_owl_classes, obo_entity_local_id, \
+    verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
 
@@ -172,6 +173,44 @@ def load_hgnc_mapping(column: str,
                 conceptIdTo=target_id,
                 annotationType=annotation_type,
             ))
+    return annotations
+
+
+def load_obo_xref_annotations(file_path: str,
+                              publisher_prefix: ConceptPrefix,
+                              publisher_class_prefix: str,
+                              xref_prefix: str,
+                              target_prefix: ConceptPrefix,
+                              source_name: str,
+                              ) -> list[Annotation]:
+    """Load one target namespace from OBO-style ``hasDbXref`` class annotations."""
+    _, classes = load_obo_owl_classes(
+        file_path=file_path,
+        class_name_prefix=f'{publisher_class_prefix}_',
+    )
+    source = AnnotationSource(source_name, publisher_prefix, target_prefix)
+    annotations = []
+    seen = set()
+    marker = f'{xref_prefix}:'
+
+    for ontology_class in classes:
+        publisher_id = obo_entity_local_id(ontology_class, publisher_class_prefix)
+        if publisher_id is None:
+            continue
+        for raw_xref in getattr(ontology_class, 'hasDbXref', []):
+            xref = str(raw_xref).strip()
+            if not xref.startswith(marker):
+                continue
+            target_id = xref[len(marker):]
+            if not target_id or (publisher_id, target_id) in seen:
+                continue
+            seen.add((publisher_id, target_id))
+            annotations.append(source.create(
+                publisher_concept_id=publisher_id,
+                other_concept_id=target_id,
+                annotation_type=AnnotationType.EXACT,
+            ))
+
     return annotations
 
 

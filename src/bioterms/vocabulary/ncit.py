@@ -22,6 +22,7 @@ ANNOTATIONS = [
     ConceptPrefix.MONDO,
     ConceptPrefix.OHDSI,
     ConceptPrefix.REACTOME,
+    ConceptPrefix.UBERON,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,

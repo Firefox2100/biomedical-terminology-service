@@ -12,3 +12,11 @@ Uberon's concepts and asserted relationships while representing them in its own 
 - [Official OBO Foundry entry](https://obofoundry.org/ontology/uberon.html)
 - [Release repository](https://github.com/obophenotype/uberon/releases)
 - [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)
+
+## Additional mapping data published under the same licence
+
+The service uses Uberon's OBO-style `hasDbXref` annotations to map Uberon anatomy concepts to
+NCIt and SNOMED CT identifiers. These cross-references are part of the official Uberon release
+and are the source of truth for Uberon's NCIt and SCTID bridge products.
+
+- [Uberon bridge and cross-reference documentation](https://github.com/obophenotype/uberon/blob/master/docs/bridges.md)

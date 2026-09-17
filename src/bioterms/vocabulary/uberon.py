@@ -17,7 +17,10 @@ from .utils import write_concepts_to_file, write_graph_to_file
 
 VOCABULARY_NAME = 'Uberon Multi-Species Anatomy Ontology'
 VOCABULARY_PREFIX = ConceptPrefix.UBERON
-ANNOTATIONS = []
+ANNOTATIONS = [
+    ConceptPrefix.NCIT,
+    ConceptPrefix.SNOMED,
+]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,
     SimilarityMethod.CO_ANNOTATION,
