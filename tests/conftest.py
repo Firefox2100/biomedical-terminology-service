@@ -1,4 +1,5 @@
 import os
 
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'dGVzdC1obWFjLWtleQ==')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
+# Tests must not inherit service credentials or external metrics backends from the shell.
+os.environ['BTS_SERVER_HMAC_KEY'] = 'dGVzdC1obWFjLWtleQ=='
+os.environ['BTS_ENABLE_METRICS'] = 'false'

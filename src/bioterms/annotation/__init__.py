@@ -11,6 +11,7 @@ import aiofiles.os
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.utils import check_files_exist
+from bioterms.etc.restore import batched_write
 from bioterms.database import Cache, GraphDatabase, get_active_cache, get_active_graph_db
 from bioterms.model.annotation_status import AnnotationStatus
 from bioterms.model.annotation import Annotation
@@ -435,48 +436,42 @@ async def restore_annotation(dump_path: str | os.PathLike,
             )
         await delete_annotation(prefix_1=source_fallback, prefix_2=target_fallback, graph_db=graph_db)
 
-    total = 0
-    batch: list[Annotation] = []
+    def annotations():
+        with dump_path.open(encoding='utf-8', newline='') as f:
+            for line_number, row in enumerate(csv.reader(f), 1):
+                if not row or not any(value.strip() for value in row):
+                    continue
+                if len(row) < 6:
+                    raise ValueError(f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6')
 
-    with dump_path.open(encoding='utf-8', newline='') as f:
-        for line_number, row in enumerate(csv.reader(f), 1):
-            if not row or not any(value.strip() for value in row):
-                continue
-            if len(row) < 6:
-                raise ValueError(f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6')
+                row_source_prefix, source_id, row_target_prefix, target_id, annotation_type, properties_text = row[:6]
+                source_curie = parse_annotation_curie(
+                    _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
+                )
+                target_curie = parse_annotation_curie(
+                    _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
+                )
+                source_curie_prefix, source_curie_id = source_curie.split(':', 1)
+                target_curie_prefix, target_curie_id = target_curie.split(':', 1)
 
-            row_source_prefix, source_id, row_target_prefix, target_id, annotation_type, properties_text = row[:6]
-            source_curie = parse_annotation_curie(
-                _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
-            )
-            target_curie = parse_annotation_curie(
-                _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
-            )
-            source_curie_prefix, source_curie_id = source_curie.split(':', 1)
-            target_curie_prefix, target_curie_id = target_curie.split(':', 1)
+                try:
+                    properties = json.loads(properties_text) if properties_text.strip() else None
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f'{dump_path}:{line_number} contains invalid properties JSON') from exc
 
-            try:
-                properties = json.loads(properties_text) if properties_text.strip() else None
-            except json.JSONDecodeError as exc:
-                raise ValueError(f'{dump_path}:{line_number} contains invalid properties JSON') from exc
+                yield Annotation(
+                    prefixFrom=source_curie_prefix,
+                    conceptIdFrom=source_curie_id,
+                    prefixTo=target_curie_prefix,
+                    conceptIdTo=target_curie_id,
+                    annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
+                    properties=properties,
+                )
 
-            batch.append(Annotation(
-                prefixFrom=source_curie_prefix,
-                conceptIdFrom=source_curie_id,
-                prefixTo=target_curie_prefix,
-                conceptIdTo=target_curie_id,
-                annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
-                properties=properties,
-            ))
-
-            if len(batch) >= batch_size:
-                await graph_db.save_annotations(batch)
-                total += len(batch)
-                batch = []
-
-    if batch:
+    async def save(batch: list[Annotation]) -> None:
         await graph_db.save_annotations(batch)
-        total += len(batch)
+
+    total = await batched_write(annotations(), save, batch_size)
 
     if cache is None:
         cache = get_active_cache()

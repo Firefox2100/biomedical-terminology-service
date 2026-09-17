@@ -1,10 +1,31 @@
+import asyncio
+import re
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import DocDatabaseDriverType, ConceptPrefix
+from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserRepository
+
+
+@dataclass(frozen=True)
+class SearchQuery:
+    clean: str
+    words: list[str]
+    compact: str
+
+
+def normalise_search_query(query: str, fallback_to_clean: bool = False) -> SearchQuery:
+    """Normalise user text consistently across document database backends."""
+    clean = re.sub(r'[()"\']', '', query.lower())
+    words = [word for word in clean.split() if len(word) > 2]
+    if fallback_to_clean and not words and clean:
+        words = [clean]
+    return SearchQuery(clean=clean, words=words, compact=re.sub(r'\s', '', clean))
 
 
 class DocumentDatabase(ABC):
@@ -220,21 +241,67 @@ class DocumentDatabase(ABC):
 
         return results
 
+    _backend_name = 'unknown'
+
     @abstractmethod
-    def auto_complete_iter(self,
-                           prefix: ConceptPrefix,
-                           query: str,
-                           limit: int = None,
-                           model_class: type[Concept] = Concept,
-                           ) -> AsyncIterator[ConceptUnion]:
-        """
-        Run an auto-complete search query against the document database and return an async iterator.
-        :param prefix: The vocabulary prefix to search within.
-        :param query: The search query string.
-        :param limit: The maximum number of results to return. If None, return all matches.
-        :param model_class: The Concept subclass to instantiate for results.
-        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
-        """
+    def _auto_complete_iter(self,
+                            prefix: ConceptPrefix,
+                            search_query: SearchQuery,
+                            limit: int,
+                            model_class: type[Concept],
+                            ) -> AsyncIterator[ConceptUnion]:
+        """Execute backend-specific autocomplete for a normalized query."""
+
+    async def auto_complete_iter(self,
+                                 prefix: ConceptPrefix,
+                                 query: str,
+                                 limit: int = None,
+                                 model_class: type[Concept] = Concept,
+                                 ) -> AsyncIterator[ConceptUnion]:
+        """Stream autocomplete results and record backend-independent metrics."""
+        search_query = normalise_search_query(query)
+        if not search_query.words:
+            return
+
+        start = time.perf_counter()
+        first_item_at = None
+        items = 0
+        result_label = 'ok'
+
+        try:
+            async for concept in self._auto_complete_iter(prefix, search_query, limit, model_class):
+                if first_item_at is None:
+                    first_item_at = time.perf_counter()
+                items += 1
+                yield concept
+        except asyncio.CancelledError:
+            result_label = 'cancelled'
+            raise
+        except Exception as exc:
+            result_label = 'error'
+            DOCDB_OP_ERRORS.labels(
+                backend=self._backend_name,
+                op='auto_complete',
+                prefix=prefix.value,
+                error_type=type(exc).__name__,
+            ).inc()
+            raise
+        finally:
+            end = time.perf_counter()
+            DOCDB_OP_DURATION.labels(
+                backend=self._backend_name,
+                op='auto_complete',
+                prefix=prefix.value,
+                result=result_label,
+            ).observe(end - start)
+            if first_item_at is not None:
+                DOCDB_OP_TTFI.labels(
+                    backend=self._backend_name,
+                    op='auto_complete',
+                    prefix=prefix.value,
+                    result=result_label,
+                ).observe(first_item_at - start)
+            AUTOCOMPLETE_ITEMS.labels(prefix=str(prefix.value)).observe(items)
 
     async def auto_complete_search(self,
                                    prefix: ConceptPrefix,

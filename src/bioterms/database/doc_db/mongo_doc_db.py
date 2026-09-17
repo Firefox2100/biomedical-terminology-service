@@ -2,7 +2,6 @@
 MongoDB implementation of the DocumentDatabase interface.
 """
 import asyncio
-import re
 import time
 from uuid import UUID
 from concurrent.futures import ProcessPoolExecutor
@@ -18,11 +17,10 @@ from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.etc.utils import batch_iterable
-from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, \
-    AUTOCOMPLETE_ITEMS
+from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
-from .doc_db import DocumentDatabase
+from .doc_db import DocumentDatabase, SearchQuery, normalise_search_query
 from .utils import generate_extra_data
 
 
@@ -158,6 +156,7 @@ class MongoDocumentDatabase(DocumentDatabase):
     `_supports_native_text_search`) and cached for the instance's lifetime, so a deployment
     that gains/loses Search support needs a service restart to be picked up.
     """
+    _backend_name = 'mongo'
 
     _TEXT_INDEX_MIN_GRAMS = 3
     _TEXT_INDEX_MAX_GRAMS = 20
@@ -634,8 +633,8 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param limit: The top number of concepts to return.
         :return: An async iterator of (concept_id, score) tuples, best match first.
         """
-        clean_query = re.sub(r'[()"\']', '', query.lower())
-        words = [word for word in clean_query.split() if len(word) > 2] or [clean_query]
+        search_query = normalise_search_query(query, fallback_to_clean=True)
+        words = search_query.words
 
         collection = self.db[str(prefix.value)]
         native = await self._supports_native_text_search(collection)
@@ -817,32 +816,13 @@ class MongoDocumentDatabase(DocumentDatabase):
 
         return pipeline
 
-    async def auto_complete_iter(self,
-                                 prefix: ConceptPrefix,
-                                 query: str,
-                                 limit: int = None,
-                                 model_class: type[Concept] = Concept,
-                                 ) -> AsyncIterator[ConceptUnion]:
-        """
-        Run an auto-complete search query against the document database and return an async iterator.
-        :param prefix: The vocabulary prefix to search within.
-        :param query: The search query string.
-        :param limit: The maximum number of results to return. If None, return all matches.
-        :param model_class: The Concept subclass to instantiate for results.
-        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
-        """
-        start = time.perf_counter()
-        first_item_at = None
-        items = 0
-        result_label = 'ok'
-
-        clean_query = re.sub(r'[()"\']', '', query.lower())
-
-        # N-gram query is used to match the pre-generated n-grams (legacy path) or as the
-        # autocomplete operator's search terms (native path), while score query is only used
-        # to rank the already matched documents in the legacy path.
-        n_gram_query = [word for word in clean_query.split() if len(word) > 2]
-        score_query = re.sub(r'\s', '', clean_query)
+    async def _auto_complete_iter(self,
+                                  prefix: ConceptPrefix,
+                                  search_query: SearchQuery,
+                                  limit: int,
+                                  model_class: type[Concept],
+                                  ) -> AsyncIterator[ConceptUnion]:
+        n_gram_query = search_query.words
 
         collection = self.db[str(prefix.value)]
         native = await self._supports_native_text_search(collection)
@@ -851,46 +831,13 @@ class MongoDocumentDatabase(DocumentDatabase):
             await self._ensure_text_index(collection)
             pipeline = self._build_native_auto_complete_pipeline(n_gram_query, limit)
         else:
-            pipeline = self._build_legacy_auto_complete_pipeline(n_gram_query, score_query, limit)
+            pipeline = self._build_legacy_auto_complete_pipeline(
+                n_gram_query, search_query.compact, limit,
+            )
 
-        try:
-            cursor = await collection.aggregate(pipeline)
-
-            async for doc in cursor:
-                if first_item_at is None:
-                    first_item_at = time.perf_counter()
-                items += 1
-                yield model_class.model_validate(doc)
-        except asyncio.CancelledError:
-            result_label = 'cancelled'
-            raise
-        except Exception as e:
-            result_label = 'error'
-            DOCDB_OP_ERRORS.labels(
-                backend='mongo',
-                op='auto_complete',
-                prefix=prefix.value,
-                error_type=type(e).__name__,
-            ).inc()
-            raise
-        finally:
-            end = time.perf_counter()
-            DOCDB_OP_DURATION.labels(
-                backend='mongo',
-                op='auto_complete',
-                prefix=prefix.value,
-                result=result_label,
-            ).observe(end - start)
-
-            if first_item_at is not None:
-                DOCDB_OP_TTFI.labels(
-                    backend='mongo',
-                    op='auto_complete',
-                    prefix=prefix.value,
-                    result=result_label,
-                ).observe(first_item_at - start)
-
-            AUTOCOMPLETE_ITEMS.labels(prefix=str(prefix.value)).observe(items)
+        cursor = await collection.aggregate(pipeline)
+        async for doc in cursor:
+            yield model_class.model_validate(doc)
 
     async def get_random_term_ids(self,
                                   prefix: ConceptPrefix,

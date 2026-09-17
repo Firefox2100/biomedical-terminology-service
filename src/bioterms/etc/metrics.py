@@ -1,6 +1,4 @@
-"""
-Setup Pytheus metrics backend based on configuration.
-"""
+"""Metrics definitions and explicit backend initialization."""
 
 from pytheus.backends import load_backend
 from pytheus.backends.redis import MultiProcessRedisBackend
@@ -10,28 +8,92 @@ from .consts import CONFIG
 from .enums import CacheDriverType
 
 
-class NoOpMetrics:
-    """
-    No-op metrics for when metrics are disabled.
-    """
+class MetricProxy:
+    """Stable metric reference that is inert until a backend is initialized."""
+
+    def __init__(self):
+        self._target = None
+
+    def bind(self, target):
+        self._target = target
+
     def __getattr__(self, item):
-        return self
+        if self._target is None:
+            return self
+        return getattr(self._target, item)
 
     def labels(self, *args, **kwargs):
-        return self
+        if self._target is None:
+            return self
+        return self._target.labels(*args, **kwargs)
 
     def observe(self, value):
-        # No-op: metrics are disabled.
-        pass
+        if self._target is not None:
+            self._target.observe(value)
 
     def inc(self, amount=1):
-        # No-op: metrics are disabled.
-        pass
+        if self._target is not None:
+            self._target.inc(amount)
 
 
-if CONFIG.enable_metrics:
+DOCDB_OP_DURATION: Histogram = MetricProxy()
+DOCDB_OP_TTFI: Histogram = MetricProxy()
+DOCDB_OP_ERRORS: Counter = MetricProxy()
+
+GRAPHDB_OP_DURATION: Histogram = MetricProxy()
+GRAPHDB_OP_TTFR: Histogram = MetricProxy()
+GRAPHDB_OP_ERRORS: Counter = MetricProxy()
+GRAPHDB_OP_RETRYS: Counter = MetricProxy()
+
+EMBED_LOCK_WAIT: Histogram = MetricProxy()
+EMBED_DURATION: Histogram = MetricProxy()
+EMBED_TEXTS: Histogram = MetricProxy()
+EMBED_CHARS: Histogram = MetricProxy()
+EMBED_ERRORS: Counter = MetricProxy()
+
+VDB_DUR: Histogram = MetricProxy()
+VDB_ERR: Counter = MetricProxy()
+
+AUTOCOMPLETE_ITEMS: Histogram = MetricProxy()
+AUTOCOMPLETE_LIMIT: Histogram = MetricProxy()
+AUTOCOMPLETE_QUERY_LEN: Histogram = MetricProxy()
+AUTOCOMPLETE_STREAM_ERRORS: Counter = MetricProxy()
+
+EXPAND_ROOTS: Histogram = MetricProxy()
+EXPAND_DEPTH: Histogram = MetricProxy()
+EXPAND_LIMIT: Histogram = MetricProxy()
+EXPAND_REQS: Counter = MetricProxy()
+EXPAND_DESC_COUNT: Histogram = MetricProxy()
+
+MAP_REQS: Counter = MetricProxy()
+MAP_ROOTS: Histogram = MetricProxy()
+MAP_HOPS: Histogram = MetricProxy()
+MAP_LIMIT: Histogram = MetricProxy()
+MAP_COUNT: Histogram = MetricProxy()
+
+SEARCH_ITEMS: Histogram = MetricProxy()
+SEARCH_LIMIT: Histogram = MetricProxy()
+SEARCH_QUERY_LEN: Histogram = MetricProxy()
+
+SIM_REQS: Counter = MetricProxy()
+SIM_ROOTS: Histogram = MetricProxy()
+SIM_THRESHOLD: Histogram = MetricProxy()
+SIM_LIMIT: Histogram = MetricProxy()
+SIM_GROUPS: Histogram = MetricProxy()
+SIM_PER_GROUP: Histogram = MetricProxy()
+SIM_TOTAL: Histogram = MetricProxy()
+
+
+_metrics_initialized = False
+
+
+def initialize_metrics() -> None:
+    """Initialize and bind the configured metrics backend once."""
+    global _metrics_initialized
+    if _metrics_initialized or not CONFIG.enable_metrics:
+        return
+
     if CONFIG.cache_driver == CacheDriverType.REDIS:
-        # Enable Redis backend for multiprocess support
         load_backend(
             backend_class=MultiProcessRedisBackend,
             backend_config={
@@ -41,59 +103,13 @@ if CONFIG.enable_metrics:
             },
         )
     else:
-        # Use the default backend (in-memory)
         load_backend()
 
+    proxies = {
+        name: value for name, value in globals().items()
+        if isinstance(value, MetricProxy)
+    }
 
-DOCDB_OP_DURATION: Histogram = NoOpMetrics()
-DOCDB_OP_TTFI: Histogram = NoOpMetrics()
-DOCDB_OP_ERRORS: Counter = NoOpMetrics()
-
-GRAPHDB_OP_DURATION: Histogram = NoOpMetrics()
-GRAPHDB_OP_TTFR: Histogram = NoOpMetrics()
-GRAPHDB_OP_ERRORS: Counter = NoOpMetrics()
-GRAPHDB_OP_RETRYS: Counter = NoOpMetrics()
-
-EMBED_LOCK_WAIT: Histogram = NoOpMetrics()
-EMBED_DURATION: Histogram = NoOpMetrics()
-EMBED_TEXTS: Histogram = NoOpMetrics()
-EMBED_CHARS: Histogram = NoOpMetrics()
-EMBED_ERRORS: Counter = NoOpMetrics()
-
-VDB_DUR: Histogram = NoOpMetrics()
-VDB_ERR: Counter = NoOpMetrics()
-
-AUTOCOMPLETE_ITEMS: Histogram = NoOpMetrics()
-AUTOCOMPLETE_LIMIT: Histogram = NoOpMetrics()
-AUTOCOMPLETE_QUERY_LEN: Histogram = NoOpMetrics()
-AUTOCOMPLETE_STREAM_ERRORS: Counter = NoOpMetrics()
-
-EXPAND_ROOTS: Histogram = NoOpMetrics()
-EXPAND_DEPTH: Histogram = NoOpMetrics()
-EXPAND_LIMIT: Histogram = NoOpMetrics()
-EXPAND_REQS: Counter = NoOpMetrics()
-EXPAND_DESC_COUNT: Histogram = NoOpMetrics()
-
-MAP_REQS: Counter = NoOpMetrics()
-MAP_ROOTS: Histogram = NoOpMetrics()
-MAP_HOPS: Histogram = NoOpMetrics()
-MAP_LIMIT: Histogram = NoOpMetrics()
-MAP_COUNT: Histogram = NoOpMetrics()
-
-SEARCH_ITEMS: Histogram = NoOpMetrics()
-SEARCH_LIMIT: Histogram = NoOpMetrics()
-SEARCH_QUERY_LEN: Histogram = NoOpMetrics()
-
-SIM_REQS: Counter = NoOpMetrics()
-SIM_ROOTS: Histogram = NoOpMetrics()
-SIM_THRESHOLD: Histogram = NoOpMetrics()
-SIM_LIMIT: Histogram = NoOpMetrics()
-SIM_GROUPS: Histogram = NoOpMetrics()
-SIM_PER_GROUP: Histogram = NoOpMetrics()
-SIM_TOTAL: Histogram = NoOpMetrics()
-
-
-if CONFIG.enable_metrics:
     DOCDB_OP_DURATION = Histogram(
         'docdb_op_duration_seconds',
         'Document DB operation duration.',
@@ -314,3 +330,8 @@ if CONFIG.enable_metrics:
         required_labels=['prefix', 'variant'],
         buckets=[0, 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000],
     )
+
+    created_metrics = locals()
+    for name, proxy in proxies.items():
+        proxy.bind(created_metrics[name])
+    _metrics_initialized = True

@@ -12,14 +12,9 @@ test_*.py/*_test.py, so a bare `pytest` run does not pick it up. Run it explicit
 
 Requires: a working Docker daemon reachable from this host.
 """
-import os
-
 import networkx as nx
 import pytest
 import pytest_asyncio
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine

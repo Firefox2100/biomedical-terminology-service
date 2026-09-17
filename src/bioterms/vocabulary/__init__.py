@@ -13,6 +13,7 @@ import numpy as np
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import check_files_exist, verbose_print
+from bioterms.etc.restore import batched_write
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
@@ -484,29 +485,23 @@ async def _restore_documents(prefix: ConceptPrefix,
         destination to already be free of this vocabulary's data (see `overwrite`).
     :return: The number of concepts parsed and written from the dump file.
     """
-    concept_count = 0
-    batch: list[Concept] = []
+    async def concepts():
+        async with aiofiles.open(doc_path, encoding='utf-8') as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                concept = concept_class.model_validate_json(line)
+                if concept.prefix != prefix:
+                    raise ValueError(
+                        f'{doc_path} contains a document for prefix {concept.prefix!r}, expected {prefix!r}'
+                    )
+                yield concept
 
-    async with aiofiles.open(doc_path, encoding='utf-8') as f:
-        async for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            concept = concept_class.model_validate_json(line)
-            if concept.prefix != prefix:
-                raise ValueError(
-                    f'{doc_path} contains a document for prefix {concept.prefix!r}, expected {prefix!r}'
-                )
-            concept_count += 1
-            batch.append(concept)
-            if len(batch) >= batch_size:
-                await doc_db.save_terms(batch, no_upsert=no_upsert)
-                batch = []
-
-    if batch:
+    async def save(batch: list[Concept]) -> None:
         await doc_db.save_terms(batch, no_upsert=no_upsert)
 
-    return concept_count
+    return await batched_write(concepts(), save, batch_size)
 
 
 def _iter_offline_graph_edges(graph_path: str,

@@ -29,6 +29,7 @@ from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import BtsError
 from bioterms.etc.utils import report_exception
+from bioterms.etc.metrics import initialize_metrics
 from bioterms.etc.asgi_management import ReloadableASGIApp
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
     :param app: The FastAPI application instance.
     """
     LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
+    initialize_metrics()
 
     cache = get_active_cache()
     doc_db = await get_active_doc_db()

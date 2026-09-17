@@ -587,28 +587,13 @@ class PostgresGraphDatabase(GraphDatabase):
     # Vocabulary graph CRUD
     # ------------------------------------------------------------------
 
-    async def save_vocabulary_graph(self,
-                                    concepts: list[Concept] | Iterable[Concept],
-                                    graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Optional[str], Optional[str]]],
-                                    consume_concepts: bool = False,
-                                    ):
-        """
-        Save the vocabulary graph to the graph database.
-        :param concepts: The concepts to save. May be a plain list, or any other (single-pass)
-            iterable -- e.g. a generator streaming an offline dump file -- in which case only
-            one batch's worth is ever held in memory at a time.
-        :param graph: The vocabulary graph to save. Either an `nx.DiGraph`/`nx.MultiDiGraph`,
-            or an iterable of `(source_id, target_id, relationship_type, relationship_key)`
-            edge tuples in the same shape `edge_iter` produces -- see `edge_iter`.
-        :param consume_concepts: Unused here (SQLAlchemy needs the full batch regardless); kept
-            for interface compatibility.
-        """
-        from bioterms.etc.utils import batch_iterable, edge_iter, peek_first
-
-        first_concept, concepts = peek_first(concepts)
-        if first_concept is None:
-            return
-        prefix = first_concept.prefix
+    async def _save_vocabulary_graph(self,
+                                     prefix: ConceptPrefix,
+                                     concepts: Iterable[Concept],
+                                     edges: Iterable[tuple[str, str, Optional[str], Optional[str]]],
+                                     consume_concepts: bool,
+                                     ) -> None:
+        from bioterms.etc.utils import batch_iterable
 
         # Node batches, edge batches, and the final closure rebuild each commit in their own
         # transaction rather than one spanning the whole call. A vocabulary the size of OHDSI
@@ -649,7 +634,7 @@ class PostgresGraphDatabase(GraphDatabase):
             ON CONFLICT (source_id, target_id, rel_type) DO NOTHING
         """)
 
-        for batch in batch_iterable(edge_iter(graph)):
+        for batch in batch_iterable(edges):
             edge_rows = [
                 {'source_id': source, 'target_id': target, 'rel_type': rel_label or 'related_to'}
                 for source, target, rel_label, _rel_key in batch

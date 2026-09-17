@@ -1,13 +1,10 @@
 import asyncio
 import json
-import os
 import sys
 import time
 import types
 
 import pytest
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
 
 from bioterms.database.cache.redis_cache import CACHE_PAYLOAD_VERSION, RedisCache
 from bioterms.etc.consts import CONFIG

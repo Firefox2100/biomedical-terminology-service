@@ -1,10 +1,7 @@
 import asyncio
-import os
 import time
 
 import pytest
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
 
 from bioterms.database.vector_db.vector_db import VectorDatabase, EmbeddingItemVector
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, EmbeddingKind

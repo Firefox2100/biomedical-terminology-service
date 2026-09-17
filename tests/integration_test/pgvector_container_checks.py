@@ -14,13 +14,8 @@ per run would be slow and requires a working Docker daemon). Run it explicitly:
 Requires: a working Docker daemon reachable from this host, and network access the first time to
 pull the pgvector/pgvector image (already present locally is fine/faster).
 """
-import os
-
 import pytest
 import pytest_asyncio
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine

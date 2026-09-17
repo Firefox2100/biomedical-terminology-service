@@ -1,8 +1,4 @@
-import os
 import zipfile
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 import httpx
 import pytest

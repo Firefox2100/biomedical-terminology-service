@@ -18,15 +18,10 @@ requires a working Docker daemon). Run it explicitly:
 Requires: a working Docker daemon reachable from this host, and network access the
 first time to pull the neo4j image (already present locally is fine/faster).
 """
-import os
-
 import networkx as nx
 import pytest
 import pytest_asyncio
 from neo4j import AsyncGraphDatabase
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from bioterms.database.graph_db.neo4j_graph_db import Neo4jGraphDatabase
 from bioterms.etc.enums import (

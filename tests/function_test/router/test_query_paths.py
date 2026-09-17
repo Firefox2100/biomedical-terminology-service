@@ -1,9 +1,4 @@
 import json
-import os
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'dGVzdC1obWFjLWtleQ==')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
-
 import pytest
 
 from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, \
