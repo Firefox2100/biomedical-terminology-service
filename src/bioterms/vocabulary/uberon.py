@@ -1,7 +1,6 @@
 """Uberon vocabulary download and loading support."""
 
 import httpx
-import networkx as nx
 from owlready2 import Restriction, ThingClass
 
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType, ConceptStatus, \
@@ -12,6 +11,7 @@ from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, \
     get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -133,7 +133,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     verbose_print(f'Uberon OWL release loaded with {len(uberon_classes)} classes.')
 
     concepts = []
-    uberon_graph = nx.MultiDiGraph()
+    uberon_graph = EdgeBuffer()
     for uberon_class in iter_progress(
         uberon_classes,
         description='Processing Uberon classes',

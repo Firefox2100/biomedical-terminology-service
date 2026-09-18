@@ -48,6 +48,7 @@ from bioterms.vocabulary.utils import get_vocabulary_module
 from build_training_data import (
     MiningStats,
     QueryUnit,
+    _MiningOutput,
     _build_equivalence_index,
     _mine_negatives,
     _stable_hash_int,
@@ -203,12 +204,11 @@ async def _run(args: argparse.Namespace) -> None:
     stats = MiningStats()
     written = 0
     semaphore = asyncio.Semaphore(args.concurrency)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_router = _MiningOutput(args.output, args.output_dir, stem='cross-vocab')
     start_time = time.perf_counter()
     global_index = 0
 
-    manifest_path = output_path.parent / '.reranker_relationship_unit_counts.json'
+    manifest_path = output_router.metadata_dir / '.reranker_relationship_unit_counts.json'
     manifest: dict[str, int] = {}
     if manifest_path.exists():
         with manifest_path.open(encoding='utf-8') as manifest_file:
@@ -219,7 +219,7 @@ async def _run(args: argparse.Namespace) -> None:
     # its own redundant REPLACED_BY fetch for the same target prefix.
     equivalence_by_target: dict[ConceptPrefix, dict[str, set[str]]] = {}
 
-    with output_path.open('w', encoding='utf-8') as out_file:
+    with output_router:
         for target_prefix, source_prefix in sorted(
                 mapping_by_direction, key=lambda pair: (pair[1].value, pair[0].value)):
             if args.limit is not None and global_index >= args.skip + args.limit:
@@ -343,7 +343,7 @@ async def _run(args: argparse.Namespace) -> None:
                     if skip_reason == 'below_min_negatives':
                         stats.skipped_below_min_negatives += 1
                         continue
-                    out_file.write(json.dumps(record, ensure_ascii=False) + '\n')
+                    output_router.write(target_prefix, record)
                     written += 1
                     stats.record(record['negatives'], duplicate_merges, rejected)
 
@@ -354,7 +354,11 @@ async def _run(args: argparse.Namespace) -> None:
     stats.total_written = written
     with manifest_path.open('w', encoding='utf-8') as manifest_file:
         json.dump(manifest, manifest_file, indent=2, sort_keys=True)
-    stats_path = output_path.with_suffix(output_path.suffix + '.stats.json')
+    stats_path = (
+        output_router.output_path.with_suffix(output_router.output_path.suffix + '.stats.json')
+        if output_router.output_path
+        else output_router.output_dir / 'cross-vocab.stats.json'
+    )
     with stats_path.open('w', encoding='utf-8') as stats_file:
         json.dump({
             'skip': args.skip,
@@ -364,7 +368,10 @@ async def _run(args: argparse.Namespace) -> None:
             **stats.as_dict(),
         }, stats_file, indent=2)
 
-    print(f'Done. Wrote {written} cross-vocabulary query units to {output_path} (stats: {stats_path}).')
+    print(
+        f'Done. Wrote {written} cross-vocabulary query units to '
+        f'{output_router.description} (stats: {stats_path}).'
+    )
     await doc_db.close()
     await vector_db.close()
     await graph_db.close()
@@ -376,7 +383,12 @@ def main() -> None:
                     'EXACT annotation mappings.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--output', required=True, help='Output JSONL path.')
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument('--output', help='Legacy combined output JSONL path.')
+    output_group.add_argument(
+        '--output-dir',
+        help='Write one cross-vocab.<target-prefix>.jsonl file per target vocabulary.',
+    )
     parser.add_argument('--skip', type=int, default=0, help='Candidate query units to skip in the deterministic global sequence.')
     parser.add_argument('--limit', type=int, default=None, help='Maximum candidate query units to process after --skip; unset mines the remainder.')
     parser.add_argument(

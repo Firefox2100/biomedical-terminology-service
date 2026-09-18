@@ -1,6 +1,12 @@
 import types
 
-from bioterms.etc.enums import AnnotationType
+import pytest
+
+from bioterms.annotation import hgnc_mondo, hpo_mondo, mondo_ncit, mondo_omim, mondo_ordo, \
+    mondo_snomed
+from bioterms.etc.consts import CONFIG
+from bioterms.etc.enums import AnnotationType, ConceptPrefix
+from bioterms.vocabulary import mondo
 from bioterms.vocabulary.mondo import _build_mondo_xref_annotations, _build_xref_source_lookup
 
 
@@ -109,3 +115,80 @@ def test_build_mondo_xref_annotations_defaults_lookup_to_empty():
 
     assert len(annotations) == 1
     assert annotations[0].properties == {'source': 'Mondo'}
+
+
+@pytest.mark.asyncio
+async def test_independent_mondo_annotation_loader_filters_target_namespace(monkeypatch):
+    mondo_class = _fake_mondo_class(
+        exact_match=[
+            'http://purl.obolibrary.org/obo/NCIT_C1',
+            'https://omim.org/entry/123456',
+        ],
+    )
+    mondo_class.name = 'MONDO_0000001'
+    ontology = types.SimpleNamespace(world=object())
+    graph_db = types.SimpleNamespace(annotations=[])
+
+    async def save_annotations(annotations):
+        graph_db.annotations.extend(annotations)
+
+    graph_db.save_annotations = save_annotations
+    monkeypatch.setattr(mondo, 'check_files_exist', lambda _paths: True)
+    monkeypatch.setattr(
+        mondo,
+        'load_obo_owl_classes',
+        lambda *_args: (ontology, [mondo_class]),
+    )
+    monkeypatch.setattr(mondo, '_build_xref_source_lookup', lambda _world: {})
+
+    count = await mondo.load_mondo_annotations_from_file(
+        ConceptPrefix.NCIT,
+        graph_db=graph_db,
+    )
+
+    assert count == 1
+    assert len(graph_db.annotations) == 1
+    assert graph_db.annotations[0].prefix_to == ConceptPrefix.NCIT
+    assert graph_db.annotations[0].concept_id_to == 'C1'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('annotation_module', 'target_prefix'),
+    [
+        (hgnc_mondo, ConceptPrefix.HGNC),
+        (hpo_mondo, ConceptPrefix.HPO),
+        (mondo_ncit, ConceptPrefix.NCIT),
+        (mondo_omim, ConceptPrefix.OMIM),
+        (mondo_ordo, ConceptPrefix.ORDO),
+        (mondo_snomed, ConceptPrefix.SNOMED),
+    ],
+)
+async def test_mondo_annotation_modules_delegate_to_independent_loader(
+    monkeypatch,
+    tmp_path,
+    annotation_module,
+    target_prefix,
+):
+    mondo_dir = tmp_path / 'mondo'
+    mondo_dir.mkdir()
+    (mondo_dir / 'mondo.owl').write_text('fixture')
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    calls = []
+
+    class FakeGraphDb:
+        async def count_terms(self, _prefix):
+            return 1
+
+        async def count_annotations(self, prefix_1, prefix_2):
+            return 0
+
+    async def fake_load(prefix, graph_db=None):
+        calls.append((prefix, graph_db))
+
+    graph_db = FakeGraphDb()
+    monkeypatch.setattr(mondo, 'load_mondo_annotations_from_file', fake_load)
+
+    await annotation_module.load_annotation_from_file(graph_db=graph_db)
+
+    assert calls == [(target_prefix, graph_db)]

@@ -1,16 +1,12 @@
 import math
-from copy import deepcopy
 from typing import AsyncIterator
 
-import networkx as nx
 import numpy as np
 from numba import njit, prange, set_num_threads, get_num_threads
 from pyroaring import BitMap
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
-from bioterms.etc.utils import verbose_print
-from .utils import count_annotation_for_graph, filter_edges_by_relationship
+from .context import SimilarityContext
 
 METHOD_NAME = 'Co-Annotation Vector Method'
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
@@ -61,7 +57,7 @@ def _score_pairs_cpu(row_ptr, annotation_ids, lhs, rhs, total_annotation_count, 
                 output[k] = np.nan
                 continue
             denom = math.log(total_annotation_count / inter)
-            npmi = 1.0 if math.isclose(denom, 0.0) else (1.0 + math.log(numerator) / denom) / 2.0
+            npmi = 1.0 if abs(denom) <= 1e-15 else (1.0 + math.log(numerator) / denom) / 2.0
         similarity = npmi * jaccard
         output[k] = similarity if similarity >= threshold and similarity >= 0.0 else np.nan
     return output
@@ -137,36 +133,16 @@ def _fits_cuda(row_ptr, annotation_ids, batch_size):
     return required <= int(free * 0.8)
 
 
-def _build_annotation_sets(target_graph, target_prefix, corpus_prefix, annotation_graph, nodes):
-    if not nx.is_directed_acyclic_graph(target_graph):
-        raise ValueError('Filtered target ontology must be a DAG.')
-    node_to_index = {n: i for i, n in enumerate(nodes)}
-    corpus_prefix_string = f'{corpus_prefix.value}:'
-    corpus_to_index = {
-        n: i for i, n in enumerate(
-            n for n in annotation_graph.nodes
-            if isinstance(n, str) and n.startswith(corpus_prefix_string)
-        )
-    }
-    if len(corpus_to_index) >= (1 << 32):
-        raise ValueError('Too many corpus concepts for uint32 IDs.')
-    sets = [BitMap() for _ in nodes]
-    for i, node in enumerate(nodes):
-        ann_node = f'{target_prefix.value}:{node}'
-        if ann_node not in annotation_graph:
-            continue
-        for neighbour in annotation_graph.neighbors(ann_node):
-            idx = corpus_to_index.get(neighbour)
-            if idx is not None:
-                sets[i].add(idx)
-    # Existing implementation used nx.ancestors(node): predecessors propagate to successors.
-    for source in nx.topological_sort(target_graph):
-        src = sets[node_to_index[source]]
+def _build_annotation_sets(context: SimilarityContext):
+    graph = context.target
+    sets = [BitMap(values) for values in context.annotations.target_to_corpus]
+    for source in graph.topological_order:
+        src = sets[int(source)]
         if not src:
             continue
-        for target in target_graph.successors(source):
-            sets[node_to_index[target]] |= src
-    return sets, len(corpus_to_index)
+        for target in graph.successors(int(source)):
+            sets[int(target)] |= src
+    return sets, len(context.corpus.node_ids)
 
 
 def _bitmaps_to_csr(bitmaps):
@@ -220,28 +196,13 @@ def _candidate_batches(ptr, ids, sizes, postings, threshold, batch_size):
         yield lhs[:used].copy(), rhs[:used].copy()
 
 
-async def calculate_similarity(target_graph: nx.MultiDiGraph,
-                               target_prefix: ConceptPrefix,
-                               corpus_graph: nx.MultiDiGraph = None,
-                               corpus_prefix: ConceptPrefix = None,
-                               annotation_graph: nx.DiGraph = None,
+async def calculate_similarity(context: SimilarityContext,
                                ) -> AsyncIterator[tuple[str, str, float]]:
-    threshold = DEFAULT_SIMILARITY_THRESHOLD
-    target_graph = deepcopy(target_graph)
-    filter_edges_by_relationship(target_graph, {ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF})
-    verbose_print(f'Relationship filtered down to {len(target_graph.edges):,} edges in target graph.')
-    target_graph = nx.DiGraph(target_graph)
-    annotation_graph = annotation_graph.to_undirected(as_view=True)
-    count_annotation_for_graph(target_graph=target_graph, annotation_graph=annotation_graph, target_prefix=target_prefix)
-    remove = [n for n in target_graph if target_graph.nodes[n].get('annotation_count', 0) == 0]
-    verbose_print(f'Pruning {len(remove):,} nodes with zero annotations.')
-    target_graph.remove_nodes_from(remove)
-    nodes = list(target_graph.nodes)
-    if len(nodes) < 2:
+    threshold = context.threshold if context.threshold is not None else DEFAULT_SIMILARITY_THRESHOLD
+    nodes = context.target.node_ids
+    if len(nodes) < 2 or context.annotations is None or context.corpus is None:
         return
-    bitmaps, total_annotations = _build_annotation_sets(
-        target_graph, target_prefix, corpus_prefix, annotation_graph, nodes
-    )
+    bitmaps, total_annotations = _build_annotation_sets(context)
     ptr, ids, sizes = _bitmaps_to_csr(bitmaps)
     postings = _build_postings(bitmaps, total_annotations)
     del bitmaps

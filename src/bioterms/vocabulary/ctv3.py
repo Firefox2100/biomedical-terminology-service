@@ -3,7 +3,6 @@ import os
 import aiofiles
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -13,6 +12,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
     get_trud_release_url, extract_file_from_zip, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -241,13 +241,13 @@ def _load_concepts() -> list[CONCEPT_CLASS]:
 
 
 def _load_relationships(concepts: list[CONCEPT_CLASS],
-                        ) -> nx.DiGraph:
+                        ) -> EdgeBuffer:
     """
     Load relationships from the CTV3 vocabulary files.
     :param concepts: The list of Concept instances.
     :return: The directed graph of relationships.
     """
-    ctv3_graph = nx.DiGraph()
+    ctv3_graph = EdgeBuffer()
 
     for concept in concepts:
         ctv3_graph.add_node(concept.concept_id)

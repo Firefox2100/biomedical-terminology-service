@@ -8,7 +8,7 @@ sys.path.insert(0, str(RERANKER_DIR))
 
 from audit_training_data import audit
 from concept_rendering import RenderVariant
-from build_training_data import QueryUnit
+from build_training_data import QueryUnit, _MiningOutput
 from mine_cross_vocab_positives import _direction_key, _offer_bounded_mapping, _order_and_cap_units
 from bioterms.etc.enums import ConceptPrefix, EmbeddingKind
 from bioterms.model.concept import EmbeddingItem
@@ -17,8 +17,33 @@ from train_reranker import (
     _build_candidate_sets,
     _deduplicate_groups,
     _normalise_query,
+    _load_groups,
+    _resolve_train_paths,
     _stratified_eval_sample,
 )
+
+
+def test_per_vocabulary_mining_output_routes_rows(tmp_path):
+    with _MiningOutput(None, str(tmp_path)) as output:
+        output.write(ConceptPrefix.HPO, _group('hpo', 'h1', 'g1', 'query'))
+        output.write(ConceptPrefix.SNOMED, _group('snomed', 's1', 'g2', 'query'))
+
+    assert (tmp_path / 'aliases.hpo.jsonl').exists()
+    assert (tmp_path / 'aliases.snomed.jsonl').exists()
+    assert json.loads((tmp_path / 'aliases.hpo.jsonl').read_text())['prefix'] == 'hpo'
+
+
+def test_training_discovers_shards_and_applies_vocabulary_masks(tmp_path):
+    hpo_path = tmp_path / 'aliases.hpo.jsonl'
+    snomed_path = tmp_path / 'cross-vocab.snomed.jsonl'
+    hpo_path.write_text(json.dumps(_group('hpo', 'h1', 'g1', 'query')) + '\n')
+    snomed_path.write_text(json.dumps(_group('snomed', 's1', 'g2', 'query')) + '\n')
+
+    paths = _resolve_train_paths(None, [str(tmp_path)])
+    groups = _load_groups(paths, include_vocabularies={'hpo', 'snomed'}, exclude_vocabularies={'snomed'})
+
+    assert paths == [hpo_path.resolve(), snomed_path.resolve()]
+    assert [group['prefix'] for group in groups] == ['hpo']
 
 
 def _group(prefix: str, query_id: str, gold: str, query: str) -> dict:

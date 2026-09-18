@@ -1,7 +1,6 @@
 import os
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -11,6 +10,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, get_tru
     download_rf2, rf2_dataframe_deduplicate, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import SnomedConcept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -263,7 +263,7 @@ def _process_definitions(definition_file_path: str,
 
 
 def _process_relationships(relationship_file_path: str,
-                           snomed_graph: nx.MultiDiGraph,
+                           snomed_graph: EdgeBuffer,
                            ) -> None:
     """
     Process RF2 relationship file and update the SNOMED graph with relationships.
@@ -311,7 +311,7 @@ def _process_relationships(relationship_file_path: str,
 
 
 def _process_associations(association_file_path: str,
-                          snomed_graph: nx.MultiDiGraph,
+                          snomed_graph: EdgeBuffer,
                           ) -> None:
     """
     Process an RF2 Historical Association Reference Set file and add association edges to
@@ -387,7 +387,7 @@ async def _load_snomed_release(concept_file: str,
     # more than one edge -- an is_a/replaced_by relationship alongside one or more distinct
     # snomed_association refsetId edges, or two different association refsetIds between the
     # same pair. A plain DiGraph would silently overwrite one with the other.
-    snomed_graph = nx.MultiDiGraph()
+    snomed_graph = EdgeBuffer()
     concepts = list(concepts_dict.values())
     del concepts_dict
 

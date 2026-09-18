@@ -67,6 +67,27 @@ services:
     volumes:
       - ${BTS_DATABASE_PATH:-../data/database}/postgres/data:/var/lib/postgresql/data
 
+  # Combined local document and vector backend. Keeping both roles in one cluster avoids
+  # duplicating the complete concept corpus across MongoDB and Qdrant during live builds.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.4
+    restart: unless-stopped
+    container_name: bts-elasticsearch
+    profiles: ["elasticsearch"]
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms8g -Xmx8g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "8912:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
   # Redis as the caching layer
   redis:
     image: redis:8.8
@@ -79,7 +100,15 @@ services:
       retries: 5
     ports:
       - "8904:6379"
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    command:
+      - redis-server
+      - --requirepass
+      - ${BTS_REDIS_PASSWORD:-password}
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
     volumes:
       - ${BTS_DATABASE_PATH:-../data/database}/redis/data:/data
 
@@ -104,3 +133,6 @@ configs:
   qdrant_config:
     content: |
       log_level: INFO
+
+volumes:
+  elasticsearch_data:

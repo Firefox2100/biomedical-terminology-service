@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import time
+from contextlib import ExitStack
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -395,6 +396,49 @@ def _write_concept_store(concept_store_dir: Path,
             }, ensure_ascii=False) + '\n')
 
 
+class _MiningOutput:
+    """Route mined rows either to one legacy shard or to per-vocabulary shards."""
+
+    def __init__(self, output: str | None, output_dir: str | None, stem: str = 'aliases'):
+        self.output_path = Path(output) if output else None
+        self.output_dir = Path(output_dir) if output_dir else None
+        self.stem = stem
+        self._stack = ExitStack()
+        self._single_file = None
+        self._vocabulary_files = {}
+
+    def __enter__(self):
+        if self.output_path:
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._single_file = self._stack.enter_context(
+                self.output_path.open('w', encoding='utf-8')
+            )
+        else:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def write(self, prefix: ConceptPrefix, record: dict) -> None:
+        output_file = self._single_file
+        if output_file is None:
+            output_file = self._vocabulary_files.get(prefix.value)
+            if output_file is None:
+                path = self.output_dir / f'{self.stem}.{prefix.value}.jsonl'
+                output_file = self._stack.enter_context(path.open('w', encoding='utf-8'))
+                self._vocabulary_files[prefix.value] = output_file
+        output_file.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    def __exit__(self, *exc_info):
+        return self._stack.__exit__(*exc_info)
+
+    @property
+    def metadata_dir(self) -> Path:
+        return self.output_path.parent if self.output_path else self.output_dir
+
+    @property
+    def description(self) -> str:
+        return str(self.output_path) if self.output_path else f'{self.output_dir}/{self.stem}.<vocabulary>.jsonl'
+
+
 async def _run(args: argparse.Namespace) -> None:
     doc_db = await get_active_doc_db()
     vector_db = get_active_vector_db()
@@ -406,15 +450,14 @@ async def _run(args: argparse.Namespace) -> None:
     written = 0
     semaphore = asyncio.Semaphore(args.concurrency)
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_router = _MiningOutput(args.output, args.output_dir)
     concept_store_dir = Path(args.concept_store_dir) if args.concept_store_dir \
-        else output_path.parent / 'concepts'
+        else output_router.metadata_dir / 'concepts'
 
     # Persisted per-vocabulary unit-count cache, so a later --skip can bypass reloading
     # vocabularies entirely before the requested window. Delete it if the
     # underlying vocabularies have changed since it was written.
-    manifest_path = output_path.parent / '.reranker_vocab_unit_counts.json'
+    manifest_path = output_router.metadata_dir / '.reranker_vocab_unit_counts.json'
     manifest: dict[str, int] = {}
     if manifest_path.exists():
         with manifest_path.open(encoding='utf-8') as manifest_file:
@@ -424,7 +467,7 @@ async def _run(args: argparse.Namespace) -> None:
 
     per_vocab_limit = args.per_vocabulary_limit
 
-    with output_path.open('w', encoding='utf-8') as out_file:
+    with output_router:
         for prefix in _iter_vocabularies(args.vocabularies):
             if per_vocab_limit is None and global_index >= args.skip + args.limit:
                 break
@@ -515,7 +558,7 @@ async def _run(args: argparse.Namespace) -> None:
                     if below_min:
                         stats.skipped_below_min_negatives += 1
                         continue
-                    out_file.write(json.dumps(record, ensure_ascii=False) + '\n')
+                    output_router.write(prefix, record)
                     written += 1
                     vocab_written += 1
                     stats.record(record['negatives'], duplicate_merges, rejected)
@@ -539,7 +582,11 @@ async def _run(args: argparse.Namespace) -> None:
     with manifest_path.open('w', encoding='utf-8') as manifest_file:
         json.dump(manifest, manifest_file, indent=2)
 
-    stats_path = output_path.with_suffix(output_path.suffix + '.stats.json')
+    stats_path = (
+        output_router.output_path.with_suffix(output_router.output_path.suffix + '.stats.json')
+        if output_router.output_path
+        else output_router.output_dir / 'aliases.stats.json'
+    )
     with stats_path.open('w', encoding='utf-8') as stats_file:
         json.dump({
             'skip': args.skip,
@@ -549,7 +596,7 @@ async def _run(args: argparse.Namespace) -> None:
             **stats.as_dict(),
         }, stats_file, indent=2)
 
-    print(f'Done. Wrote {written} query units to {output_path} (stats: {stats_path}).')
+    print(f'Done. Wrote {written} query units to {output_router.description} (stats: {stats_path}).')
     await doc_db.close()
     await vector_db.close()
     await graph_db.close()
@@ -560,7 +607,15 @@ def main() -> None:
         description='Mine a reranker training dataset from a built bioterms database.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--output', required=True, help='Output JSONL path (a "<output>.stats.json" is written alongside it).')
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument(
+        '--output',
+        help='Legacy combined JSONL path (a "<output>.stats.json" is written alongside it).',
+    )
+    output_group.add_argument(
+        '--output-dir',
+        help='Write one aliases.<prefix>.jsonl file per vocabulary plus aliases.stats.json.',
+    )
     parser.add_argument(
         '--concept-store-dir', default=None,
         help='Directory for per-vocabulary "<prefix>.concepts.jsonl" files. Defaults to a '

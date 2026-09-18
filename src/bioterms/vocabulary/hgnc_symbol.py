@@ -1,6 +1,5 @@
 import os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -9,6 +8,7 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -84,7 +84,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     verbose_print('Concept categorisation complete, building graph...')
 
     concepts = []
-    gene_graph = nx.DiGraph()
+    gene_graph = EdgeBuffer()
 
     for symbol in iter_progress(
         active_symbols,

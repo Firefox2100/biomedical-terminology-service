@@ -1,6 +1,5 @@
 import os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -11,6 +10,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept import HgncConcept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_graph_to_file, \
     write_annotations_to_file
 
@@ -114,7 +114,7 @@ def _build_hgnc_symbol_concept(row) -> tuple[CONCEPT_CLASS, list[Annotation]]:
 
 
 def _build_hgnc_withdrawn_concept(row,
-                                  hgnc_graph: nx.DiGraph,
+                                  hgnc_graph: EdgeBuffer,
                                   ) -> tuple[CONCEPT_CLASS, Annotation]:
     """
     Build a Concept for a withdrawn HGNC entry, wiring its replaced-by edges into the graph.
@@ -190,7 +190,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     concepts = []
     annotations = []
-    hgnc_graph = nx.DiGraph()
+    hgnc_graph = EdgeBuffer()
 
     verbose_print('HGNC file read from disk, processing concepts...')
 

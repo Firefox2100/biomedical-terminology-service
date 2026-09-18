@@ -4,7 +4,6 @@ import shlex
 import aiofiles
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -14,6 +13,7 @@ from bioterms.etc.utils import check_files_exist, discover_latest_numbered_relea
     ensure_data_directory, download_file, extract_file_from_gzip, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import EnsemblConcept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -88,7 +88,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 def _handle_gene_feature(attributes: dict,
                          row,
                          genes: dict[str, CONCEPT_CLASS],
-                         ensembl_graph: nx.DiGraph,
+                         ensembl_graph: EdgeBuffer,
                          ):
     """
     Process a GTF 'gene' feature row into a gene Concept.
@@ -118,7 +118,7 @@ def _handle_gene_feature(attributes: dict,
 def _handle_transcript_feature(attributes: dict,
                                row,
                                transcripts: dict[str, CONCEPT_CLASS],
-                               ensembl_graph: nx.DiGraph,
+                               ensembl_graph: EdgeBuffer,
                                ):
     """
     Process a GTF 'transcript' feature row into a transcript Concept, part-of its gene.
@@ -153,7 +153,7 @@ def _handle_transcript_feature(attributes: dict,
 def _handle_exon_feature(attributes: dict,
                          row,
                          exons: dict[str, CONCEPT_CLASS],
-                         ensembl_graph: nx.DiGraph,
+                         ensembl_graph: EdgeBuffer,
                          ):
     """
     Process a GTF 'exon' feature row into an exon Concept, part-of its transcript.
@@ -185,7 +185,7 @@ def _handle_exon_feature(attributes: dict,
 def _handle_cds_feature(attributes: dict,
                         row,
                         proteins: dict[str, CONCEPT_CLASS],
-                        ensembl_graph: nx.DiGraph,
+                        ensembl_graph: EdgeBuffer,
                         ):
     """
     Process a GTF 'CDS' feature row into a protein Concept, part-of its transcript.
@@ -258,7 +258,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     transcripts: dict[str, CONCEPT_CLASS] = {}
     exons: dict[str, CONCEPT_CLASS] = {}
     proteins: dict[str, CONCEPT_CLASS] = {}
-    ensembl_graph = nx.DiGraph()
+    ensembl_graph = EdgeBuffer()
 
     verbose_print('Ensembl GTF file read, processing entries...')
 

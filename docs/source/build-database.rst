@@ -198,10 +198,14 @@ Ensembl projection is restricted to human entries because the supported Ensembl 
 human-only, and maps to the Ensembl protein identifier while retaining transcript and gene IDs
 as annotation metadata.
 
-The same ``--no-annotation`` option suppresses cross-vocabulary annotations derived while loading
-Mondo and OHDSI, including their offline annotation dumps. HGNC's own relationship to the Gene
-Symbol namespace remains part of the HGNC vocabulary model. Ensembl is a heterogeneous genomic
-feature vocabulary and has no bundled annotations or Gene Symbol prerequisite.
+Mondo annotations are always separate from the Mondo vocabulary load. After both endpoint
+vocabularies exist, load each mapping normally, for example
+``bioterms-cli annotation load mondo hpo``. Each command reparses ``mondo.owl`` for the requested
+target namespace; the Mondo vocabulary command only loads concepts and hierarchy. OHDSI and
+UniProt retain ``--no-annotation`` support because avoiding another multi-hour pass over those
+large releases can be worthwhile. HGNC's own relationship to the Gene Symbol namespace remains
+part of the HGNC vocabulary model. Ensembl is a heterogeneous genomic feature vocabulary and has
+no bundled annotations or Gene Symbol prerequisite.
 
 Vocabulary load order
 ^^^^^^^^^^^^^^^^^^^^^

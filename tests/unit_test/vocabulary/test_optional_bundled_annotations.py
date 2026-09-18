@@ -14,7 +14,7 @@ import bioterms.vocabulary.uniprot as uniprot
 
 
 def test_only_optional_annotation_vocabularies_expose_load_annotations():
-    assert 'load_annotations' in inspect.signature(mondo.load_vocabulary_from_file).parameters
+    assert 'load_annotations' not in inspect.signature(mondo.load_vocabulary_from_file).parameters
     assert 'load_annotations' in inspect.signature(ohdsi.load_vocabulary_from_file).parameters
     assert 'load_annotations' in inspect.signature(uniprot.load_vocabulary_from_file).parameters
 
@@ -24,7 +24,7 @@ def test_only_optional_annotation_vocabularies_expose_load_annotations():
 
 
 @pytest.mark.asyncio
-async def test_mondo_no_annotation_skips_xref_processing(monkeypatch, tmp_path):
+async def test_mondo_vocabulary_load_never_processes_xrefs(monkeypatch, tmp_path):
     mondo_dir = tmp_path / 'mondo'
     mondo_dir.mkdir()
     (mondo_dir / 'mondo.owl').write_text('fixture')
@@ -42,12 +42,9 @@ async def test_mondo_no_annotation_skips_xref_processing(monkeypatch, tmp_path):
     monkeypatch.setattr(mondo, '_build_xref_source_lookup', fail_xref_lookup)
     monkeypatch.setattr(mondo, 'write_concepts_to_file', ignore_write)
     monkeypatch.setattr(mondo, 'write_graph_to_file', ignore_write)
-    monkeypatch.setattr(mondo, 'write_annotations_to_file', ignore_write)
-
     await mondo.load_vocabulary_from_file(
         offline=True,
         build_search_index=False,
-        load_annotations=False,
     )
 
 
@@ -63,7 +60,7 @@ async def test_ohdsi_no_annotation_skips_annotation_processing(monkeypatch):
     monkeypatch.setattr(ohdsi, '_process_concepts', lambda: {1: concept})
     monkeypatch.setattr(ohdsi, '_process_synonyms', lambda _concepts: None)
     monkeypatch.setattr(ohdsi, '_process_drug_strength', lambda _concepts: None)
-    monkeypatch.setattr(ohdsi, '_process_relationships', lambda _graph: None)
+    monkeypatch.setattr(ohdsi, '_iter_relationship_edges', lambda: iter(()))
 
     def fail_annotations():
         raise AssertionError('OHDSI annotations must not be processed')

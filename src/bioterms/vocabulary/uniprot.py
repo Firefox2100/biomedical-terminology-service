@@ -2,7 +2,6 @@ import gzip
 import os
 import re
 import httpx
-import networkx as nx
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptRelationshipType, \
@@ -13,6 +12,7 @@ from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db
 from bioterms.model.annotation import Annotation
 from bioterms.annotation.utils import AnnotationSource
 from bioterms.model.concept import UniProtConcept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file, \
     write_annotations_to_file
 
@@ -453,9 +453,12 @@ async def _flush_batch(concepts: list[UniProtConcept],
     dump files rather than overwriting them.
     """
     if not offline:
-        await doc_db.save_terms(terms=concepts, no_upsert=True)
+        # UniProt is intentionally streamed in bounded batches. Use idempotent indexing so an
+        # interrupted load can be resumed over batches that already reached the document store.
+        # ``create`` operations make the entire next batch fail on those existing identifiers.
+        await doc_db.save_terms(terms=concepts, no_upsert=False)
 
-        batch_graph = nx.MultiDiGraph()
+        batch_graph = EdgeBuffer()
         for concept in concepts:
             batch_graph.add_node(concept.concept_id)
         for old_id, current_id in replacements:
@@ -475,7 +478,7 @@ async def _flush_batch(concepts: list[UniProtConcept],
             build_search_index=build_search_index,
         )
 
-        batch_graph = nx.MultiDiGraph()
+        batch_graph = EdgeBuffer()
         for concept in concepts:
             batch_graph.add_node(concept.concept_id)
         for old_id, current_id in replacements:

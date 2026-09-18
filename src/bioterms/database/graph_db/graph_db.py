@@ -190,6 +190,14 @@ class GraphDatabase(ABC):
         :return: The vocabulary graph.
         """
 
+    async def get_vocabulary_data(self,
+                                  prefix: ConceptPrefix,
+                                  ) -> tuple[list[str], list[tuple[str, str, str | None, str | None]]]:
+        """Return compact-builder input; optimized backends can avoid NetworkX entirely."""
+        from bioterms.etc.utils import edge_iter
+        graph = await self.get_vocabulary_graph(prefix)
+        return list(graph.nodes), list(edge_iter(graph))
+
     @abstractmethod
     async def delete_vocabulary_graph(self,
                                       prefix: ConceptPrefix,

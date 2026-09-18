@@ -1,5 +1,4 @@
 import httpx
-import networkx as nx
 from owlready2 import ThingClass
 
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod
@@ -8,6 +7,7 @@ from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter
     load_obo_owl_classes, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -132,7 +132,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     _, hpo_classes = load_obo_owl_classes(FILE_PATHS[0], 'HP_')
     verbose_print('HPO ontology read from file')
 
-    hpo_graph = nx.DiGraph()
+    hpo_graph = EdgeBuffer()
     concepts = []
 
     for hpo_class in iter_progress(hpo_classes, description='Processing HPO classes', total=len(hpo_classes)):

@@ -2,7 +2,6 @@ import os
 import aiofiles
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -12,6 +11,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
     iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -73,7 +73,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
 
 def _build_omim_concept(row,
-                        omim_graph: nx.DiGraph,
+                        omim_graph: EdgeBuffer,
                         ) -> CONCEPT_CLASS:
     """
     Build a Concept for one OMIM row and wire its is-a and replaced-by edges into the graph.
@@ -134,7 +134,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     verbose_print('OMIM release file loaded from disk, processing concepts...')
 
-    omim_graph = nx.DiGraph()
+    omim_graph = EdgeBuffer()
     concepts = []
 
     for _, row in iter_progress(

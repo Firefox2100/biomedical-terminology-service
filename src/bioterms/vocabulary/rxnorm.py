@@ -4,7 +4,6 @@ import os
 
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
@@ -15,6 +14,7 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, download_file, ensure_data_directory, \
     extract_file_from_zip, iter_progress
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -138,8 +138,8 @@ def load_rxnorm_concepts() -> dict[str, CONCEPT_CLASS]:
     return concepts
 
 
-def _load_graph(concepts: dict[str, CONCEPT_CLASS]) -> nx.MultiDiGraph:
-    graph = nx.MultiDiGraph()
+def _load_graph(concepts: dict[str, CONCEPT_CLASS]) -> EdgeBuffer:
+    graph = EdgeBuffer()
     graph.add_nodes_from(concepts)
     for relations in iter_progress(
         _read_rrf_chunks(FILE_PATHS[1], [

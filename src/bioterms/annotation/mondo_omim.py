@@ -38,6 +38,6 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         graph_db=graph_db,
     )
 
-    raise NotImplementedError(
-        'Mondo to OMIM mapping is part of the Mondo release, and should have been loaded during the Mondo import'
-    )
+    from bioterms.vocabulary.mondo import load_mondo_annotations_from_file
+
+    await load_mondo_annotations_from_file(VOCABULARY_PREFIX_2, graph_db=graph_db)

@@ -1,7 +1,6 @@
 """Gene Ontology vocabulary download and loading support."""
 
 import httpx
-import networkx as nx
 from owlready2 import Restriction, ThingClass
 
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, \
@@ -12,6 +11,7 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter_progress, \
     load_obo_owl_classes, obo_class_metadata, obo_entity_local_id, verbose_print
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -123,7 +123,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     verbose_print(f'GO basic OWL release loaded with {len(go_classes)} classes.')
 
     concepts = []
-    go_graph = nx.MultiDiGraph()
+    go_graph = EdgeBuffer()
     for go_class in iter_progress(
         go_classes, description='Processing GO classes', total=len(go_classes),
     ):

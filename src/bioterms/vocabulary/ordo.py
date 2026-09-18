@@ -1,6 +1,5 @@
 import os
 import httpx
-import networkx as nx
 from owlready2 import get_ontology, ThingClass, PropertyClass, Restriction
 
 from bioterms.etc.consts import CONFIG
@@ -10,6 +9,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
     verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -170,7 +170,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     verbose_print('ORDO ontology loaded from disk, processing concepts...')
 
-    ordo_graph = nx.DiGraph()
+    ordo_graph = EdgeBuffer()
     concepts = []
     part_of_prop = [p for p in ordo_ontology.object_properties() if p.name.startswith('BFO_0000050')][0]
 

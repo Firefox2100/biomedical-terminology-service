@@ -6,7 +6,7 @@ import csv
 import asyncio
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
-from typing import Optional
+from typing import Iterable, Optional
 import aiofiles
 import networkx as nx
 
@@ -235,7 +235,8 @@ async def _aiofile_writer_task(path: str,
 
 async def write_graph_to_file(prefix: ConceptPrefix,
                               concepts: list[Concept],
-                              vocabulary_graph: nx.DiGraph | nx.MultiDiGraph,
+                              vocabulary_graph: nx.DiGraph | nx.MultiDiGraph |
+                              Iterable[tuple[str, str, Optional[str], Optional[str]]],
                               overwrite: bool = True,
                               ):
     """
@@ -507,6 +508,30 @@ async def load_graph_from_file(prefix: ConceptPrefix,
     return graph
 
 
+async def load_graph_data_from_file(prefix: ConceptPrefix,
+                                    ) -> tuple[list[str], list[tuple[str, str, str, str | None]]]:
+    """Load compact-builder graph data without materialising a NetworkX object."""
+    offline_dir = os.path.join(CONFIG.data_dir, 'offline')
+    graph_path = os.path.join(offline_dir, f'{prefix.value}.graph.dump')
+    node_path = os.path.join(offline_dir, f'{prefix.value}.node_ids.dump')
+    if not os.path.exists(graph_path):
+        raise FileNotFoundError(f'Offline graph file for {prefix.value} not found.')
+    nodes = []
+    if os.path.exists(node_path):
+        async with aiofiles.open(node_path) as f:
+            async for line in f:
+                row = next(csv.reader([line]))
+                if row:
+                    nodes.append(row[0])
+    edges = []
+    async with aiofiles.open(graph_path) as f:
+        async for line in f:
+            row = next(csv.reader([line]))
+            if len(row) >= 3:
+                edges.append((row[0], row[1], row[2], row[3] if len(row) > 3 else None))
+    return nodes, edges
+
+
 def _resolve_annotation_file_path(prefix_from: ConceptPrefix,
                                   prefix_to: ConceptPrefix | None,
                                   annotation_file_path: str | os.PathLike | None,
@@ -605,3 +630,26 @@ async def load_annotation_from_file(prefix_from: ConceptPrefix,
     )
 
     return graph
+
+
+async def load_annotation_pairs_from_file(prefix_from: ConceptPrefix,
+                                          prefix_to: ConceptPrefix,
+                                          annotation_file_path: str | os.PathLike | None = None,
+                                          ) -> list[tuple[str, str]]:
+    """Load one prefix pair directly as local-ID tuples for compact similarity input."""
+    path = _resolve_annotation_file_path(prefix_from, prefix_to, annotation_file_path)
+    pairs = []
+    async with aiofiles.open(path) as f:
+        async for line in f:
+            row = next(csv.reader([line]))
+            if len(row) < 4:
+                continue
+            source_prefix, source_id, target_prefix, target_id = row[:4]
+            source_curie = parse_annotation_curie(source_prefix, source_id, prefix_from)
+            target_curie = parse_annotation_curie(target_prefix, target_id, prefix_to)
+            source_tag, target_tag = f'{prefix_from.value}:', f'{prefix_to.value}:'
+            if source_curie.startswith(source_tag) and target_curie.startswith(target_tag):
+                pairs.append((source_curie[len(source_tag):], target_curie[len(target_tag):]))
+            elif target_curie.startswith(source_tag) and source_curie.startswith(target_tag):
+                pairs.append((target_curie[len(source_tag):], source_curie[len(target_tag):]))
+    return pairs

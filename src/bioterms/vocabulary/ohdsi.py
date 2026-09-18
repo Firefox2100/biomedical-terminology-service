@@ -3,7 +3,6 @@ import os
 from datetime import datetime, timezone
 from functools import lru_cache
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -43,6 +42,7 @@ CONCEPT_CLASS = OhdsiConcept
 
 
 _CANONICAL_RELATIONSHIP_CACHE: dict[str, str] = {}
+_REVERSE_RELATIONSHIP_CACHE: dict[str, str] = {}
 
 
 @lru_cache
@@ -106,31 +106,29 @@ def _canonicalize_relationship_id(relationship_id: str,
                 continue
 
             _CANONICAL_RELATIONSHIP_CACHE[rel_id] = rev_rel_id
+            _REVERSE_RELATIONSHIP_CACHE[rev_rel_id] = rel_id
 
     if relationship_id in _CANONICAL_RELATIONSHIP_CACHE:
         # Standard relationship
         return relationship_id, source_concept_id, target_concept_id
 
-    # Reverse relationship
-    for rel_id, rev_rel_id in _CANONICAL_RELATIONSHIP_CACHE.items():
-        if relationship_id == rev_rel_id:
-            return rel_id, target_concept_id, source_concept_id
+    # Reverse relationship. Avoid scanning the relationship catalogue for every row in the
+    # multi-gigabyte CONCEPT_RELATIONSHIP file.
+    if relationship_id in _REVERSE_RELATIONSHIP_CACHE:
+        return (
+            _REVERSE_RELATIONSHIP_CACHE[relationship_id],
+            target_concept_id,
+            source_concept_id,
+        )
 
     raise ValueError(f'Unknown relationship ID: {relationship_id}')
 
 
-def _add_relationship(ohdsi_graph: nx.MultiDiGraph,
-                      relationship_id: str,
-                      source_concept_id: str,
-                      target_concept_id: str,
-                      ):
-    """
-    Add a relationship between two concepts in the OHDSI graph.
-    :param ohdsi_graph: The OHDSI graph.
-    :param relationship_id: The relationship ID.
-    :param source_concept_id: The source concept ID.
-    :param target_concept_id: The target concept ID.
-    """
+def _relationship_edge(relationship_id: str,
+                       source_concept_id: str,
+                       target_concept_id: str,
+                       ) -> tuple[str, str, str, str]:
+    """Convert one OHDSI relationship to a normalized streamed edge tuple."""
     relationship_id, source_concept_id, target_concept_id = _canonicalize_relationship_id(
         relationship_id,
         source_concept_id,
@@ -141,66 +139,36 @@ def _add_relationship(ohdsi_graph: nx.MultiDiGraph,
         'Occurs after',
         'After',
     ]:
-        ohdsi_graph.add_edge(
-            source_concept_id,
-            target_concept_id,
-            key='preceded_by',
-            label=ConceptRelationshipType.PRECEDED_BY,
-        )
+        return source_concept_id, target_concept_id, 'preceded_by', 'preceded_by'
     elif relationship_id in [
         'Occurs before',
         'Before',
     ]:
-        ohdsi_graph.add_edge(
-            target_concept_id,
-            source_concept_id,
-            key='preceded_by',
-            label=ConceptRelationshipType.PRECEDED_BY,
-        )
+        return target_concept_id, source_concept_id, 'preceded_by', 'preceded_by'
     elif relationship_id in [
         'LOINC replaced by',
         'Concept replaced by',
     ]:
-        ohdsi_graph.add_edge(
-            source_concept_id,
-            target_concept_id,
-            key='replaced_by',
-            label=ConceptRelationshipType.REPLACED_BY,
-        )
+        return source_concept_id, target_concept_id, 'replaced_by', 'replaced_by'
     elif relationship_id in [
         'LOINC replaces',
         'Concept replaces',
     ]:
-        ohdsi_graph.add_edge(
-            target_concept_id,
-            source_concept_id,
-            key='replaced_by',
-            label=ConceptRelationshipType.REPLACED_BY,
-        )
+        return target_concept_id, source_concept_id, 'replaced_by', 'replaced_by'
     elif relationship_id in [
         'Constitutes',
         'Contained in',
         'Part of',
         'Component of',
     ]:
-        ohdsi_graph.add_edge(
-            source_concept_id,
-            target_concept_id,
-            key='part_of',
-            label=ConceptRelationshipType.PART_OF,
-        )
+        return source_concept_id, target_concept_id, 'part_of', 'part_of'
     elif relationship_id in [
         'Consists of',
         'Contains',
         'Has part of',
         'Has component',
     ]:
-        ohdsi_graph.add_edge(
-            target_concept_id,
-            source_concept_id,
-            key='part_of',
-            label=ConceptRelationshipType.PART_OF,
-        )
+        return target_concept_id, source_concept_id, 'part_of', 'part_of'
     elif relationship_id in [
         'Is a',
         # Vocabulary-qualified variant of 'Is a'/'Subsumes' -- same semantics, own
@@ -209,28 +177,27 @@ def _add_relationship(ohdsi_graph: nx.MultiDiGraph,
         # for this data extract.
         'RxNorm is a',
     ]:
-        ohdsi_graph.add_edge(
-            source_concept_id,
-            target_concept_id,
-            key='is_a',
-            label=ConceptRelationshipType.IS_A,
-        )
+        return source_concept_id, target_concept_id, 'is_a', 'is_a'
     elif relationship_id in [
         'Subsumes',
     ]:
-        ohdsi_graph.add_edge(
-            target_concept_id,
-            source_concept_id,
-            key='is_a',
-            label=ConceptRelationshipType.IS_A,
-        )
+        return target_concept_id, source_concept_id, 'is_a', 'is_a'
     else:
-        ohdsi_graph.add_edge(
-            source_concept_id,
-            target_concept_id,
-            key=relationship_id,
-            label=ConceptRelationshipType.OHDSI_RELATIONSHIP,
-        )
+        return source_concept_id, target_concept_id, 'ohdsi_relationship', relationship_id
+
+
+def _add_relationship(ohdsi_graph,
+                      relationship_id: str,
+                      source_concept_id: str,
+                      target_concept_id: str,
+                      ):
+    """Compatibility wrapper for graph-based callers and focused unit tests."""
+    source, target, label, key = _relationship_edge(
+        relationship_id, source_concept_id, target_concept_id,
+    )
+    ohdsi_graph.add_edge(
+        source, target, key=key, label=ConceptRelationshipType(label),
+    )
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -415,11 +382,13 @@ def _process_drug_strength(concepts: dict[int, CONCEPT_CLASS]):
             _apply_drug_strength_row(row, concepts)
 
 
-def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
+def _iter_relationship_edges():
     """
-    Process the OHDSI CONCEPT_RELATIONSHIP.csv and CONCEPT_ANCESTOR.csv files to add
-    relationships to the OHDSI graph.
-    :param ohdsi_graph: The OHDSI graph.
+    Stream normalized OHDSI edges from CONCEPT_RELATIONSHIP.csv and CONCEPT_ANCESTOR.csv.
+
+    Filtering is vectorized per input chunk and only the retained rows cross the Python
+    boundary. The returned tuples can be consumed directly by either database or offline-file
+    writers without materialising a NetworkX graph.
     """
     relationship_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[4])
     ancestor_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[2])
@@ -446,23 +415,15 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
     )
 
     for chunk in iter_progress(relationship_chunks, desc='Processing OHDSI concept relationships'):
-        for _, row in iter_progress(chunk.iterrows(),
-                                    description='Processing OHDSI concept relationship rows',
-                                    total=len(chunk),
-                                    transient=True,
-                                    ):
-            if row['valid_end_date'] < date_int:
-                continue
-            if row['concept_id_1'] == row['concept_id_2']:
-                # Self-mapping rows (overwhelmingly 'Maps to'/'Mapped from' pairs, where every
-                # standard concept trivially maps to itself) carry no graph-topological
-                # information -- skip, mirroring the same guard in _process_annotations.
-                continue
-            _add_relationship(
-                ohdsi_graph,
-                row['relationship_id'],
-                str(row['concept_id_1']),
-                str(row['concept_id_2']),
+        retained = chunk.loc[
+            (chunk['valid_end_date'] >= date_int)
+            & (chunk['concept_id_1'] != chunk['concept_id_2'])
+        ]
+        for row in retained.itertuples(index=False):
+            yield _relationship_edge(
+                row.relationship_id,
+                str(row.concept_id_1),
+                str(row.concept_id_2),
             )
 
     ancestor_chunks = pd.read_csv(
@@ -483,24 +444,13 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
     )
 
     for chunk in iter_progress(ancestor_chunks, desc='Processing OHDSI concept ancestors'):
-        for _, row in iter_progress(chunk.iterrows(),
-                                    description='Processing OHDSI concept ancestor rows',
-                                    total=len(chunk),
-                                    transient=True,
-                                    ):
-            # min_levels_of_separation == 0 means ancestor and descendant are the SAME
-            # concept (CONCEPT_ANCESTOR's documented self-row convention) -- that is not a
-            # hierarchy edge. Direct parent-child pairs are separation == 1; deeper values
-            # are transitive (grandparent, etc.) and are intentionally not flattened into
-            # is_a here.
-            if row['min_levels_of_separation'] != 1:
-                continue
-
-            ohdsi_graph.add_edge(
-                str(row['descendant_concept_id']),
-                str(row['ancestor_concept_id']),
-                key='is_a',
-                label=ConceptRelationshipType.IS_A,
+        retained = chunk.loc[chunk['min_levels_of_separation'] == 1]
+        for row in retained.itertuples(index=False):
+            yield (
+                str(row.descendant_concept_id),
+                str(row.ancestor_concept_id),
+                ConceptRelationshipType.IS_A.value,
+                'is_a',
             )
 
 
@@ -597,14 +547,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     _process_drug_strength(concepts_dict)
     verbose_print('Drug strength file processing completed.')
 
-    ohdsi_graph = nx.MultiDiGraph()
     concepts = list(concepts_dict.values())
     del concepts_dict
-    for concept in concepts:
-        ohdsi_graph.add_node(concept.concept_id)
-    _process_relationships(ohdsi_graph)
-
-    verbose_print('Relationship file processing completed.')
 
     if not offline:
         if doc_db is None:
@@ -618,11 +562,10 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         )
         await graph_db.save_vocabulary_graph(
             concepts=concepts,
-            graph=ohdsi_graph,
+            graph=_iter_relationship_edges(),
             consume_concepts=True,
         )
-
-        del ohdsi_graph
+        verbose_print('Relationship file processing completed.')
 
         if load_annotations:
             annotations = _process_annotations()
@@ -637,10 +580,10 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         await write_graph_to_file(
             prefix=VOCABULARY_PREFIX,
             concepts=concepts,
-            vocabulary_graph=ohdsi_graph,
+            vocabulary_graph=_iter_relationship_edges(),
         )
+        verbose_print('Relationship file processing completed.')
         del concepts
-        del ohdsi_graph
 
         if load_annotations:
             annotations = _process_annotations()

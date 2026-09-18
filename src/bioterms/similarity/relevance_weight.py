@@ -1,16 +1,13 @@
 import math
-from copy import deepcopy
 from typing import AsyncIterator
 
-import networkx as nx
 import numpy as np
 from numba import njit, prange, set_num_threads, get_num_threads
 from pyroaring import BitMap
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import verbose_print
-from .utils import filter_edges_by_relationship
+from .context import SimilarityContext
 
 METHOD_NAME = 'Weighed Relevance Method'
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
@@ -137,37 +134,14 @@ def _relax(old, raw, alpha):
     return out, max_delta
 
 
-def _build_predecessor_csr(graph, nodes, index):
-    ptr = np.empty(len(nodes) + 1, np.int64)
-    ptr[0] = 0
-    for i, node in enumerate(nodes):
-        ptr[i + 1] = ptr[i] + graph.in_degree(node)
-    ids = np.empty(int(ptr[-1]), np.int32)
-    for i, node in enumerate(nodes):
-        off = int(ptr[i])
-        for predecessor in graph.predecessors(node):
-            ids[off] = index[predecessor]
-            off += 1
-    topo = np.fromiter((index[n] for n in nx.topological_sort(graph)), np.int32, count=len(nodes))
-    return ptr, ids, topo
+def _build_predecessor_csr(graph):
+    return graph.predecessor_ptr, graph.predecessor_ids, graph.topological_order
 
 
-def _build_direct_annotation_csr(source_nodes, source_prefix, dest_prefix, dest_index, annotation_graph):
-    ptr = np.empty(len(source_nodes) + 1, np.int64)
+def _build_direct_annotation_csr(rows):
+    ptr = np.empty(len(rows) + 1, np.int64)
     ptr[0] = 0
-    prefix = f'{dest_prefix.value}:'
-    rows = []
-    for i, source in enumerate(source_nodes):
-        row = []
-        name = f'{source_prefix.value}:{source}'
-        if name in annotation_graph:
-            for neighbour in annotation_graph.neighbors(name):
-                if neighbour.startswith(prefix):
-                    dest = neighbour.split(':', 1)[1]
-                    idx = dest_index.get(dest)
-                    if idx is not None:
-                        row.append(idx)
-        rows.append(row)
+    for i, row in enumerate(rows):
         ptr[i + 1] = ptr[i] + len(row)
     ids = np.empty(int(ptr[-1]), np.int32)
     for i, row in enumerate(rows):
@@ -176,24 +150,24 @@ def _build_direct_annotation_csr(source_nodes, source_prefix, dest_prefix, dest_
     return ptr, ids
 
 
-def _build_unique_annotation_csr(graph, nodes, index, direct_ptr, direct_ids):
+def _build_unique_annotation_csr(graph, direct_ptr, direct_ids):
     """Unique annotation concepts reachable through node + descendants.
 
     With child->parent edges, predecessors are descendants when accumulating
     from leaves to parents in topological order. Roaring union removes repeated
     annotations and repeated inheritance paths.
     """
-    bitmaps = [BitMap() for _ in nodes]
-    for i in range(len(nodes)):
+    bitmaps = [BitMap() for _ in graph.node_ids]
+    for i in range(len(graph.node_ids)):
         for off in range(int(direct_ptr[i]), int(direct_ptr[i + 1])):
             bitmaps[i].add(int(direct_ids[off]))
-    for node in nx.topological_sort(graph):
-        i = index[node]
+    for i in graph.topological_order:
+        i = int(i)
         if not bitmaps[i]:
             continue
-        for parent in graph.successors(node):
-            bitmaps[index[parent]] |= bitmaps[i]
-    ptr = np.empty(len(nodes) + 1, np.int64)
+        for parent in graph.successors(i):
+            bitmaps[int(parent)] |= bitmaps[i]
+    ptr = np.empty(len(graph.node_ids) + 1, np.int64)
     ptr[0] = 0
     for i, bm in enumerate(bitmaps):
         ptr[i + 1] = ptr[i] + len(bm)
@@ -330,15 +304,15 @@ def _fits_cuda(ptr, ids, ic, relevance, batch_size):
     return required <= int(free * 0.8)
 
 
-def _build_informative_ancestor_sets(graph, index, relevance, valid, threshold):
-    sets = [BitMap() for _ in range(len(index))]
-    for node in reversed(list(nx.topological_sort(graph))):
-        i = index[node]
+def _build_informative_ancestor_sets(graph, relevance, valid, threshold):
+    sets = [BitMap() for _ in graph.node_ids]
+    for i in reversed(graph.topological_order):
+        i = int(i)
         bm = sets[i]
         if valid[i] and relevance[i] >= threshold:
             bm.add(i)
-        for successor in graph.successors(node):
-            bm |= sets[index[successor]]
+        for successor in graph.successors(i):
+            bm |= sets[int(successor)]
     return sets
 
 
@@ -387,43 +361,21 @@ def _candidate_batches(ptr, ids, postings, ic, valid, threshold, batch_size):
         yield lhs[:used].copy(), rhs[:used].copy()
 
 
-async def calculate_similarity(target_graph: nx.MultiDiGraph,
-                               target_prefix: ConceptPrefix,
-                               corpus_graph: nx.MultiDiGraph = None,
-                               corpus_prefix: ConceptPrefix = None,
-                               annotation_graph: nx.DiGraph = None,
+async def calculate_similarity(context: SimilarityContext,
                                ) -> AsyncIterator[tuple[str, str, float]]:
-    threshold = DEFAULT_SIMILARITY_THRESHOLD
-
-    target_graph = deepcopy(target_graph)
-    filter_edges_by_relationship(target_graph, {ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF})
-    verbose_print(f'Relationship filtered down to {len(target_graph.edges):,} edges in target graph.')
-
-    corpus_graph = deepcopy(corpus_graph)
-    filter_edges_by_relationship(corpus_graph, {ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF})
-    verbose_print(f'Relationship filtered down to {len(corpus_graph.edges):,} edges in corpus graph.')
-
-    target_graph, corpus_graph = nx.DiGraph(target_graph), nx.DiGraph(corpus_graph)
-    if not nx.is_directed_acyclic_graph(target_graph) or not nx.is_directed_acyclic_graph(corpus_graph):
-        raise ValueError('Both filtered ontologies must be DAGs.')
-    annotation_graph = annotation_graph.to_undirected(as_view=True)
-
-    target_nodes, corpus_nodes = list(target_graph), list(corpus_graph)
+    threshold = context.threshold if context.threshold is not None else DEFAULT_SIMILARITY_THRESHOLD
+    target_graph, corpus_graph = context.target, context.corpus
+    if corpus_graph is None or context.annotations is None:
+        return
+    target_nodes, corpus_nodes = target_graph.node_ids, corpus_graph.node_ids
     if len(target_nodes) >= (1 << 31) or len(corpus_nodes) >= (1 << 31):
         raise ValueError('Ontology too large for int32 node IDs.')
-    target_index = {n: i for i, n in enumerate(target_nodes)}
-    corpus_index = {n: i for i, n in enumerate(corpus_nodes)}
-
-    t_pred = _build_predecessor_csr(target_graph, target_nodes, target_index)
-    c_pred = _build_predecessor_csr(corpus_graph, corpus_nodes, corpus_index)
-    t_direct = _build_direct_annotation_csr(
-        target_nodes, target_prefix, corpus_prefix, corpus_index, annotation_graph
-    )
-    c_direct = _build_direct_annotation_csr(
-        corpus_nodes, corpus_prefix, target_prefix, target_index, annotation_graph
-    )
-    t_unique = _build_unique_annotation_csr(target_graph, target_nodes, target_index, *t_direct)
-    c_unique = _build_unique_annotation_csr(corpus_graph, corpus_nodes, corpus_index, *c_direct)
+    t_pred = _build_predecessor_csr(target_graph)
+    c_pred = _build_predecessor_csr(corpus_graph)
+    t_direct = _build_direct_annotation_csr(context.annotations.target_to_corpus)
+    c_direct = _build_direct_annotation_csr(context.annotations.corpus_to_target)
+    t_unique = _build_unique_annotation_csr(target_graph, *t_direct)
+    c_unique = _build_unique_annotation_csr(corpus_graph, *c_direct)
 
     # _update_ic expects: direct_ptr, direct_ids, unique_ptr, unique_ids, pred_ptr, pred_ids, topo
     target_struct = (*t_direct, *t_unique, *t_pred)
@@ -437,7 +389,7 @@ async def calculate_similarity(target_graph: nx.MultiDiGraph,
     relevance[valid] = 1.0 - np.exp(-target_ic[valid])
 
     ancestor_sets = _build_informative_ancestor_sets(
-        target_graph, target_index, relevance, valid, threshold
+        target_graph, relevance, valid, threshold
     )
     ptr, ids = _bitmaps_to_csr(ancestor_sets)
     postings = _build_postings(ancestor_sets)

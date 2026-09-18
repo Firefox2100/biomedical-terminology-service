@@ -1,7 +1,6 @@
 from functools import lru_cache
 
 import httpx
-import networkx as nx
 from owlready2 import default_world, ThingClass
 from urllib.parse import unquote
 
@@ -12,9 +11,10 @@ from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter
     load_obo_owl_classes, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from bioterms.model.annotation import Annotation
 from bioterms.annotation.utils import AnnotationSource, is_gene_annotation_prefix
-from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
+from .utils import write_concepts_to_file, write_graph_to_file
 
 
 VOCABULARY_NAME = 'Mondo Disease Ontology'
@@ -204,7 +204,7 @@ def _build_mondo_concept(mondo_class: ThingClass) -> Concept:
     )
 
 
-def _add_mondo_is_a_edges(mondo_graph: nx.DiGraph,
+def _add_mondo_is_a_edges(mondo_graph: EdgeBuffer,
                           mondo_class: ThingClass,
                           concept_id: str,
                           ):
@@ -283,6 +283,56 @@ def _build_mondo_xref_annotations(mondo_class: ThingClass,
     return annotations
 
 
+async def load_mondo_annotations_from_file(target_prefix: ConceptPrefix,
+                                           graph_db: GraphDatabase = None,
+                                           ) -> int:
+    """Load one Mondo cross-reference namespace independently of the vocabulary.
+
+    This is the annotation-only counterpart of ``load_vocabulary_from_file``. It is
+    intentionally usable after a Mondo import performed with ``--no-annotation`` so a
+    database build can pipeline concept loading and cross-vocabulary mapping loading.
+
+    :param target_prefix: The supported vocabulary namespace to retain from Mondo xrefs.
+    :param graph_db: Optional graph database instance.
+    :return: Number of annotations saved.
+    """
+    if target_prefix not in ANNOTATIONS:
+        raise ValueError(f'Mondo does not declare annotations to {target_prefix.value}.')
+    if not check_files_exist(FILE_PATHS):
+        raise FilesNotFound('Mondo owl file not found')
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    verbose_print(f'Loading Mondo annotations to {target_prefix.value}')
+    mondo_ontology, mondo_classes = load_obo_owl_classes(FILE_PATHS[0], 'MONDO_')
+    xref_source_lookup = _build_xref_source_lookup(mondo_ontology.world)
+    annotations = []
+
+    for mondo_class in iter_progress(
+        mondo_classes,
+        description=f'Processing Mondo to {target_prefix.value} annotations',
+        total=len(mondo_classes),
+    ):
+        if not mondo_class.name.startswith('MONDO_'):
+            continue
+        concept_id = mondo_class.name.split('_')[-1]
+        annotations.extend(
+            annotation
+            for annotation in _build_mondo_xref_annotations(
+                mondo_class,
+                concept_id,
+                xref_source_lookup,
+            )
+            if annotation.prefix_to == target_prefix
+        )
+
+    verbose_print(
+        f'Saving {len(annotations)} Mondo to {target_prefix.value} annotations to the database...'
+    )
+    await graph_db.save_annotations(annotations)
+    return len(annotations)
+
+
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
     """
     Download the Mondo vocabulary files.
@@ -299,7 +349,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
                                     build_search_index: bool = True,
-                                    load_annotations: bool = True,
                                     ):
     """
     Load the Mondo vocabulary from a file into the primary databases.
@@ -311,21 +360,11 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         raise FilesNotFound('Mondo owl file not found')
 
     verbose_print('Loading Mondo ontology')
-    mondo_ontology, mondo_classes = load_obo_owl_classes(FILE_PATHS[0], 'MONDO_')
+    _, mondo_classes = load_obo_owl_classes(FILE_PATHS[0], 'MONDO_')
     verbose_print('Mondo ontology read from file')
 
-    xref_source_lookup = (
-        _build_xref_source_lookup(mondo_ontology.world)
-        if load_annotations else {}
-    )
-    if load_annotations:
-        verbose_print(
-            f'Built per-xref provenance lookup for {len(xref_source_lookup)} hasDbXref statements'
-        )
-
-    mondo_graph = nx.DiGraph()
+    mondo_graph = EdgeBuffer()
     concepts = []
-    annotations = []
 
     for mondo_class in iter_progress(mondo_classes, description='Processing Mondo classes', total=len(mondo_classes)):
         if not mondo_class.name.startswith('MONDO_'):
@@ -337,14 +376,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         mondo_graph.add_node(concept.concept_id)
 
         _add_mondo_is_a_edges(mondo_graph, mondo_class, concept.concept_id)
-        if load_annotations:
-            annotations.extend(
-                _build_mondo_xref_annotations(
-                    mondo_class,
-                    concept.concept_id,
-                    xref_source_lookup,
-                )
-            )
 
     if not offline:
         if doc_db is None:
@@ -363,10 +394,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             graph=mondo_graph,
         )
-
-        if load_annotations:
-            verbose_print(f'Saving {len(annotations)} Mondo annotations to the database...')
-            await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -378,8 +405,3 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             vocabulary_graph=mondo_graph,
         )
-        if load_annotations:
-            await write_annotations_to_file(
-                prefix_from=VOCABULARY_PREFIX,
-                annotations=annotations,
-            )

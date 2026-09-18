@@ -51,24 +51,53 @@ def _ambiguous_query_keys(groups: list[dict]) -> set[tuple[str, str]]:
     return {key for key, golds in golds_by_query.items() if len(golds) > 1}
 
 
-def _load_groups(paths: list[Path]) -> list[dict]:
-    """Load every query-group record from the given JSONL files (not lazy: sampling/splitting need the full pool first)."""
+def _resolve_train_paths(explicit_paths: list[str] | None,
+                         directories: list[str] | None,
+                         ) -> list[Path]:
+    """Resolve explicit shards plus dynamically discovered per-vocabulary shards."""
+    paths = [Path(path) for path in explicit_paths or []]
+    for directory in directories or []:
+        paths.extend(sorted(Path(directory).glob('*.jsonl')))
+    unique_paths = list(dict.fromkeys(path.resolve() for path in paths))
+    if not unique_paths:
+        raise SystemExit('No training JSONL files found; use --train-data and/or --train-data-dir.')
+    return unique_paths
+
+
+def _load_groups(paths: list[Path],
+                 include_vocabularies: set[str] | None = None,
+                 exclude_vocabularies: set[str] | None = None,
+                 ) -> list[dict]:
+    """Load query groups from the selected shard pool, applying vocabulary masks on read."""
     groups: list[dict] = []
     for path in paths:
         with path.open('r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    groups.append(json.loads(line))
+                    group = json.loads(line)
+                    prefix = group['prefix']
+                    if include_vocabularies is not None and prefix not in include_vocabularies:
+                        continue
+                    if exclude_vocabularies is not None and prefix in exclude_vocabularies:
+                        continue
+                    groups.append(group)
     return groups
 
 
-def _load_concept_store(dirs: list[Path]) -> dict[tuple[str, str], dict]:
+def _load_concept_store(dirs: list[Path],
+                        include_vocabularies: set[str] | None = None,
+                        exclude_vocabularies: set[str] | None = None,
+                        ) -> dict[tuple[str, str], dict]:
     """Load every "<prefix>.concepts.jsonl" in the given directories into a (prefix, concept_id) -> fields lookup."""
     store: dict[tuple[str, str], dict] = {}
     for directory in dirs:
         for path in sorted(directory.glob('*.concepts.jsonl')):
             prefix = path.name.removesuffix('.concepts.jsonl')
+            if include_vocabularies is not None and prefix not in include_vocabularies:
+                continue
+            if exclude_vocabularies is not None and prefix in exclude_vocabularies:
+                continue
             with path.open('r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
@@ -557,8 +586,20 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        '--train-data', nargs='+', required=True,
+        '--train-data', nargs='+', default=None,
         help='Mined query-group JSONL shard file(s) -- the full pool; a held-out split is carved out internally (see --eval-fraction).',
+    )
+    parser.add_argument(
+        '--train-data-dir', nargs='+', default=None,
+        help='Directory/directories dynamically scanned for per-vocabulary *.jsonl mining shards.',
+    )
+    parser.add_argument(
+        '--include-vocabularies', nargs='*', default=None,
+        help='Use only these vocabulary prefixes from discovered/explicit shards.',
+    )
+    parser.add_argument(
+        '--exclude-vocabularies', nargs='*', default=None,
+        help='Mask these vocabulary prefixes without rewriting or recombining mined shards.',
     )
     parser.add_argument(
         '--concept-store-dir', nargs='+', required=True,
@@ -676,6 +717,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         errors.append('--eval-steps must be >= 0.')
     if args.eval_steps > 0 and args.save_steps % args.eval_steps != 0:
         errors.append('--save-steps must be a multiple of --eval-steps for best-checkpoint selection.')
+    if args.include_vocabularies and args.exclude_vocabularies:
+        overlap = sorted(set(args.include_vocabularies) & set(args.exclude_vocabularies))
+        if overlap:
+            errors.append(
+                '--include-vocabularies and --exclude-vocabularies overlap: ' + ', '.join(overlap)
+            )
 
     if errors:
         raise SystemExit('Invalid arguments:\n' + '\n'.join(f'  - {e}' for e in errors))
@@ -688,14 +735,20 @@ def main() -> None:
     max_aliases = args.max_aliases_rendered if args.max_aliases_rendered > 0 else None
     eval_variant = RenderVariant(args.eval_render_variant)
 
-    train_paths = [Path(p) for p in args.train_data]
+    train_paths = _resolve_train_paths(args.train_data, args.train_data_dir)
     concept_store_dirs = [Path(p) for p in args.concept_store_dir]
+    include_vocabularies = set(args.include_vocabularies) if args.include_vocabularies else None
+    exclude_vocabularies = set(args.exclude_vocabularies) if args.exclude_vocabularies else None
 
-    all_groups = _load_groups(train_paths)
+    all_groups = _load_groups(train_paths, include_vocabularies, exclude_vocabularies)
     all_groups, duplicate_count = _deduplicate_groups(all_groups)
     if duplicate_count:
         print(f'Deduplication: removed {duplicate_count} repeated query groups.')
-    concept_store = _load_concept_store(concept_store_dirs)
+    concept_store = _load_concept_store(
+        concept_store_dirs,
+        include_vocabularies,
+        exclude_vocabularies,
+    )
     print(f'Loaded {len(all_groups)} query groups and {len(concept_store)} concepts.')
 
     if all_groups:

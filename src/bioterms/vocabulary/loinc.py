@@ -7,7 +7,6 @@ import os
 import aiofiles
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, \
@@ -19,6 +18,7 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, download_file, ensure_data_directory, \
     extract_file_from_zip, iter_progress, verbose_print
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -141,7 +141,7 @@ def _split_synonyms(*values) -> list[str] | None:
     return synonyms or None
 
 
-def _load_release() -> tuple[list[CONCEPT_CLASS], nx.MultiDiGraph]:
+def _load_release() -> tuple[list[CONCEPT_CLASS], EdgeBuffer]:
     term_frame = pd.read_csv(
         os.path.join(CONFIG.data_dir, FILE_PATHS[0]), dtype=str, keep_default_na=False,
     )
@@ -156,7 +156,7 @@ def _load_release() -> tuple[list[CONCEPT_CLASS], nx.MultiDiGraph]:
     )
 
     concepts: dict[str, CONCEPT_CLASS] = {}
-    graph = nx.MultiDiGraph()
+    graph = EdgeBuffer()
     for _, row in iter_progress(
         term_frame.iterrows(), total=len(term_frame), description='Processing LOINC terms',
     ):

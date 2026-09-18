@@ -1,16 +1,12 @@
 import math
-from copy import deepcopy
 from typing import AsyncIterator
 
-import networkx as nx
 import numpy as np
 from numba import njit, prange, set_num_threads, get_num_threads
 from pyroaring import BitMap
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
-from bioterms.etc.utils import verbose_print
-from .utils import count_annotation_for_graph, filter_edges_by_relationship
+from .context import SimilarityContext
 
 METHOD_NAME = 'Relevance Method'
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
@@ -126,16 +122,15 @@ def _fits_cuda(ptr, ids, ic, relevance, batch_size):
     return required <= int(free * 0.8)
 
 
-def _build_informative_ancestor_sets(graph, node_to_index, relevance, valid, threshold):
-    sets = [BitMap() for _ in range(len(node_to_index))]
-    for node in reversed(list(nx.topological_sort(graph))):
-        i = node_to_index[node]
+def _build_informative_ancestor_sets(graph, relevance, valid, threshold):
+    sets = [BitMap() for _ in graph.node_ids]
+    for i in reversed(graph.topological_order):
+        i = int(i)
         bm = sets[i]
         if valid[i] and relevance[i] >= threshold:
             bm.add(i)
-        # Standard simRel: unique semantic ancestor set, preserving existing graph orientation.
-        for successor in graph.successors(node):
-            bm |= sets[node_to_index[successor]]
+        for successor in graph.successors(i):
+            bm |= sets[int(successor)]
     return sets
 
 
@@ -185,38 +180,32 @@ def _candidate_batches(ptr, ids, postings, ic, valid, threshold, batch_size):
         yield lhs[:used].copy(), rhs[:used].copy()
 
 
-async def calculate_similarity(target_graph: nx.MultiDiGraph,
-                               target_prefix: ConceptPrefix,
-                               corpus_graph: nx.MultiDiGraph = None,
-                               corpus_prefix: ConceptPrefix = None,
-                               annotation_graph: nx.DiGraph = None,
+async def calculate_similarity(context: SimilarityContext,
                                ) -> AsyncIterator[tuple[str, str, float]]:
-    threshold = DEFAULT_SIMILARITY_THRESHOLD
-    target_graph = deepcopy(target_graph)
-    filter_edges_by_relationship(target_graph, {ConceptRelationshipType.IS_A, ConceptRelationshipType.PART_OF})
-    verbose_print(f'Relationship filtered down to {len(target_graph.edges):,} edges in target graph.')
-    target_graph = nx.DiGraph(target_graph)
-    if not nx.is_directed_acyclic_graph(target_graph):
-        raise ValueError('Filtered target ontology must be a DAG.')
-    annotation_graph = annotation_graph.to_undirected(as_view=True)
-    count_annotation_for_graph(target_graph=target_graph, annotation_graph=annotation_graph, target_prefix=target_prefix)
-    max_count = max((target_graph.nodes[n].get('annotation_count', 0) for n in target_graph), default=0)
+    threshold = context.threshold if context.threshold is not None else DEFAULT_SIMILARITY_THRESHOLD
+    graph = context.target
+    if context.annotations is None:
+        return
+    counts = np.fromiter(
+        (len(values) for values in context.annotations.target_to_corpus),
+        dtype=np.float64, count=len(graph.node_ids),
+    )
+    for node in graph.topological_order:
+        node = int(node)
+        for child in graph.predecessors(node):
+            counts[node] += counts[int(child)]
+    max_count = float(counts.max(initial=0))
     if max_count <= 0:
         return
-    nodes = list(target_graph.nodes)
-    node_to_index = {n: i for i, n in enumerate(nodes)}
+    nodes = graph.node_ids
     ic = np.zeros(len(nodes), np.float64)
     relevance = np.zeros(len(nodes), np.float64)
-    valid = np.zeros(len(nodes), np.bool_)
-    for node, i in node_to_index.items():
-        count = target_graph.nodes[node].get('annotation_count', 0)
-        if count > 0:
-            valid[i] = True
-            ic[i] = -math.log(count / max_count)
-            relevance[i] = 1.0 - count / max_count
+    valid = counts > 0
+    ic[valid] = -np.log(counts[valid] / max_count)
+    relevance[valid] = 1.0 - counts[valid] / max_count
     if valid.sum() < 2:
         return
-    bitmaps = _build_informative_ancestor_sets(target_graph, node_to_index, relevance, valid, threshold)
+    bitmaps = _build_informative_ancestor_sets(graph, relevance, valid, threshold)
     ptr, ids = _bitmaps_to_csr(bitmaps)
     postings = _build_postings(bitmaps)
     del bitmaps

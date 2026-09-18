@@ -4,7 +4,6 @@ import csv
 import importlib
 from pathlib import Path
 import aiofiles
-import networkx as nx
 
 from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
@@ -13,9 +12,10 @@ from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active
     get_active_graph_db
 from bioterms.etc.errors import SimilarityNotSupported, SimilarityDataNotAvailable
 from bioterms.vocabulary import get_vocabulary_status
-from bioterms.vocabulary.utils import load_graph_from_file, load_annotation_from_file
+from bioterms.vocabulary.utils import load_graph_data_from_file, load_annotation_pairs_from_file
 from bioterms.annotation import get_annotation_status
 from bioterms.model.similarity_status import SimilarityCount, SimilarityStatus
+from .context import AnnotationIndex, OntologyIndex, SimilarityContext
 
 
 ALL_SIMILARITY_METHODS = {
@@ -133,61 +133,57 @@ async def _validate_similarity_prerequisites(method: SimilarityMethod,
             )
 
 
-async def _load_similarity_graphs(target_prefix: ConceptPrefix,
-                                  corpus_prefix: ConceptPrefix | None,
-                                  similarity_config: dict,
-                                  offline: bool,
-                                  annotation_file_path: str | os.PathLike | None,
-                                  graph_db: GraphDatabase | None,
-                                  ) -> tuple[nx.MultiDiGraph, nx.MultiDiGraph | None, nx.DiGraph | None]:
-    """
-    Load the target vocabulary graph and, if the similarity method requires a corpus, the
-    annotation graph between target and corpus (and the corpus graph itself, if required).
-    :param target_prefix: The target vocabulary prefix.
-    :param corpus_prefix: The corpus vocabulary prefix.
-    :param similarity_config: The similarity method configuration.
-    :param offline: Whether to load the graphs from offline dump files.
-    :param annotation_file_path: Optional annotation dump override for offline calculation.
-    :param graph_db: The graph database instance to use when not offline.
-    :return: A tuple of (target_graph, corpus_graph, annotation_graph).
-    """
-    verbose_print(f'Loading vocabulary graph for {target_prefix.value}...')
-
+async def _load_similarity_context(target_prefix: ConceptPrefix,
+                                   corpus_prefix: ConceptPrefix | None,
+                                   similarity_config: dict,
+                                   offline: bool,
+                                   annotation_file_path: str | os.PathLike | None,
+                                   graph_db: GraphDatabase | None,
+                                   ) -> SimilarityContext:
+    """Load the compact similarity contract, bypassing NetworkX for online backends."""
     if offline:
-        target_graph = await load_graph_from_file(target_prefix)
-        if not isinstance(target_graph, nx.MultiDiGraph):
-            target_graph = nx.MultiDiGraph(target_graph)
-    else:
-        target_graph = await graph_db.get_vocabulary_graph(target_prefix)
+        target_nodes, target_edges = await load_graph_data_from_file(target_prefix)
+        target = OntologyIndex.build(target_nodes, target_edges)
+        if corpus_prefix is None or not similarity_config['corpusRequired']:
+            return SimilarityContext(target_prefix=target_prefix, target=target)
+        pairs = await load_annotation_pairs_from_file(
+            target_prefix, corpus_prefix, annotation_file_path,
+        )
+        if similarity_config['corpusGraphRequired']:
+            corpus_nodes, corpus_edges = await load_graph_data_from_file(corpus_prefix)
+        else:
+            corpus_nodes = list(dict.fromkeys(corpus_id for _, corpus_id in pairs))
+            corpus_edges = []
+        corpus = OntologyIndex.build(corpus_nodes, corpus_edges)
+        return SimilarityContext(
+            target_prefix, target, corpus_prefix, corpus,
+            AnnotationIndex.build(target, corpus, pairs),
+        )
 
+    target_nodes, target_edges = await graph_db.get_vocabulary_data(target_prefix)
+    target = OntologyIndex.build(target_nodes, target_edges)
     if corpus_prefix is None or not similarity_config['corpusRequired']:
-        return target_graph, None, None
+        return SimilarityContext(target_prefix=target_prefix, target=target)
 
-    verbose_print(f'Loading annotation graph between {target_prefix.value} and {corpus_prefix.value}...')
-    if offline:
-        annotation_graph = await load_annotation_from_file(
-            prefix_from=target_prefix,
-            prefix_to=corpus_prefix,
-            annotation_file_path=annotation_file_path,
-        )
+    pairs = []
+    async for source_prefix, source_id, destination_prefix, destination_id, _kind in \
+            graph_db.get_annotation_edges(target_prefix, corpus_prefix):
+        source_value = source_prefix.value if hasattr(source_prefix, 'value') else str(source_prefix)
+        destination_value = destination_prefix.value \
+            if hasattr(destination_prefix, 'value') else str(destination_prefix)
+        if source_value == target_prefix.value and destination_value == corpus_prefix.value:
+            pairs.append((source_id, destination_id))
+        elif destination_value == target_prefix.value and source_value == corpus_prefix.value:
+            pairs.append((destination_id, source_id))
+
+    if similarity_config['corpusGraphRequired']:
+        corpus_nodes, corpus_edges = await graph_db.get_vocabulary_data(corpus_prefix)
     else:
-        annotation_graph = await graph_db.get_annotation_graph(
-            prefix_1=target_prefix,
-            prefix_2=corpus_prefix,
-        )
-
-    if not similarity_config['corpusGraphRequired']:
-        return target_graph, None, annotation_graph
-
-    verbose_print(f'Loading corpus vocabulary graph for {corpus_prefix.value}...')
-    if offline:
-        corpus_graph = await load_graph_from_file(corpus_prefix)
-        if not isinstance(corpus_graph, nx.MultiDiGraph):
-            corpus_graph = nx.MultiDiGraph(corpus_graph)
-    else:
-        corpus_graph = await graph_db.get_vocabulary_graph(corpus_prefix)
-
-    return target_graph, corpus_graph, annotation_graph
+        corpus_nodes = list(dict.fromkeys(corpus_id for _, corpus_id in pairs))
+        corpus_edges = []
+    corpus = OntologyIndex.build(corpus_nodes, corpus_edges)
+    annotations = AnnotationIndex.build(target, corpus, pairs)
+    return SimilarityContext(target_prefix, target, corpus_prefix, corpus, annotations)
 
 
 async def _flush_similarity_results(results: list,
@@ -279,9 +275,10 @@ async def calculate_similarity(method: SimilarityMethod,
             method, similarity_config, target_prefix, corpus_prefix, doc_db, graph_db,
         )
 
-    target_graph, corpus_graph, annotation_graph = await _load_similarity_graphs(
+    context = await _load_similarity_context(
         target_prefix, corpus_prefix, similarity_config, offline, annotation_file_path, graph_db,
     )
+    context.threshold = similarity_threshold
 
     results = []
     offline_file_path = os.path.join(
@@ -296,13 +293,7 @@ async def calculate_similarity(method: SimilarityMethod,
         offline_file = None
 
     try:
-        async for result in similarity_module.calculate_similarity(
-            target_graph=target_graph,
-            target_prefix=target_prefix,
-            corpus_graph=corpus_graph,
-            corpus_prefix=corpus_prefix,
-            annotation_graph=annotation_graph,
-        ):
+        async for result in similarity_module.calculate_similarity(context=context):
             if result[2] >= similarity_threshold:
                 results.append(result)
 

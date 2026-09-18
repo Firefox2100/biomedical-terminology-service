@@ -83,4 +83,6 @@ async def test_gene_symbol_vocabulary_distinguishes_active_aliases_and_withdrawn
     assert concepts['OLD1'].status == ConceptStatus.DEPRECATED
     assert all(concepts[symbol].status == ConceptStatus.ACTIVE
                for symbol in ('A1BG', 'A2BG', 'ABG'))
-    assert set(captured['graph'].nodes) == set(concepts)
+    # Write-side graph buffers deliberately do not duplicate concept IDs as graph nodes;
+    # database writers receive the concept list separately.
+    assert len(captured['graph']) == 0

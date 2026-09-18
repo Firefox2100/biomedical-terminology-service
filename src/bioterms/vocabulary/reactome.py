@@ -2,7 +2,6 @@ import os
 import json
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -14,6 +13,7 @@ from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db
 from bioterms.model.annotation import Annotation
 from bioterms.annotation.utils import AnnotationSource
 from bioterms.model.concept import ReactomeConcept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -128,7 +128,7 @@ def _parse_synonyms(synonym_str: str,
     return synonyms if synonyms else None
 
 
-def _process_concept_files() -> tuple[list[CONCEPT_CLASS], nx.DiGraph]:
+def _process_concept_files() -> tuple[list[CONCEPT_CLASS], EdgeBuffer]:
     """
     Process Reactome concept files from disk and construct concepts and graph.
     :return: A tuple of list of concepts and the concept graph.
@@ -139,7 +139,7 @@ def _process_concept_files() -> tuple[list[CONCEPT_CLASS], nx.DiGraph]:
     physical_entity_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[7])))
 
     concepts = []
-    reactome_graph = nx.DiGraph()
+    reactome_graph = EdgeBuffer()
 
     verbose_print('Reactome concept files loaded from disk, processing concepts...')
 
@@ -238,7 +238,7 @@ def _process_concept_files() -> tuple[list[CONCEPT_CLASS], nx.DiGraph]:
     return concepts, reactome_graph
 
 
-def _process_relationship_files(reactome_graph: nx.DiGraph):
+def _process_relationship_files(reactome_graph: EdgeBuffer):
     """
     Process Reactome relationship files from disk and construct the internal relationships graph.
     """

@@ -487,6 +487,39 @@ class Neo4jGraphDatabase(GraphDatabase):
                     },
                 )
 
+    async def get_vocabulary_data(self,
+                                  prefix: ConceptPrefix,
+                                  ) -> tuple[list[str], list[tuple[str, str, str | None, str | None]]]:
+        """Read compact similarity-builder input directly, without a NetworkX intermediate."""
+        nodes = []
+        edges = []
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                MATCH (n:Concept {prefix: $prefix})
+                RETURN n.id AS concept_id
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+            async for record in result:
+                nodes.append(record['concept_id'])
+
+            result = await _execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix})-[r]->(target:Concept {prefix: $prefix})
+                WHERE type(r) IN ['is_a', 'part_of']
+                RETURN DISTINCT source.id AS source_id, target.id AS target_id, type(r) AS rel_label
+                """,
+                session=session,
+                parameters={'prefix': prefix.value},
+            )
+            async for record in result:
+                edges.append((
+                    record['source_id'], record['target_id'], record['rel_label'], None,
+                ))
+        return nodes, edges
+
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
                                    with_similarity: bool = False,

@@ -682,6 +682,27 @@ class PostgresGraphDatabase(GraphDatabase):
         # partial closure for this prefix must not be trusted -- always rebuild from scratch.
         await self._build_closure(p)
 
+    async def get_vocabulary_data(self,
+                                  prefix: ConceptPrefix,
+                                  ) -> tuple[list[str], list[tuple[str, str, str | None, str | None]]]:
+        """Read compact similarity-builder input directly from prefix tables."""
+        p = safe_table_suffix(prefix.value)
+        async with self.engine.connect() as conn:
+            if not await self._table_exists(conn, f'graph_node_{p}'):
+                return [], []
+            nodes = [
+                row.concept_id
+                for row in await conn.execute(text(f'SELECT concept_id FROM graph_node_{p}'))
+            ]
+            edges = [
+                (row.source_id, row.target_id, row.rel_type, None)
+                for row in await conn.execute(text(
+                    f"SELECT source_id, target_id, rel_type FROM graph_edge_{p} "
+                    "WHERE rel_type IN ('is_a', 'part_of')"
+                ))
+            ]
+        return nodes, edges
+
     async def get_vocabulary_graph(self,
                                    prefix: ConceptPrefix,
                                    with_similarity: bool = False,

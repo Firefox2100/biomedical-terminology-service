@@ -86,9 +86,9 @@ async def test_calculate_similarity_offline_does_not_require_cache(monkeypatch, 
     )
 
     async def fake_load_graph_from_file(_prefix):
-        return nx.MultiDiGraph()
+        return [], []
 
-    monkeypatch.setattr(similarity, 'load_graph_from_file', fake_load_graph_from_file)
+    monkeypatch.setattr(similarity, 'load_graph_data_from_file', fake_load_graph_from_file)
 
     def fail_get_active_cache():
         raise AssertionError('get_active_cache should not be called in offline mode')
@@ -128,7 +128,7 @@ async def test_calculate_similarity_forwards_annotation_file_override(monkeypatc
     )
 
     async def fake_load_graph_from_file(_prefix):
-        return nx.MultiDiGraph()
+        return [], []
 
     annotation_path = tmp_path / 'mondo.annotation.dump'
     annotation_path.write_text('')
@@ -137,10 +137,10 @@ async def test_calculate_similarity_forwards_annotation_file_override(monkeypatc
         assert prefix_from == ConceptPrefix.HPO
         assert prefix_to == ConceptPrefix.MONDO
         assert annotation_file_path == annotation_path
-        return nx.DiGraph()
+        return []
 
-    monkeypatch.setattr(similarity, 'load_graph_from_file', fake_load_graph_from_file)
-    monkeypatch.setattr(similarity, 'load_annotation_from_file', fake_load_annotation_from_file)
+    monkeypatch.setattr(similarity, 'load_graph_data_from_file', fake_load_graph_from_file)
+    monkeypatch.setattr(similarity, 'load_annotation_pairs_from_file', fake_load_annotation_from_file)
     data_dir = tmp_path / 'data'
     (data_dir / 'offline').mkdir(parents=True)
     monkeypatch.setattr(CONFIG, 'data_dir', str(data_dir))

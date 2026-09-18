@@ -2,7 +2,6 @@ import os
 import aiofiles
 import aiofiles.os
 import httpx
-import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
@@ -12,6 +11,7 @@ from bioterms.etc.utils import check_files_exist, ensure_data_directory, downloa
     iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
+from bioterms.model.edge_buffer import EdgeBuffer
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
@@ -69,7 +69,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
 
 def _build_ncit_concept(row,
-                        ncit_graph: nx.DiGraph,
+                        ncit_graph: EdgeBuffer,
                         ) -> CONCEPT_CLASS:
     """
     Build a Concept for one NCIT thesaurus row and wire its is-a edges into the graph.
@@ -136,7 +136,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
 
     verbose_print('NCIT flat file read from disk, constructing concepts...')
 
-    ncit_graph = nx.DiGraph()
+    ncit_graph = EdgeBuffer()
     concepts = []
 
     for _, row in iter_progress(

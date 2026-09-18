@@ -37,6 +37,25 @@ cd scripts/reranker
 python build_training_data.py --output data/part-00.jsonl --skip 0 --limit 100000
 ```
 
+For incremental database builds, prefer per-vocabulary output so each completed vocabulary can
+be mined while other vocabularies are still loading or embedding:
+
+```bash
+python build_training_data.py --output-dir data/by-vocabulary \
+  --vocabularies hpo mondo ncit --per-vocabulary-limit 100000
+```
+
+This writes ``aliases.hpo.jsonl``, ``aliases.mondo.jsonl``, and so on. Cross-vocabulary mining
+supports the same layout and routes rows by target vocabulary:
+
+```bash
+python mine_cross_vocab_positives.py --output-dir data/by-vocabulary \
+  --vocabularies hpo mondo ncit
+```
+
+Those files are named ``cross-vocab.<target>.jsonl``. Adding, replacing, or masking a
+vocabulary is therefore a training-time choice rather than a dataset recombination step.
+
 This mines the first 100k query units (in a deterministic order -- see the script's module
 docstring) into `data/part-00.jsonl`, plus `data/part-00.jsonl.stats.json` and per-vocabulary
 concept-store files under `data/concepts/<prefix>.concepts.jsonl`.
@@ -115,6 +134,19 @@ vocabulary is (re)written whenever that vocabulary is actually processed (not wh
 several) and `--max-groups` (a target sample size on top of that) -- so growing the dataset
 for a bigger training run is just adding another `--train-data` file, nothing upstream needs
 to change. There's no separate "held-out" mining step any more -- see "Splitting" below.
+
+The trainer can discover per-vocabulary shards dynamically and mask vocabularies while reading:
+
+```bash
+python train_reranker.py \
+  --train-data-dir data/by-vocabulary \
+  --concept-store-dir data/by-vocabulary/concepts \
+  --exclude-vocabularies ohdsi uniprot \
+  --output-dir runs/without-ohdsi-uniprot
+```
+
+Use ``--include-vocabularies`` for an allow-list. Explicit ``--train-data`` files and multiple
+``--train-data-dir`` directories can be combined; duplicate file paths are loaded only once.
 
 ### Useful flags
 
