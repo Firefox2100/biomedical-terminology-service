@@ -18,3 +18,9 @@ provides the database without warranties regarding correctness.
 - [UniProt](https://www.uniprot.org/)
 - [UniProt licence and disclaimer](https://www.uniprot.org/help/license/)
 - [UniProt downloads](https://www.uniprot.org/help/downloads/)
+
+## Additional annotation data published under the same licence
+
+The project extracts cross-reference records published in UniProtKB for Gene Ontology, HGNC,
+Ensembl, Reactome, OMIM, and Orphanet. These records are distributed in the same release under the terms
+above. Content belonging to each referenced vocabulary remains covered by its separate licence.

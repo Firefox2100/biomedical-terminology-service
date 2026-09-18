@@ -18,9 +18,11 @@ VOCABULARY_NAME = 'SNOMED Clinical Terms'
 VOCABULARY_PREFIX = ConceptPrefix.SNOMED
 ANNOTATIONS = [
     ConceptPrefix.CTV3,
+    ConceptPrefix.LOINC,
     ConceptPrefix.MONDO,
     ConceptPrefix.OHDSI,
     ConceptPrefix.ORDO,
+    ConceptPrefix.RXNORM,
     ConceptPrefix.UBERON,
 ]
 SIMILARITY_METHODS = [

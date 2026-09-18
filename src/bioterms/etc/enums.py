@@ -32,15 +32,18 @@ class ConceptPrefix(Enum):
     """
     CTV3 = 'ctv3'
     ENSEMBL = 'ensembl'
+    GO = 'go'
     HGNC = 'hgnc'
     HGNC_SYMBOL = 'gene'
     HPO = 'hpo'
+    LOINC = 'loinc'
     MONDO = 'mondo'
     NCIT = 'ncit'
     OHDSI = 'ohdsi'
     OMIM = 'omim'
     ORDO = 'ordo'
     REACTOME = 'reactome'
+    RXNORM = 'rxnorm'
     SNOMED = 'snomed'
     UBERON = 'uberon'
     UNIPROT = 'uniprot'
@@ -71,6 +74,12 @@ class ConceptType(Enum):
     POLYMER = 'polymer'
     CELL = 'cell'
     OTHER_ENTITY = 'other_entity'
+    INGREDIENT = 'ingredient'
+    BRAND = 'brand'
+    DOSE_FORM = 'dose_form'
+    CLINICAL_DRUG = 'clinical_drug'
+    BRANDED_DRUG = 'branded_drug'
+    PACK = 'pack'
 
 
 class ConceptRelationshipType(Enum):
@@ -79,6 +88,9 @@ class ConceptRelationshipType(Enum):
     """
     IS_A = 'is_a'
     PART_OF = 'part_of'
+    REGULATES = 'regulates'
+    NEGATIVELY_REGULATES = 'negatively_regulates'
+    POSITIVELY_REGULATES = 'positively_regulates'
     REPLACED_BY = 'replaced_by'
     PRECEDED_BY = 'preceded_by'
     HAS_INPUT = 'has_input'
@@ -87,6 +99,7 @@ class ConceptRelationshipType(Enum):
     ANNOTATED_WITH = 'annotated_with'
     CONSIDER = 'consider'
     SNOMED_ASSOCIATION = 'snomed_association'
+    RXNORM_RELATIONSHIP = 'rxnorm_relationship'
 
 
 class DocDatabaseDriverType(Enum):
@@ -95,6 +108,7 @@ class DocDatabaseDriverType(Enum):
     """
     MONGO = 'mongo'
     SQL = 'sql'
+    ELASTICSEARCH = 'elasticsearch'
 
 
 class EmbeddingKind(Enum):
@@ -139,6 +153,7 @@ class VectorDatabaseDriverType(Enum):
     QDRANT = 'qdrant'
     MONGODB = 'mongodb'
     POSTGRESQL = 'postgresql'
+    ELASTICSEARCH = 'elasticsearch'
 
 
 class QdrantStorageType(Enum):

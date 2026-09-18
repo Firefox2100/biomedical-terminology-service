@@ -1,10 +1,12 @@
 import httpx
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.etc.utils import verbose_print
+from bioterms.etc.utils import check_files_exist, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.vocabulary.reactome import build_uniprot_annotations, download_vocabulary
-from .utils import assert_pre_requisite
+from bioterms.vocabulary.uniprot import FILE_PATHS as UNIPROT_FILE_PATHS, \
+    iter_reactome_annotations
+from .utils import assert_pre_requisite, save_annotation_stream
 
 
 ANNOTATION_NAME = 'Reactome Mapping to UniProt'
@@ -44,3 +46,6 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
 
     verbose_print(f'Processed {len(annotations)} Reactome to UniProt annotations. Saving...')
     await graph_db.save_annotations(annotations)
+    if check_files_exist(UNIPROT_FILE_PATHS):
+        count = await save_annotation_stream(graph_db, iter_reactome_annotations())
+        verbose_print(f'Loaded {count} UniProtKB to Reactome annotations.')

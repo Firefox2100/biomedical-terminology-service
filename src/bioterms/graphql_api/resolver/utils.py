@@ -54,14 +54,20 @@ def prefix_to_concept_type(prefix: ConceptPrefix) -> str:
     mapping = {
         ConceptPrefix.CTV3: 'Ctv3Concept',
         ConceptPrefix.ENSEMBL: 'EnsemblConcept',
+        ConceptPrefix.GO: 'GoConcept',
         ConceptPrefix.HGNC: 'HgncConcept',
         ConceptPrefix.HGNC_SYMBOL: 'HgncSymbolConcept',
         ConceptPrefix.HPO: 'HpoConcept',
+        ConceptPrefix.LOINC: 'LoincConcept',
+        ConceptPrefix.MONDO: 'MondoConcept',
         ConceptPrefix.NCIT: 'NcitConcept',
+        ConceptPrefix.OHDSI: 'OhdsiConcept',
         ConceptPrefix.OMIM: 'OmimConcept',
         ConceptPrefix.ORDO: 'OrdoConcept',
         ConceptPrefix.REACTOME: 'ReactomeConcept',
+        ConceptPrefix.RXNORM: 'RxNormConcept',
         ConceptPrefix.SNOMED: 'SnomedConcept',
+        ConceptPrefix.UBERON: 'UberonConcept',
         ConceptPrefix.UNIPROT: 'UniProtConcept',
     }
     

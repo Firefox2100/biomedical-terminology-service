@@ -5,8 +5,8 @@ Utility functions for data management, downloading, extraction, and processing.
 import asyncio
 import os
 import re
-import io
 import itertools
+import shutil
 import zipfile
 import uuid
 import tempfile
@@ -14,6 +14,7 @@ import fnmatch
 import zlib
 import tarfile
 import warnings
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from collections.abc import MutableSequence, Iterable, Sized
 from pathlib import Path
 from itertools import islice
@@ -36,6 +37,19 @@ if TYPE_CHECKING:
 _TRANSFORMER: Optional['SentenceTransformer'] = None
 T = TypeVar('T')
 R = TypeVar('R')
+_SENSITIVE_URL_PARAMETERS = {
+    'access_token', 'apikey', 'api_key', 'key', 'password', 'token',
+}
+
+
+def _redact_url_credentials(url: str) -> str:
+    """Hide credentials carried in URL query parameters before logging."""
+    parts = urlsplit(url)
+    query = urlencode([
+        (name, '[REDACTED]' if name.lower() in _SENSITIVE_URL_PARAMETERS else value)
+        for name, value in parse_qsl(parts.query, keep_blank_values=True)
+    ])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 async def discover_latest_numbered_release(base_url: str,
@@ -378,7 +392,7 @@ async def download_file(url: str,
     absolute_file_path = os.path.join(CONFIG.data_dir, file_path)
     os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
     file_name = os.path.basename(file_path)
-    LOGGER.info('Downloading %s from %s', file_path, url)
+    LOGGER.info('Downloading %s from %s', file_path, _redact_url_credentials(url))
 
     last_error: Exception | None = None
 
@@ -486,25 +500,12 @@ def _nearby_zip_entries(names: list[str], pattern: str, limit: int = 20) -> list
     return [name for name in names if fnmatch.fnmatch(name, directory_pattern)][:limit]
 
 
-async def extract_file_from_zip(zip_path: str,
-                                file_mapping: list[tuple[str, str] | tuple[str, str, bool]],
-                                ):
-    """
-    Extract specific files from a zip archive based on matching patterns.
-    :param zip_path: The path to the zip archive.
-    :param file_mapping: List of tuples mapping relative file patterns to extracted file
-        names, optionally with a third `required` bool (default True, preserving the
-        original hard-fail behaviour). A `required=False` entry that matches nothing is
-        skipped with a visible warning (not silent, and not gated behind CONFIG.verbose_print
-        -- an intentionally-added feature quietly not working is worse than a noisy one)
-        instead of aborting the whole extraction; every other pattern in file_mapping still
-        gets its chance, including ones listed after it.
-    :raises FilesNotFound: If a required pattern matches nothing.
-    """
-    async with aiofiles.open(zip_path, 'rb') as f:
-        zip_bytes = await f.read()
-
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zip_ref:
+def _extract_files_from_zip_sync(
+        zip_path: str,
+        file_mapping: list[tuple[str, str] | tuple[str, str, bool]],
+        ) -> None:
+    """Synchronous bounded-memory implementation used by ``extract_file_from_zip``."""
+    with zipfile.ZipFile(zip_path) as zip_ref:
         names = zip_ref.namelist()
 
         for entry in file_mapping:
@@ -525,16 +526,28 @@ async def extract_file_from_zip(zip_path: str,
                 warnings.warn(f'{message} Skipping this optional file.', stacklevel=2)
                 continue
 
-            member = matches[0]
-
-            with zip_ref.open(member) as src:
-                data = src.read()
-
             dest = Path(dest_path)
             dest.parent.mkdir(parents=True, exist_ok=True)
+            with zip_ref.open(matches[0]) as source, open(dest, 'wb') as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
 
-            async with aiofiles.open(dest, 'wb') as dest_f:
-                await dest_f.write(data)
+
+async def extract_file_from_zip(zip_path: str,
+                                file_mapping: list[tuple[str, str] | tuple[str, str, bool]],
+                                ):
+    """
+    Extract specific files from a zip archive based on matching patterns.
+    :param zip_path: The path to the zip archive.
+    :param file_mapping: List of tuples mapping relative file patterns to extracted file
+        names, optionally with a third `required` bool (default True, preserving the
+        original hard-fail behaviour). A `required=False` entry that matches nothing is
+        skipped with a visible warning (not silent, and not gated behind CONFIG.verbose_print
+        -- an intentionally-added feature quietly not working is worse than a noisy one)
+        instead of aborting the whole extraction; every other pattern in file_mapping still
+        gets its chance, including ones listed after it.
+    :raises FilesNotFound: If a required pattern matches nothing.
+    """
+    await asyncio.to_thread(_extract_files_from_zip_sync, zip_path, file_mapping)
 
 
 async def extract_file_from_gzip(gzip_path: str,

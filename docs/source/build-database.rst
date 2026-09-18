@@ -21,17 +21,43 @@ As an alternative to MongoDB, the document database can be backed by a SQL datab
 
 Set ``BTS_DOC_DATABASE_DRIVER=sql`` and ``BTS_SQL_DB_URL`` to a SQLAlchemy async URL to enable it, e.g. ``postgresql+asyncpg://user:password@host:5432/bts``. For PostgreSQL, install the ``postgres`` extra (``pip install .[postgres]``), which bundles the ``asyncpg`` driver - no separate driver package to track down. For MySQL/MariaDB or SQLite, install the plain ``sql`` extra (``pip install .[sql]``) plus an async driver package this project does not bundle, e.g. ``aiomysql``/``asyncmy`` for MySQL/MariaDB or ``aiosqlite`` for SQLite. SQLite is convenient for local development and small deployments but is not recommended for the concurrent write load of a full database build.
 
+Elasticsearch (document and vector storage)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Elasticsearch can provide the document store, the vector store, or both from one cluster.
+Install ``pip install .[elasticsearch]``, set ``BTS_ELASTICSEARCH_URL``, and select
+``BTS_DOC_DATABASE_DRIVER=elasticsearch`` and/or
+``BTS_VECTOR_DATABASE_DRIVER=elasticsearch``. Authentication uses
+``BTS_ELASTICSEARCH_API_KEY`` when set, otherwise the optional
+``BTS_ELASTICSEARCH_USERNAME`` and ``BTS_ELASTICSEARCH_PASSWORD`` pair.
+
+The document driver creates one concept index per vocabulary, keys documents by
+``conceptId``, and maps IDs, labels, and synonyms through a native 3-20 character n-gram
+analyzer so autocomplete retains the existing substring semantics. The
+vector driver creates a separate index per vocabulary with one dense-vector document per
+alias or definition embedding item and cosine kNN search filtered by item kind. Keeping the
+indices separate means rebuilding embeddings never removes concept documents.
+``BTS_ELASTICSEARCH_INDEX_PREFIX`` lets several BTS deployments safely share a cluster.
+
+For local development, start the bundled, unauthenticated single-node service with::
+
+    docker compose --profile elasticsearch up -d elasticsearch
+
+It listens on ``http://localhost:9200``. Enable security and supply credentials for any
+non-local deployment.
+
 Auto-complete search indexing
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The auto-complete endpoints (``/api/*/auto-complete``, and the equivalent GraphQL/MCP/FHIR paths) need to find every concept whose label, synonyms, or ID contain each word of the query as a substring - not just as a prefix. The original implementation of this (still used as the fallback below) pre-computes every substring from 3 to 20 characters of each word in a concept's label/synonyms (``Concept.n_grams()``) and stores each one as its own row/array entry, so a query word can be matched with a plain equality lookup. This is simple and portable, but for a vocabulary the size this service targets (SNOMED-scale and up), materialising every substring of every word is a large multiple of the underlying text in extra storage and write I/O, on both the document database and (for MongoDB) the collection itself.
 
-Since this was first built (against plain MongoDB), both of the document database backends have gained a built-in way to do the same kind of substring indexing natively, without exploding the data into a side table/field. Each document database driver now **probes, once per process, whether its connected deployment actually has that native capability available** (a driver being selected does not by itself guarantee the capability - e.g. plain community MongoDB without the ``mongodb-search`` Compose profile, or a PostgreSQL user without permission to install extensions) and uses it when present, falling back to the original n-gram approach otherwise. This choice is cached for the life of the process; if you enable/disable the native capability on a live deployment (e.g. install ``pg_trgm`` after the fact), restart the service to pick it up.
+Since this was first built (against plain MongoDB), the document database backends have gained built-in ways to do the same kind of substring indexing natively, without exploding the data into a side table/field. Drivers whose capability is optional **probe, once per process, whether their connected deployment actually supports it** (e.g. plain community MongoDB without the ``mongodb-search`` Compose profile, or a PostgreSQL user without permission to install extensions) and fall back to the original n-gram approach when needed. This choice is cached for the life of the process; if you enable/disable the native capability on a live deployment (e.g. install ``pg_trgm`` after the fact), restart the service to pick it up.
 
 Because the underlying engines don't expose comparable relevance scoring, results are **not** guaranteed to come back in the exact same order across backends - every mode still guarantees an exact substring match per query word (AND across words), and orders ties by shorter label first then concept ID, but how "more relevant first" is approximated differs:
 
 - **MongoDB, native** (Atlas Search/mongot support detected - see the MongoDB section above): an Atlas Search index of type ``autocomplete`` (``tokenization: nGram``, ``minGrams``/``maxGrams`` matching ``Concept.n_grams()``'s own 3-20 range) is created directly on the ``conceptId``/``label``/``synonyms`` document fields (name configurable via ``BTS_MONGODB_TEXT_INDEX_NAME``). No ``nGrams``/``searchText`` field is written to documents at all. Queried via a ``$search`` ``compound.must`` of one ``autocomplete`` clause per query word; ranked by mongot's own relevance score.
 - **MongoDB, fallback** (no Atlas Search/mongot): unchanged from the original implementation - the ``nGrams`` array field plus a plain index, matched via ``$all`` and ranked by the query's byte offset within a precomputed ``searchText`` field.
+- **Elasticsearch**: a native custom n-gram analyzer indexes 3-20 character substrings directly on ``conceptId``/``label``/``synonyms``. Queries require every normalized query word and use Elasticsearch's relevance score, with label and concept ID tie-breaks for deterministic output. No application-generated ``nGrams`` payload is stored.
 - **PostgreSQL, native**: the `pg_trgm <https://www.postgresql.org/docs/current/pgtrgm.html>`_ extension (enabled automatically via ``CREATE EXTENSION IF NOT EXISTS pg_trgm`` if the connection has privileges to do so) backs a GIN trigram index on the existing ``search_text`` column - no separate n-gram table. Queried with ``ILIKE '%word%'`` per word, index-accelerated by the trigram index for the expensive substring filtering; ranked with the same position-based (``strpos``) score as the fallback path, since trigram ``similarity()`` scores whole-string trigram overlap rather than reliably preferring an earlier/more exact match of the query itself.
 - **MySQL, native** (not MariaDB - see below): a ``FULLTEXT ... WITH PARSER ngram`` index on ``search_text``, using MySQL's built-in ngram full-text parser plugin. Queried with ``MATCH ... AGAINST (... IN BOOLEAN MODE)``, requiring every query word (``+word``); the same boolean-mode match score is reused for ranking. The parser's own ``ngram_token_size`` server variable (default 2) controls its internal n-gram length, independent of and coarser than ``Concept.n_grams()``'s 3-20 range - this does not affect correctness, only how much of the index tokenises finer than the words being searched for.
 - **SQLite, native**: an `FTS5 virtual table using the built-in trigram tokenizer <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>`_ (SQLite >= 3.34.0), mirrored by hand alongside the concept row on every write (FTS5 has no native upsert/trigger sync). Queried with one ``MATCH`` per word intersected together, index-accelerated the same way as PostgreSQL's trigram index; FTS5 does not expose a relevance score meaningful across an intersection of independent trigram matches, so ranking falls back to the same position-based (``instr``) score, computed over the already-small matched set rather than the full table.
@@ -120,14 +146,32 @@ Some vocabularies require an API key to download. The supported credentials are:
 
 * NHS TRUD API key for CTV3 and SNOMED CT. You need to subscribe to these vocabularies and wait for them to approve the subscription, before the API key can be used to download the files. SNOMED's download also includes its historical Association Reference Set files (SAME_AS/REPLACED_BY/WAS_A/POSSIBLY_EQUIVALENT_TO/etc, loaded as ``snomed_association`` relationships distinguished by SNOMED's own numeric ``refsetId``) - no separate credential or step needed, but if you downloaded SNOMED before this was added, re-run ``vocabulary download snomed --redownload`` to pick them up.
 * BioPortal API key for OMIM and ORDO
-* NIH UMLS API key for SNOMED-ORDO mapping files
+* NIH UMLS API key for the full monthly RxNorm release and SNOMED-ORDO mapping files. A free
+  UMLS Terminology Services licence is required.
+* LOINC username and password for the official LOINC download API. Register with LOINC and
+  accept its current licence, then set ``BTS_LOINC_USERNAME`` and ``BTS_LOINC_PASSWORD``.
 
 And not all vocabularies can be downloaded this way. Particularly:
 
-* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into the Neo4j 4 container in ``scripts/docker-compose.reactome.yaml``, then ``scripts/dump_reactome_to_csv.py`` exports the CSV release consumed here. The export includes stable physical entities (complexes, entity sets, simple entities, drugs, polymers, cells, and other entities), their reaction input/output edges, and separate ReferenceEntity mapping files for UniProt, Ensembl, HGNC, OMIM, NCIt, and ChEBI. ChEBI is exported for forward compatibility but has no annotation loader until ChEBI itself is supported. The supported mappings are normal annotations and are loaded explicitly after both endpoint vocabularies.
+* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into the Neo4j 4 container in ``scripts/docker-compose.reactome.yaml``, then ``scripts/dump_reactome_to_csv.py`` exports the CSV release consumed here. The export includes stable physical entities (complexes, entity sets, simple entities, drugs, polymers, cells, and other entities), their reaction input/output edges, separate ReferenceEntity mapping files for UniProt, Ensembl, HGNC, OMIM, NCIt, and ChEBI, and Reactome's GO biological-process, compartment, and molecular-function assignments. ChEBI is exported for forward compatibility but has no annotation loader until ChEBI itself is supported. The supported mappings are normal annotations and are loaded explicitly after both endpoint vocabularies.
 * OHDSI standardized vocabularies are not open for public download, and provides no download API. You need to manually download the latest release from Athena, and unzip it to the data folder.
 * UMLS system provides no way to fetch the latest release files automatically, so the files downloaded from UMLS are using hard-coded URL. If you need a different version, you need to manually download the files from UMLS and place them in the data folder, or open an issue/pull request to notify us of the desired version.
-* UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
+* RxNorm uses NLM's stable ``RxNorm_full_current.zip`` endpoint through UTS authentication. The
+  loader extracts ``RXNCONSO.RRF``, ``RXNREL.RRF``, and ``RXNCUI.RRF`` and streams the large atom
+  and relationship tables in bounded-memory chunks. The full release includes third-party source
+  vocabulary atoms subject to the UMLS licence; this software neither redistributes the release nor
+  grants those rights. See the bundled RxNorm licence notice before hosting derived data.
+* UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded. Alternative protein names, gene names, entry name, sequence length, fragment status, and protein-existence evidence are retained without storing sequence content. Secondary accessions are deprecated identifiers linked to the current primary accession.
+
+The LOINC downloader first queries the official API for current release metadata, downloads with
+HTTP Basic authentication, verifies the publisher-provided MD5 checksum, and extracts only the
+core table and replacement table, Part file, Component Hierarchy by System, official Part
+mapping table, and the
+release's exact licence text. Clinical records, example result data, answer instances, panels,
+forms, and RELMA community data are not ingested. The
+software does not bundle LOINC data or grant a licence. The account holder and service operator
+remain responsible for ensuring their download, hosting, and redistribution comply with the
+current terms in ``loinc/license.txt``.
 
 Loading the vocabulary
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -148,6 +192,12 @@ write this annotation dump. Pass ``--no-annotation`` to suppress that bundled wo
 ``bioterms-cli annotation load uniprot gene`` is independent and therefore streams the UniProt
 release files again; an existing annotation dump can instead be restored directly.
 
+UniProtKB also publishes mappings to GO, HGNC, Ensembl, Reactome, OMIM, and ORDO. These remain normal,
+explicitly loaded annotations; each explicit load re-streams the compressed release. UniProt's
+Ensembl projection is restricted to human entries because the supported Ensembl vocabulary is
+human-only, and maps to the Ensembl protein identifier while retaining transcript and gene IDs
+as annotation metadata.
+
 The same ``--no-annotation`` option suppresses cross-vocabulary annotations derived while loading
 Mondo and OHDSI, including their offline annotation dumps. HGNC's own relationship to the Gene
 Symbol namespace remains part of the HGNC vocabulary model. Ensembl is a heterogeneous genomic
@@ -161,18 +211,27 @@ the Gene Symbol vocabulary, so load vocabularies individually in this order when
 database:
 
 #. ``hgnc_symbol`` first - HGNC requires it. UniProt itself does not, but only emits its bundled gene-symbol annotation online when the target vocabulary is present.
-#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon``, ``ensembl`` - independent of each other except for HGNC's step 1 requirement; any order among the others is fine.
+#. ``hgnc``, ``ctv3``, ``snomed``, ``go``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon``, ``ensembl`` - independent of each other except for HGNC's step 1 requirement; any order among the others is fine.
 #. ``uniprot`` - independent of Reactome; load ``annotation load uniprot gene`` explicitly later if the bundled annotation was skipped.
 #. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.
 
-Reactome ReferenceEntity mappings are loaded explicitly after both endpoint vocabularies, for
+Reactome mappings are loaded explicitly after both endpoint vocabularies, for
 example ``bioterms-cli annotation load reactome uniprot``. Ensembl, HGNC, OMIM, and NCIt are
-also available endpoints. The Ensembl annotation combines the graph export with Reactome's
+also available endpoints, while GO combines Reactome's curated GO assignments with GO-published
+Reactome cross-references. The Ensembl annotation combines the graph export with Reactome's
 separate ``Ensembl2Reactome.txt`` pathway mapping while preserving each source independently.
 
+GO uses ``go-basic.owl`` rather than ``go.owl`` or ``go-plus.owl``. This is GO's recommended
+acyclic product for annotation propagation: it retains ``is_a``, ``part_of``, ``regulates``,
+``negatively_regulates``, and ``positively_regulates`` while excluding unsafe cross-aspect cycles
+and imported external ontology classes. GO–Uberon, GO–Reactome, and GO–UniProt are independently
+managed annotations. Explicit ``annotation load go uniprot`` re-streams the complete UniProtKB
+flat files, just like an explicit UniProt–gene-symbol rebuild.
+
 Ensembl mappings are normal, independently managed annotations. Once both endpoint vocabularies
-are loaded, they can be downloaded and loaded for ``ensembl gene``, ``ensembl uniprot``,
-``ensembl reactome``, and ``ensembl omim``. Ensembl loading itself never creates these mappings.
+are loaded, they can be downloaded and loaded for ``ensembl hgnc``, ``ensembl gene``,
+``ensembl uniprot``, ``ensembl reactome``, and ``ensembl omim``. Ensembl loading itself never
+creates these mappings.
 
 The Read v2 migration overlay (below) is a separate script, not part of this load order, but expects ``ohdsi``, ``ctv3``, and ``snomed`` to already be loaded for a clean result.
 

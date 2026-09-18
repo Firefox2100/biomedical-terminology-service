@@ -1,0 +1,7 @@
+extend type EnsemblGene {
+    annotatedHgnc: [HgncConcept!]!
+}
+
+extend type HgncConcept {
+    annotatedEnsemblGenes: [EnsemblGene!]!
+}

@@ -21,6 +21,7 @@ VOCABULARY_NAME = 'OHDSI Standardized Vocabularies'
 VOCABULARY_PREFIX = ConceptPrefix.OHDSI
 ANNOTATIONS = [
     ConceptPrefix.NCIT,
+    ConceptPrefix.RXNORM,
     ConceptPrefix.SNOMED,
 ]
 SIMILARITY_METHODS = []
@@ -61,6 +62,7 @@ def map_vocabulary_prefix(vocabulary_id: str,
     mapping = {
         'HGNC': ConceptPrefix.HGNC,
         'NCIt': ConceptPrefix.NCIT,
+        'RxNorm': ConceptPrefix.RXNORM,
         'SNOMED': ConceptPrefix.SNOMED,
     }
 
@@ -502,9 +504,10 @@ def _process_relationships(ohdsi_graph: nx.MultiDiGraph):
             )
 
 
-def _process_annotations() -> list[Annotation]:
+def _process_annotations(target_prefix: ConceptPrefix | None = None) -> list[Annotation]:
     """
     Extract mapping to underlying vocabularies in OHDSI.
+    :param target_prefix: Optionally retain mappings to one supported target vocabulary.
     :return: A list of Annotation instances.
     """
     concept_file_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
@@ -545,6 +548,8 @@ def _process_annotations() -> list[Annotation]:
                 continue
 
             vocabulary_prefix = map_vocabulary_prefix(row['vocabulary_id'])
+            if target_prefix is not None and vocabulary_prefix != target_prefix:
+                continue
             if vocabulary_prefix == 'Vocabulary':
                 # Special case: these codes are representing vocabularies themselves, and does
                 # not even have a unique concept code.

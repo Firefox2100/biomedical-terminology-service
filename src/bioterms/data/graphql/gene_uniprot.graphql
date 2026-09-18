@@ -1,0 +1,7 @@
+extend type HgncSymbolConcept {
+    uniprotConcepts: [UniProtConcept!]!
+}
+
+extend type UniProtConcept {
+    symbols: [HgncSymbolConcept!]!
+}

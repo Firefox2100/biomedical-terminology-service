@@ -1,0 +1,32 @@
+type LoincConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    status: ConceptStatus!
+
+    replaces: [LoincConcept!]!
+    replacedBy: [LoincConcept!]!
+    children: [LoincConcept!]!
+    parents: [LoincConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarLoincConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
+}
+
+type SimilarLoincConcept implements SimilarConcept {
+    from: LoincConcept!
+    to: LoincConcept!
+    score: Float!
+}
+
+type LoincConceptResponse { error: QueryError, data: LoincConcept }
+type LoincConceptListResponse { error: QueryError, data: [LoincConcept] }
+
+type LoincQuery {
+    loincConcept(conceptId: String!): LoincConceptResponse
+    autoComplete(query: String!, limit: Int): LoincConceptListResponse
+    search(query: String!, limit: Int): LoincConceptListResponse
+}
+
+extend type Query { loinc: LoincQuery }

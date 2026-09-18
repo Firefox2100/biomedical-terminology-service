@@ -11,6 +11,7 @@ def test_ann_prefix_is_uniprot_not_hgnc_symbol():
     # HGNC_SYMBOL -- that duplication is what caused the double-counted vote.
     assert ConceptPrefix.UNIPROT in reactome.ANNOTATIONS
     assert ConceptPrefix.ENSEMBL in reactome.ANNOTATIONS
+    assert ConceptPrefix.GO in reactome.ANNOTATIONS
     assert ConceptPrefix.HGNC in reactome.ANNOTATIONS
     assert ConceptPrefix.NCIT in reactome.ANNOTATIONS
     assert ConceptPrefix.OMIM in reactome.ANNOTATIONS

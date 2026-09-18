@@ -29,9 +29,11 @@ For information about how to properly credit data use, please review the [Creati
 
 The project uses Reactome's `Ensembl2Reactome.txt` identifier mapping and derives separate
 UniProt, Ensembl, HGNC, OMIM, NCIt, and future ChEBI identifier mapping files from Reactome's
-ReferenceEntity records. Reactome classifies identifier mapping files as annotation files,
-so these datasets are covered by the CC0 terms described above; they do not have separate
-licence files.
+ReferenceEntity records. It also exports Reactome's curated Gene Ontology biological-process,
+compartment, and molecular-function assignments. Reactome classifies identifier mapping files
+as annotation files, so these datasets are covered by the CC0 terms described above; they do not
+have separate licence files. The GO-authored half of the GO–Reactome annotation remains covered
+by the separate GO licence notice.
 
 - [Current Reactome download directory](https://reactome.org/download/current/)
 - [Reactome mapping-file documentation](https://reactome.org/download-data)

@@ -1,0 +1,2 @@
+extend type LoincConcept { annotatedRxNorm: [RxNormConcept!]! }
+extend type RxNormConcept { annotatedLoinc: [LoincConcept!]! }

@@ -4,7 +4,8 @@ from ariadne import ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_auto_complete, resolve_concept_info_fields, \
-    resolve_concept_paths_to, resolve_concept_similar_concepts, resolve_get_concept, resolve_search
+    resolve_concept_paths_to, resolve_concept_replaced_by, resolve_concept_replaces, \
+    resolve_concept_similar_concepts, resolve_get_concept, resolve_search
 
 
 UNIPROT_CONCEPT = ObjectType('UniProtConcept')
@@ -13,12 +14,28 @@ UNIPROT_QUERY = ObjectType('UniProtQuery')
 
 @UNIPROT_CONCEPT.field('prefix')
 @UNIPROT_CONCEPT.field('label')
+@UNIPROT_CONCEPT.field('synonyms')
 @UNIPROT_CONCEPT.field('status')
 @UNIPROT_CONCEPT.field('reviewed')
 @UNIPROT_CONCEPT.field('organismTaxId')
 @UNIPROT_CONCEPT.field('organismName')
+@UNIPROT_CONCEPT.field('entryName')
+@UNIPROT_CONCEPT.field('geneNames')
+@UNIPROT_CONCEPT.field('proteinExistence')
+@UNIPROT_CONCEPT.field('sequenceLength')
+@UNIPROT_CONCEPT.field('fragment')
 async def resolve_uniprot_concept_info_fields(obj, info):
     return await resolve_concept_info_fields(obj=obj, info=info, prefix=ConceptPrefix.UNIPROT)
+
+
+@UNIPROT_CONCEPT.field('replaces')
+async def resolve_uniprot_concept_replaces(obj, info):
+    return await resolve_concept_replaces(obj=obj, info=info, prefix=ConceptPrefix.UNIPROT)
+
+
+@UNIPROT_CONCEPT.field('replacedBy')
+async def resolve_uniprot_concept_replaced_by(obj, info):
+    return await resolve_concept_replaced_by(obj=obj, info=info, prefix=ConceptPrefix.UNIPROT)
 
 
 @UNIPROT_CONCEPT.field('similarConcepts')

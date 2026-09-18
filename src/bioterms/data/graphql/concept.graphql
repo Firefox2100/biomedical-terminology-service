@@ -1,14 +1,17 @@
 enum ConceptPrefix {
     ctv3
     ensembl
+    go
     gene
     hgnc
     hpo
+    loinc
     ncit
     ohdsi
     omim
     ordo
     reactome
+    rxnorm
     snomed
     uberon
     uniprot
@@ -35,11 +38,15 @@ enum RelationshipType {
     annotated_with
     is_a
     part_of
+    regulates
+    negatively_regulates
+    positively_regulates
     replaced_by
     preceded_by
     has_input
     has_output
     ohdsi_relationship
+    rxnorm_relationship
 }
 
 interface SimilarConcept {

@@ -19,16 +19,15 @@ Supported Vocabularies
 
 The tool parameters accept vocabulary identifiers defined in two Enums:
 
-* **ConceptPrefix** (used by ``auto_complete``, ``search_vocabulary``, ``map_concepts``, ``get_similar_concepts`` and ``translate_concepts_to_constraints``): ``CTV3``, ``ENSEMBL``, ``HGNC``, ``HGNC_SYMBOL``, ``HPO``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``SNOMED`` — all twelve supported vocabularies are available.
+* **ConceptPrefix** (used by ``auto_complete``, ``search_vocabulary``, ``map_concepts``, ``get_similar_concepts`` and ``translate_concepts_to_constraints``): ``CTV3``, ``ENSEMBL``, ``GO``, ``HGNC``, ``HGNC_SYMBOL``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``RXNORM``, ``SNOMED``, ``UBERON``, ``UNIPROT`` — all seventeen supported vocabularies are available.
 
 * **OntologyPrefix** (used only by ``expand_ontology``):
-  ``CTV3``, ``HPO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``SNOMED``. This is a restricted set: the two HGNC variants and MONDO are not included. HGNC is an atomic gene-ID table; MONDO's hierarchy is fully absorbed within each of its source vocabularies by the
-  annotation pairs, so neither needs expand.
+  ``CTV3``, ``GO``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``RXNORM``, ``SNOMED``, ``UBERON``. This is restricted to vocabularies with a traversable ontology or internal hierarchy; atomic identifier tables such as HGNC and UniProt are not included.
 
 Tools
 =====
 
-The MCP server exposes twelve tools. Every tool carries standard MCP tool annotations indicating it is read-only, idempotent, and deterministic (``openWorldHint=false``).
+The MCP server exposes six tools. Every tool carries standard MCP tool annotations indicating it is read-only, idempotent, and deterministic (``openWorldHint=false``).
 
 auto_complete
 -------------
@@ -129,7 +128,7 @@ A research agent receives a list of gene names, searches HGNC for the correspond
 
 **Ontology browsing**
 
-An agent explores a hierarchy by expanding a concept downward (expand_ontology) or mapping it upward hrough a chain of vocabularies (map_concepts with max_hops > 1).
+An agent explores a hierarchy by expanding a concept downward (expand_ontology) or mapping it upward through a chain of vocabularies (map_concepts with max_hops > 1).
 
 **Semantic search in constrained space**
 

@@ -75,6 +75,18 @@ async def test_lexical_search_ranks_more_overlap_first(doc_db):
 
 
 @pytest.mark.asyncio
+async def test_lexical_search_accepts_short_query_like_mongo(doc_db):
+    await doc_db.save_terms([
+        make_concept('HP:1', 'ab syndrome'),
+        make_concept('HP:2', 'unrelated condition'),
+    ])
+
+    results = await doc_db.lexical_search(ConceptPrefix.HPO, query='ab', limit=10)
+
+    assert [concept_id for concept_id, _score in results] == ['HP:1']
+
+
+@pytest.mark.asyncio
 async def test_auto_complete_ranks_prefix_match_first(doc_db):
     # Matching is case-sensitive (Concept.search_text() does not lowercase the label, mirroring
     # the Mongo driver's behaviour), so the query and labels are lowercase here on purpose.

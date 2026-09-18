@@ -19,6 +19,12 @@ def get_ensembl_license():
     return get_vocabulary_license(ConceptPrefix.ENSEMBL)
 
 
+@mcp.resource('license://go')
+def get_go_license():
+    """Get the release licence for the Gene Ontology vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.GO)
+
+
 @mcp.resource('license://hgnc')
 def get_hgnc_license():
     """
@@ -41,6 +47,18 @@ def get_hpo_license():
     Get the release licence for the HPO vocabulary.
     """
     return get_vocabulary_license(ConceptPrefix.HPO)
+
+
+@mcp.resource('license://loinc')
+def get_loinc_license():
+    """Get the bundled LOINC licence notice and operator guidance."""
+    return get_vocabulary_license(ConceptPrefix.LOINC)
+
+
+@mcp.resource('license://mondo')
+def get_mondo_license():
+    """Get the release licence for the Mondo vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.MONDO)
 
 
 @mcp.resource('license://ncit')
@@ -83,9 +101,27 @@ def get_reactome_license():
     return get_vocabulary_license(ConceptPrefix.REACTOME)
 
 
+@mcp.resource('license://rxnorm')
+def get_rxnorm_license():
+    """Get the RxNorm and UMLS licence notice."""
+    return get_vocabulary_license(ConceptPrefix.RXNORM)
+
+
 @mcp.resource('license://snomed')
 def get_snomed_license():
     """
     Get the release licence for the SNOMED vocabulary.
     """
     return get_vocabulary_license(ConceptPrefix.SNOMED)
+
+
+@mcp.resource('license://uberon')
+def get_uberon_license():
+    """Get the release licence for the Uberon vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.UBERON)
+
+
+@mcp.resource('license://uniprot')
+def get_uniprot_license():
+    """Get the release licence for the UniProt vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.UNIPROT)

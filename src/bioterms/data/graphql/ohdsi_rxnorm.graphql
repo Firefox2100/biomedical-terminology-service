@@ -1,0 +1,2 @@
+extend type OhdsiConcept { annotatedRxNorm: [RxNormConcept!]! }
+extend type RxNormConcept { annotatedOhdsi: [OhdsiConcept!]! }

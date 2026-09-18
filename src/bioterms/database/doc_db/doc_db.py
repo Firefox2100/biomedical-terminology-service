@@ -409,6 +409,25 @@ async def get_active_doc_db() -> DocumentDatabase:
 
         return _active_doc_db
 
+    if CONFIG.doc_database_driver == DocDatabaseDriverType.ELASTICSEARCH:
+        from elasticsearch import AsyncElasticsearch
+        from .elasticsearch_doc_db import ElasticsearchDocumentDatabase
+
+        kwargs = {}
+        if CONFIG.elasticsearch_api_key:
+            kwargs['api_key'] = CONFIG.elasticsearch_api_key
+        elif CONFIG.elasticsearch_username:
+            kwargs['basic_auth'] = (
+                CONFIG.elasticsearch_username, CONFIG.elasticsearch_password or '',
+            )
+        client = AsyncElasticsearch(CONFIG.elasticsearch_url, **kwargs)
+        await client.info()
+        doc_db = ElasticsearchDocumentDatabase(client)
+        await doc_db.initialize()
+        _active_doc_db = doc_db
+        LOGGER.info('Initialized document database backend: elasticsearch')
+        return _active_doc_db
+
     raise ValueError(
         f'Unsupported document database driver: {CONFIG.doc_database_driver}'
     )

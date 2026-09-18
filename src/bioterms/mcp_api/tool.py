@@ -19,13 +19,18 @@ class OntologyPrefix(StrEnum):
     The ontology prefixes supported by the MCP API.
     """
     CTV3 = 'ctv3'
+    GO = 'go'
     HPO = 'hpo'
+    LOINC = 'loinc'
+    MONDO = 'mondo'
     NCIT = 'ncit'
     OHDSI = 'ohdsi'
     OMIM = 'omim'
     ORDO = 'ordo'
     REACTOME = 'reactome'
+    RXNORM = 'rxnorm'
     SNOMED = 'snomed'
+    UBERON = 'uberon'
 
 
 @mcp.tool(

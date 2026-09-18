@@ -3,7 +3,7 @@ import gzip
 import pytest
 
 from bioterms.annotation import gene_hpo, gene_omim, gene_uniprot, hgnc_reactome, hpo_omim, \
-    hpo_ordo, ncit_reactome, omim_reactome, reactome_uniprot
+    hpo_ordo, ncit_reactome, omim_reactome, omim_uniprot, reactome_uniprot
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
 
@@ -101,6 +101,38 @@ DR   HGNC; HGNC:1; TEST1.
     assert annotation.concept_id_from == 'P12345'
     assert annotation.concept_id_to == 'TEST1'
     assert annotation.annotation_type == AnnotationType.HAS_SYMBOL
+
+
+@pytest.mark.asyncio
+async def test_explicit_uniprot_omim_load_streams_mim_cross_references(monkeypatch, tmp_path):
+    uniprot_dir = tmp_path / 'uniprot'
+    uniprot_dir.mkdir()
+    record = """\
+ID   TEST_HUMAN Reviewed; 10 AA.
+AC   P12345;
+DE   RecName: Full=Test protein;
+OS   Homo sapiens (Human).
+OX   NCBI_TaxID=9606;
+DR   MIM; 123456; phenotype.
+//
+"""
+    for filename, content in (
+        ('uniprot_sprot.dat.gz', record), ('uniprot_trembl.dat.gz', ''),
+    ):
+        with gzip.open(uniprot_dir / filename, 'wt', encoding='utf-8') as stream:
+            stream.write(content)
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    graph_db = FakeGraphDb()
+
+    await omim_uniprot.load_annotation_from_file(graph_db=graph_db)
+
+    assert len(graph_db.annotations) == 1
+    annotation = graph_db.annotations[0]
+    assert annotation.prefix_from == ConceptPrefix.UNIPROT
+    assert annotation.prefix_to == ConceptPrefix.OMIM
+    assert annotation.properties == {
+        'recordType': 'phenotype', 'source': 'UniProtKB MIM cross-reference',
+    }
 
 
 @pytest.mark.asyncio

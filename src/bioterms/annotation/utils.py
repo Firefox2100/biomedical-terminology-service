@@ -15,7 +15,7 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import VocabularyNotLoaded, FilesNotFound
 from bioterms.etc.utils import check_files_exist, discover_latest_numbered_release, download_file, \
     ensure_data_directory, extract_file_from_gzip, load_obo_owl_classes, obo_entity_local_id, \
-    verbose_print
+    batch_iterable, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
 
@@ -55,6 +55,19 @@ class AnnotationSource:
             annotationType=annotation_type,
             properties=annotation_properties,
         )
+
+
+async def save_annotation_stream(graph_db: GraphDatabase,
+                                 annotations,
+                                 batch_size: int = 100_000,
+                                 ) -> int:
+    """Persist a potentially release-scale annotation iterator in bounded-memory batches."""
+    count = 0
+    for batch in batch_iterable(annotations, batch_size=batch_size):
+        if batch:
+            await graph_db.save_annotations(batch)
+            count += len(batch)
+    return count
 
 
 async def download_hpoa(download_client: httpx.AsyncClient = None):

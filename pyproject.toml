@@ -63,6 +63,7 @@ test = [
     "asyncpg~=0.31.0",
     "aiosqlite~=0.22.1",
     "deepdiff~=9.1.0",
+    "elasticsearch[async]>=9.5,<10",
     "locust~=2.46.5",
     "matplotlib~=3.11.2",
     "neo4j~=6.3.0",
@@ -80,6 +81,9 @@ test = [
 ]
 pymongo = [
     "pymongo~=4.18.1",
+]
+elasticsearch = [
+    "elasticsearch[async]>=9.5,<10",
 ]
 neo4j = [
     "neo4j~=6.3.0",
@@ -103,6 +107,7 @@ postgres = [
 ]
 all = [
     "asyncpg~=0.31.0",
+    "elasticsearch[async]>=9.5,<10",
     "pgvector~=0.5.0",
     "pymongo~=4.18.1",
     "neo4j~=6.3.0",

@@ -437,6 +437,11 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param no_upsert: Force direct insert. The caller must ensure that there is no existing data that
             may be a duplicate, or it will fail from the unique index
         """
+        # Match the SQL backend (and make callers free to flush an empty final batch): an
+        # empty save is a no-op, not an IndexError while trying to infer the prefix.
+        if not terms:
+            return
+
         collection = self.db[f'{terms[0].prefix.value}']
         existing_concept_ids: set[str] = set()
 
@@ -721,7 +726,10 @@ class MongoDocumentDatabase(DocumentDatabase):
                 '$sort': {
                     'score': 1,
                     'labelLength': 1,
-                    'termId': 1,
+                    # Concept documents have no ``termId`` field.  Sorting by it therefore
+                    # provided no tie-break at all and made equal-scoring results depend on
+                    # MongoDB's internal order, unlike both the native Mongo and SQL paths.
+                    'conceptId': 1,
                 },
             },
             # Remove the intermediate fields
