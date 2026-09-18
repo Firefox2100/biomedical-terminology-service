@@ -1,0 +1,44 @@
+type UniProtConcept implements Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    status: ConceptStatus!
+    reviewed: Boolean
+    organismTaxId: String
+    organismName: String
+
+    similarConcepts(threshold: Float): [SimilarUniProtConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
+}
+
+type SimilarUniProtConcept implements SimilarConcept {
+    from: UniProtConcept!
+    to: UniProtConcept!
+    score: Float!
+}
+
+type UniProtConceptResponse {
+    error: QueryError
+    data: UniProtConcept
+}
+
+type UniProtConceptListResponse {
+    error: QueryError
+    data: [UniProtConcept]
+}
+
+type UniProtQuery {
+    uniprotConcept(conceptId: String!): UniProtConceptResponse
+    autoComplete(query: String!, limit: Int): UniProtConceptListResponse
+    search(query: String!, limit: Int): UniProtConceptListResponse
+}
+
+extend type Query {
+    uniprot: UniProtQuery
+}

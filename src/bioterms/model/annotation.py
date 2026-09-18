@@ -42,5 +42,9 @@ class Annotation(JsonModel):
     )
     properties: Optional[dict[str, str]] = Field(
         None,
-        description='Additional properties associated with the annotation (i.e. frequency, evidence codes).',
+        description=(
+            'Additional properties associated with the annotation. Non-gene annotations reserve '
+            '`source` for creation-time dataset provenance; other examples include frequency and '
+            'evidence codes.'
+        ),
     )

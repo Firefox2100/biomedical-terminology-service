@@ -9,13 +9,8 @@ PostgreSQL-specific behaviour (the native `ON CONFLICT` path, the JSON `->>`-bas
 expression) is covered separately in tests/integration_test/sql_container_checks.py against a
 real Postgres container, since PostgreSQL is the primary supported SQL backend.
 """
-import os
-
 import pytest
 import pytest_asyncio
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from sqlalchemy.ext.asyncio import create_async_engine
 

@@ -8,14 +8,14 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_tarball, \
     iter_progress, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
-from bioterms.model.annotation import Annotation
-from .utils import assert_pre_requisite
+from .utils import AnnotationSource, assert_pre_requisite
 
 
 ANNOTATION_NAME = 'ORDO - OMIM Alignment Data'
 VOCABULARY_PREFIX_1 = ConceptPrefix.ORDO
 VOCABULARY_PREFIX_2 = ConceptPrefix.OMIM
 FILE_PATHS = ['ordo/alignment.json']
+_ORPHADATA_ALIGNMENT = AnnotationSource('Orphadata ORDO-OMIM alignment', ConceptPrefix.ORDO, ConceptPrefix.OMIM)
 
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
@@ -98,11 +98,9 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
                 if reference['Source'] == 'OMIM':
                     omim_id = reference['Reference']
 
-                    annotations.append(Annotation(
-                        prefixFrom=VOCABULARY_PREFIX_1,
-                        prefixTo=VOCABULARY_PREFIX_2,
-                        conceptIdFrom=ordo_id,
-                        conceptIdTo=omim_id,
+                    annotations.append(_ORPHADATA_ALIGNMENT.create(
+                        publisher_concept_id=ordo_id,
+                        other_concept_id=omim_id,
                     ))
 
     verbose_print(f'Processed {len(annotations)} ORDO-OMIM annotations. Saving to database...')

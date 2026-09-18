@@ -4,6 +4,7 @@ Utility functions for data management, downloading, extraction, and processing.
 
 import asyncio
 import os
+import re
 import io
 import itertools
 import zipfile
@@ -13,20 +14,20 @@ import fnmatch
 import zlib
 import tarfile
 import warnings
-from collections.abc import MutableSequence, Iterable
+from collections.abc import MutableSequence, Iterable, Sized
 from pathlib import Path
 from itertools import islice
 from concurrent.futures import Executor
-from typing import Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar, TYPE_CHECKING
+from typing import Any, Iterator, AsyncIterable, AsyncIterator, Callable, Optional, TypeVar, TYPE_CHECKING
 import aiofiles
 import aiofiles.os
 import httpx
 import pandas as pd
 import networkx as nx
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, \
-    TimeRemainingColumn
+    TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 
-from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT
+from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT, LOGGER
 from .errors import FilesNotFound
 
 if TYPE_CHECKING:
@@ -35,6 +36,26 @@ if TYPE_CHECKING:
 _TRANSFORMER: Optional['SentenceTransformer'] = None
 T = TypeVar('T')
 R = TypeVar('R')
+
+
+async def discover_latest_numbered_release(base_url: str,
+                                             download_client: httpx.AsyncClient = None,
+                                             ) -> tuple[int, str]:
+    """Discover the highest ``release-N/`` directory exposed by an HTTP index."""
+    close_client = download_client is None
+    client = download_client or httpx.AsyncClient(follow_redirects=True)
+    try:
+        response = await client.get(base_url)
+        response.raise_for_status()
+        releases = [int(value) for value in re.findall(r'href="release-(\d+)/"', response.text)]
+    finally:
+        if close_client:
+            await client.aclose()
+
+    if not releases:
+        raise ValueError(f'Could not discover a numbered release under {base_url}')
+    release = max(releases)
+    return release, f'{base_url}release-{release}/'
 
 
 def _progress_columns(total_known: bool = True) -> list:
@@ -56,6 +77,18 @@ def _progress_columns(total_known: bool = True) -> list:
     return columns
 
 
+def _download_progress_columns() -> list:
+    return [
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    ]
+
+
 def check_files_exist(files: list[str]) -> bool:
     """
     Check if all specified files exist in the data directory.
@@ -67,6 +100,93 @@ def check_files_exist(files: list[str]) -> bool:
             return False
 
     return True
+
+
+async def download_obo_owl_release(release_url: str,
+                                   file_path: str,
+                                   download_client: httpx.AsyncClient = None,
+                                   ):
+    """Download one canonical OWL product from an OBO ontology release."""
+    if check_files_exist([file_path]):
+        return
+
+    ensure_data_directory()
+    await download_file(
+        url=release_url,
+        file_path=file_path,
+        download_client=download_client,
+    )
+
+
+def load_obo_owl_classes(file_path: str,
+                         class_name_prefix: str,
+                         ) -> tuple[Any, list[Any]]:
+    """
+    Load an OBO OWL release into an isolated owlready2 World and return only classes in
+    the ontology's own identifier namespace. Release products commonly include imported
+    classes from BFO, RO, CHEBI, GO, and other ontologies; those must not become concepts
+    in the vocabulary being loaded.
+    """
+    from owlready2 import World
+
+    absolute_path = os.path.join(CONFIG.data_dir, file_path)
+    ontology = World().get_ontology(Path(absolute_path).resolve().as_uri()).load()
+    classes = [
+        ontology_class
+        for ontology_class in ontology.classes()
+        if ontology_class.name.startswith(class_name_prefix)
+    ]
+    return ontology, classes
+
+
+def obo_entity_local_id(entity: Any,
+                        id_prefix: str,
+                        ) -> str | None:
+    """Return the local ID for an OBO entity/CURIE/IRI when it belongs to ``id_prefix``."""
+    value = getattr(entity, 'name', None) or str(entity)
+    underscore_prefix = f'{id_prefix}_'
+    curie_prefix = f'{id_prefix}:'
+
+    if value.startswith(underscore_prefix):
+        return value[len(underscore_prefix):]
+    if value.startswith(curie_prefix):
+        return value[len(curie_prefix):]
+
+    iri_marker = f'/{underscore_prefix}'
+    if iri_marker in value:
+        return value.rsplit(iri_marker, 1)[1]
+    return None
+
+
+def obo_class_metadata(ontology_class: Any) -> dict[str, Any]:
+    """Extract the common descriptive fields encoded by OBO OWL release products."""
+    def first_value(*attribute_names: str) -> str | None:
+        for attribute_name in attribute_names:
+            values = getattr(ontology_class, attribute_name, [])
+            if values:
+                return str(values[0])
+        return None
+
+    synonyms = []
+    for attribute_name in (
+        'hasExactSynonym',
+        'hasBroadSynonym',
+        'hasNarrowSynonym',
+        'hasRelatedSynonym',
+    ):
+        synonyms.extend(str(value) for value in getattr(ontology_class, attribute_name, []))
+
+    # Preserve release order while removing duplicates and a synonym identical to the label.
+    label = first_value('label')
+    synonyms = list(dict.fromkeys(value for value in synonyms if value != label))
+
+    return {
+        'label': label,
+        'definition': first_value('IAO_0000115', 'definition'),
+        'comment': first_value('comment'),
+        'deprecated': bool(getattr(ontology_class, 'deprecated', [])),
+        'synonyms': synonyms or None,
+    }
 
 
 def ensure_data_directory():
@@ -94,6 +214,15 @@ def _batch_mutable_sequence(seq: MutableSequence,
     batch_count = (len(seq) + batch_size - 1) // batch_size
     if batch_count <= 1:
         yield seq
+        return
+
+    if CONFIG.disable_progress_bar:
+        if not consume:
+            for i in range(0, len(seq), batch_size):
+                yield seq[i: i + batch_size]
+        else:
+            while seq:
+                yield [seq.pop() for _ in range(min(len(seq), batch_size))]
         return
 
     with Progress(*_progress_columns()) as progress:
@@ -125,6 +254,16 @@ def _batch_general_iterable(seq: Iterable,
     first = next(it, None)
     if first is None:
         return
+
+    if CONFIG.disable_progress_bar:
+        batch = [first]
+        while True:
+            batch.extend(islice(it, batch_size - len(batch)))
+            yield batch
+            first = next(it, None)
+            if first is None:
+                return
+            batch = [first]
 
     with Progress(*_progress_columns(total_known=False), transient=False) as progress:
         task = progress.add_task(description="Batching...", total=None)
@@ -238,6 +377,8 @@ async def download_file(url: str,
 
     absolute_file_path = os.path.join(CONFIG.data_dir, file_path)
     os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
+    file_name = os.path.basename(file_path)
+    LOGGER.info('Downloading %s from %s', file_path, url)
 
     last_error: Exception | None = None
 
@@ -262,6 +403,7 @@ async def download_file(url: str,
                 if resume_from and response.status_code == 416:
                     # The range starts at/beyond the resource's current size: the file on
                     # disk is already the complete download.
+                    LOGGER.info('Download already complete: %s (%s bytes)', file_path, resume_from)
                     return
 
                 if resume_from and response.status_code != 206:
@@ -273,12 +415,27 @@ async def download_file(url: str,
                 response.raise_for_status()
 
                 mode = 'ab' if resume_from else 'wb'
+                response_headers = getattr(response, 'headers', {})
+                remaining = int(response_headers.get('content-length', 0)) or None
+                total = resume_from + remaining if remaining is not None else None
                 async with aiofiles.open(absolute_file_path, mode) as data_file:
-                    async for chunk in aiter_progress(
-                        response.aiter_bytes(),
-                        description=f'Downloading {os.path.basename(file_path)}',
-                    ):
-                        await data_file.write(chunk)
+                    if CONFIG.disable_progress_bar:
+                        async for chunk in response.aiter_bytes():
+                            await data_file.write(chunk)
+                    else:
+                        columns = _download_progress_columns() if total is not None \
+                            else _progress_columns(total_known=False)
+                        with Progress(*columns, transient=total is None) as progress:
+                            task = progress.add_task(
+                                description=f'Downloading {file_name}',
+                                total=total,
+                                completed=resume_from,
+                            )
+                            async for chunk in response.aiter_bytes():
+                                await data_file.write(chunk)
+                                progress.advance(task, len(chunk))
+            final_size = await aiofiles.os.path.getsize(absolute_file_path)
+            LOGGER.info('Downloaded %s (%s bytes)', file_path, final_size)
             return
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             last_error = exc
@@ -532,11 +689,16 @@ def iter_progress(iterable: Iterable[T],
     :param kwargs: Additional keyword arguments to pass to the progress bar.
     :return: An iterator that yields items from the iterable with a progress bar.
     """
+    description = kwargs.pop('desc', description)
+    if total is None and isinstance(iterable, Sized):
+        total = len(iterable)
+
     if CONFIG.disable_progress_bar:
         yield from iterable
         return
 
-    with Progress(*_progress_columns(), transient=total is None or transient) as progress:
+    with Progress(*_progress_columns(total_known=total is not None),
+                  transient=total is None or transient) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         for item in iterable:
             yield item
@@ -559,12 +721,17 @@ async def aiter_progress(async_iterable: AsyncIterable[T],
     :param kwargs: Additional keyword arguments to pass to the progress bar.
     :return: An async iterator that yields items from the async iterable with a progress bar.
     """
+    description = kwargs.pop('desc', description)
+    if total is None and isinstance(async_iterable, Sized):
+        total = len(async_iterable)
+
     if CONFIG.disable_progress_bar:
         async for item in async_iterable:
             yield item
         return
 
-    with Progress(*_progress_columns(), transient=total is None or transient) as progress:
+    with Progress(*_progress_columns(total_known=total is not None),
+                  transient=total is None or transient) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         async for item in async_iterable:
             yield item
@@ -576,8 +743,9 @@ def verbose_print(message: str):
     Print a message if verbose mode is enabled.
     :param message: The message to print.
     """
+    LOGGER.debug(message)
     if CONFIG.verbose_print:
-        print(message)
+        print(message, flush=True)
 
 
 def _start_optional_progress(description: str | None,
@@ -594,7 +762,8 @@ def _start_optional_progress(description: str | None,
     if CONFIG.disable_progress_bar:
         return None, None
 
-    progress = Progress(*_progress_columns(), transient=total is None or transient)
+    progress = Progress(*_progress_columns(total_known=total is not None),
+                        transient=total is None or transient)
     task = progress.add_task(description=description or "Processing...", total=total)
     progress.start()
 
@@ -662,25 +831,55 @@ async def schedule_tasks(executor: Executor,
 
     progress, task = _start_optional_progress(description, total, transient)
 
-    while pending:
-        done, pending = await asyncio.wait(
-            pending,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+    try:
+        while pending:
+            done, pending = await asyncio.wait(
+                pending,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        for fut in done:
-            # Refill the executor before handing the result to the caller.
-            # An async-generator consumer may take an arbitrary amount of
-            # time before requesting the next result; refilling afterwards
-            # can therefore leave worker processes idle.
-            _refill_pending(it, loop, executor, func, pending)
+            for fut in done:
+                # Keep workers occupied while the consumer handles this result.
+                _refill_pending(it, loop, executor, func, pending)
 
-            yield fut.result()
-            if progress is not None:
-                progress.advance(task)
+                yield fut.result()
+                if progress is not None:
+                    progress.advance(task)
+    finally:
+        if progress is not None:
+            progress.stop()
 
-    if progress is not None:
-        progress.stop()
+
+def initialize_error_reporting(release: str | None = None) -> bool:
+    """Initialize Sentry once when error reporting is configured."""
+    if not CONFIG.enable_error_reporting:
+        return False
+
+    try:
+        import sentry_sdk
+    except ImportError:
+        LOGGER.warning('Error reporting is enabled but sentry-sdk is not installed.')
+        return False
+
+    if not CONFIG.sentry_dsn:
+        LOGGER.warning('Error reporting is enabled but no Sentry DSN is configured.')
+        return False
+    if sentry_sdk.is_initialized():
+        return True
+
+    options = {'dsn': CONFIG.sentry_dsn}
+    if release is not None:
+        options['release'] = release
+    if CONFIG.enable_profiling:
+        options.update({
+            'send_default_pii': True,
+            'traces_sample_rate': 1.0,
+            'profile_session_sample_rate': 1.0,
+            'profile_lifecycle': 'trace',
+        })
+    sentry_sdk.init(**options)
+    LOGGER.info('Initialized Sentry error reporting.')
+    return True
 
 
 def report_exception(exc: Exception = None):
@@ -688,12 +887,8 @@ def report_exception(exc: Exception = None):
     Report an exception using the sentry SDK. If the SDK is not configured, this function does nothing.
     :param exc: The exception to report. If None, it will use the sys.exc_info().
     """
-    if not CONFIG.enable_error_reporting:
+    if not initialize_error_reporting():
         return
 
-    try:
-        import sentry_sdk
-
-        sentry_sdk.capture_exception(exc)
-    except ImportError:
-        pass
+    import sentry_sdk
+    sentry_sdk.capture_exception(exc)

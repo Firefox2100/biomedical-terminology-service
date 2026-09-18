@@ -26,16 +26,7 @@ class EmbeddingItem:
     kind: EmbeddingKind
     text: str
 
-# The graph database deliberately stores almost nothing beyond node id/prefix/type-labels --
-# full concept detail lives in the document database. This is the explicit allowlist of
-# Concept-subclass fields (by their JSON alias) that ARE promoted to real, queryable Neo4j/
-# PostgreSQL/offline-dump node properties, because some later phase of graph analysis
-# genuinely needs to filter/query on them without a document-database lookup (e.g. scoping
-# OHDSI's internal hierarchy to its SNOMED-sourced subset, or scoping UniProt's full-release,
-# multi-organism content down to human). Adding a field here, plus its column/type below,
-# requires no further changes to Neo4jGraphDatabase.save_vocabulary_graph,
-# PostgresGraphDatabase's schema/CRUD, vocabulary.utils.write_graph_to_file, or
-# scripts/load_offline_vocabulary.py -- all of them read these same structures generically.
+# Concept details live in the document database. Only graph-queryable fields belong here.
 GRAPH_NODE_EXTRA_PROPERTIES: list[str] = [
     'sourceVocabularyId',
     'reviewed',
@@ -43,12 +34,7 @@ GRAPH_NODE_EXTRA_PROPERTIES: list[str] = [
     'organismName',
 ]
 
-# PostgreSQL's graph_node_<prefix> tables are plain relational tables, not Neo4j's schemaless
-# property graph -- each extra property needs an explicit snake_case column name and SQL type
-# to generate DDL/DML from. Every prefix's table gets every column (most stay NULL for most
-# vocabularies, e.g. only UniProt populates organism_tax_id) rather than trying to vary the
-# schema per vocabulary, matching how any node in Neo4j could carry any of these properties
-# regardless of prefix even though only certain vocabularies populate them in practice.
+# PostgreSQL needs an explicit column name and type for every extra graph property.
 GRAPH_NODE_EXTRA_PROPERTY_COLUMNS: dict[str, str] = {
     'sourceVocabularyId': 'source_vocabulary_id',
     'reviewed': 'reviewed',

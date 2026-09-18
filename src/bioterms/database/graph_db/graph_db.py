@@ -2,9 +2,10 @@ from abc import ABC, abstractmethod
 from typing import AsyncIterator, Iterable, Optional
 import networkx as nx
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import GraphDatabaseDriverType, ConceptPrefix, SimilarityMethod, AnnotationType, \
     ConceptRelationshipType
+from bioterms.etc.utils import edge_iter, peek_first
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept_path import ConceptPath
@@ -140,7 +141,6 @@ class GraphDatabase(ABC):
         Close the database driver/connection.
         """
 
-    @abstractmethod
     async def save_vocabulary_graph(self,
                                     concepts: list[Concept] | Iterable[Concept],
                                     graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Optional[str], Optional[str]]],
@@ -159,6 +159,24 @@ class GraphDatabase(ABC):
         :param consume_concepts: Whether to consume the list of concepts while processing
             for memory efficiency. Only meaningful when `concepts` is a plain list.
         """
+        first_concept, concepts = peek_first(concepts)
+        if first_concept is None:
+            return
+        await self._save_vocabulary_graph(
+            prefix=first_concept.prefix,
+            concepts=concepts,
+            edges=edge_iter(graph),
+            consume_concepts=consume_concepts,
+        )
+
+    @abstractmethod
+    async def _save_vocabulary_graph(self,
+                                     prefix: ConceptPrefix,
+                                     concepts: Iterable[Concept],
+                                     edges: Iterable[tuple[str, str, Optional[str], Optional[str]]],
+                                     consume_concepts: bool,
+                                     ) -> None:
+        """Persist normalized vocabulary nodes and edges for one prefix."""
 
     @abstractmethod
     async def get_vocabulary_graph(self,
@@ -756,6 +774,7 @@ def get_active_graph_db() -> GraphDatabase:
         Neo4jGraphDatabase.set_client(neo4j_client)
 
         _active_graph_db = Neo4jGraphDatabase()
+        LOGGER.info('Initialized graph database backend: neo4j')
         return _active_graph_db
 
     if CONFIG.graph_database_driver == GraphDatabaseDriverType.POSTGRESQL:
@@ -766,6 +785,7 @@ def get_active_graph_db() -> GraphDatabase:
         PostgresGraphDatabase.set_engine(pg_engine)
 
         _active_graph_db = PostgresGraphDatabase()
+        LOGGER.info('Initialized graph database backend: postgresql')
         return _active_graph_db
 
     raise ValueError(

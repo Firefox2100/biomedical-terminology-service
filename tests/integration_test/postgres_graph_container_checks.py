@@ -12,14 +12,9 @@ test_*.py/*_test.py, so a bare `pytest` run does not pick it up. Run it explicit
 
 Requires: a working Docker daemon reachable from this host.
 """
-import os
-
 import networkx as nx
 import pytest
 import pytest_asyncio
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -485,6 +480,41 @@ async def test_annotations(graph_db):
 
     await graph_db.delete_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO)
     assert await graph_db.count_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO) == 0
+
+
+@pytest.mark.asyncio
+async def test_annotation_provenance_and_direction_are_preserved(graph_db):
+    await graph_db.save_annotations([
+        Annotation(
+            prefixFrom=ConceptPrefix.ORDO, conceptIdFrom='O1',
+            prefixTo=ConceptPrefix.HPO, conceptIdTo='H1',
+            properties={'source': 'HOOM', 'frequency': 'frequent'},
+        ),
+        Annotation(
+            prefixFrom=ConceptPrefix.HPO, conceptIdFrom='H1',
+            prefixTo=ConceptPrefix.ORDO, conceptIdTo='O1',
+            properties={'source': 'phenotype.hpoa'},
+        ),
+    ])
+
+    assert await graph_db.count_annotations(ConceptPrefix.HPO, ConceptPrefix.ORDO) == 2
+    graph = await graph_db.get_annotation_graph(ConceptPrefix.HPO, ConceptPrefix.ORDO)
+    assert graph.edges['ordo:O1', 'hpo:H1']['source'] == 'HOOM'
+    assert graph.edges['hpo:H1', 'ordo:O1']['source'] == 'phenotype.hpoa'
+
+    await graph_db.save_annotations([
+        Annotation(
+            prefixFrom=ConceptPrefix.ORDO, conceptIdFrom='O1',
+            prefixTo=ConceptPrefix.HPO, conceptIdTo='H1',
+            properties={'source': 'HOOM', 'evidence': 'curated'},
+        ),
+    ])
+    graph = await graph_db.get_annotation_graph(ConceptPrefix.ORDO, ConceptPrefix.HPO)
+    assert graph.edges['ordo:O1', 'hpo:H1']['frequency'] == 'frequent'
+    assert graph.edges['ordo:O1', 'hpo:H1']['evidence'] == 'curated'
+
+    await graph_db.delete_annotations(ConceptPrefix.HPO, ConceptPrefix.ORDO)
+    assert await graph_db.count_annotations(ConceptPrefix.ORDO, ConceptPrefix.HPO) == 0
 
 
 @pytest.mark.asyncio

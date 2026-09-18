@@ -1,9 +1,9 @@
 import httpx
 
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist
+from bioterms.etc.utils import batch_iterable, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
+from bioterms.vocabulary.uniprot import download_vocabulary, iter_gene_annotations
 from .utils import assert_pre_requisite
 
 
@@ -21,13 +21,7 @@ async def download_annotation(download_client: httpx.AsyncClient = None):
     Download the UniProt release files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
-        return
-
-    raise FilesNotFound(
-        message='UniProt to HGNC Gene Symbol mapping is part of the UniProt release, and cannot be '
-                'downloaded separately',
-    )
+    await download_vocabulary(download_client=download_client)
 
 
 async def load_annotation_from_file(graph_db: GraphDatabase = None,
@@ -47,7 +41,12 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         graph_db=graph_db,
     )
 
-    raise NotImplementedError(
-        'UniProt to HGNC Gene Symbol mapping is part of the UniProt release, and should have been '
-        'loaded during the UniProt import'
-    )
+    annotation_count = 0
+    # This is intentionally a fresh streaming pass over the UniProt release. An explicit
+    # annotation load is a request to rebuild the mapping independently of vocabulary load.
+    for annotation_batch in batch_iterable(iter_gene_annotations(), batch_size=100000):
+        if annotation_batch:
+            await graph_db.save_annotations(annotation_batch)
+            annotation_count += len(annotation_batch)
+
+    verbose_print(f'Loaded {annotation_count} UniProt to gene-symbol annotations.')

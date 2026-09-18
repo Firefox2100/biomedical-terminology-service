@@ -1,20 +1,25 @@
-import pandas as pd
 import pytest
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import AnnotationType, ConceptPrefix
+from bioterms.etc.enums import ConceptPrefix
 import bioterms.vocabulary.reactome as reactome
+import bioterms.vocabulary.uniprot as uniprot
 
 
 def test_ann_prefix_is_uniprot_not_hgnc_symbol():
     # The whole point of the change: Reactome must no longer resolve straight to
     # HGNC_SYMBOL -- that duplication is what caused the double-counted vote.
     assert ConceptPrefix.UNIPROT in reactome.ANNOTATIONS
+    assert ConceptPrefix.ENSEMBL in reactome.ANNOTATIONS
+    assert ConceptPrefix.HGNC in reactome.ANNOTATIONS
+    assert ConceptPrefix.NCIT in reactome.ANNOTATIONS
+    assert ConceptPrefix.OMIM in reactome.ANNOTATIONS
     assert ConceptPrefix.HGNC_SYMBOL not in reactome.ANNOTATIONS
+    assert ConceptPrefix.REACTOME in uniprot.ANNOTATIONS
 
 
 @pytest.mark.asyncio
-async def test_load_vocabulary_from_file_builds_exact_annotations_to_uniprot(monkeypatch, tmp_path):
+async def test_load_vocabulary_from_file_does_not_build_uniprot_annotations(monkeypatch, tmp_path):
     reactome_dir = tmp_path / 'reactome'
     reactome_dir.mkdir()
     (reactome_dir / 'pathway.csv').write_text('st_id,display_name\n')
@@ -26,20 +31,28 @@ async def test_load_vocabulary_from_file_builds_exact_annotations_to_uniprot(mon
         'st_id,display_name,synonyms\nR-HSA-1,EEF1A1,\n'
     )
     (reactome_dir / 'gene_reaction.csv').write_text('reaction_id,gene_id,relationship\n')
-    (reactome_dir / 'gene_mapping.csv').write_text('gene_id,symbol\nR-HSA-1,P68104\n')
-
+    (reactome_dir / 'physical_entity.csv').write_text(
+        'db_id,st_id,display_name,synonyms,schema_class\n'
+        '1,R-ALL-1,Test drug,"[""Test drug""]",ChemicalDrug\n'
+    )
+    (reactome_dir / 'physical_entity_reaction.csv').write_text(
+        'entity_id,relationship,reaction_id\n'
+    )
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
 
-    await reactome.load_vocabulary_from_file(offline=True)
+    written_concepts = []
 
-    annotation_path = tmp_path / 'offline' / 'reactome-uniprot.annotation.dump'
-    assert annotation_path.exists()
+    async def capture_concepts(**kwargs):
+        written_concepts.extend(kwargs['concepts'])
 
-    rows = pd.read_csv(annotation_path, header=None).values.tolist()
-    assert len(rows) == 1
-    source_prefix, source_curie, target_prefix, target_curie, annotation_type, _properties = rows[0]
-    assert source_prefix == 'reactome'
-    assert source_curie == 'reactome:R-HSA-1'
-    assert target_prefix == 'uniprot'
-    assert target_curie == 'uniprot:P68104'
-    assert annotation_type == AnnotationType.EXACT.value
+    async def ignore_write(**_kwargs):
+        pass
+
+    monkeypatch.setattr(reactome, 'write_concepts_to_file', capture_concepts)
+    monkeypatch.setattr(reactome, 'write_graph_to_file', ignore_write)
+
+    await reactome.load_vocabulary_from_file(offline=True, build_search_index=False)
+
+    assert not (tmp_path / 'offline' / 'reactome-uniprot.annotation.dump').exists()
+    drug = next(c for c in written_concepts if c.concept_id == 'R-ALL-1')
+    assert drug.concept_types == [reactome.ConceptType.DRUG]

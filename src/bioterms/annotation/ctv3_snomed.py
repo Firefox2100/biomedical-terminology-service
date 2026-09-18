@@ -7,14 +7,14 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_rf2, get_trud_release_url, \
     rf2_dataframe_deduplicate, iter_progress, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
-from bioterms.model.annotation import Annotation
-from .utils import assert_pre_requisite
+from .utils import AnnotationSource, assert_pre_requisite
 
 
 ANNOTATION_NAME = 'SNOMED Mapping to CTV3'
 VOCABULARY_PREFIX_1 = ConceptPrefix.SNOMED
 VOCABULARY_PREFIX_2 = ConceptPrefix.CTV3
 FILE_PATHS = ['snomed/international/ctv3_snomed_map.txt']
+_SNOMED_CTV3_MAP = AnnotationSource('SNOMED CT to CTV3 Map', ConceptPrefix.SNOMED, ConceptPrefix.CTV3)
 
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
@@ -77,11 +77,9 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         description='Processing CTV3 to SNOMED mappings',
         total=len(mapping_df),
     ):
-        annotations.append(Annotation(
-            prefixFrom=ConceptPrefix.SNOMED,
-            conceptIdFrom=str(row['referencedComponentId']),
-            prefixTo=ConceptPrefix.CTV3,
-            conceptIdTo=str(row['mapTarget']),
+        annotations.append(_SNOMED_CTV3_MAP.create(
+            publisher_concept_id=str(row['referencedComponentId']),
+            other_concept_id=str(row['mapTarget']),
         ))
 
     verbose_print(f'Inserting {len(annotations)} annotations into the graph database...')

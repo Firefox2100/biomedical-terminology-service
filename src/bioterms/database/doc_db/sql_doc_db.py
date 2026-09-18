@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 from sqlalchemy import Column, ForeignKey, Index, MetaData, String, DateTime, Table, Text, and_, \
-    bindparam, case, delete, func, insert, intersect, literal_column, or_, update, literal, select, text
+    case, delete, func, insert, intersect, literal_column, or_, update, literal, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
@@ -22,7 +22,7 @@ from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRO
     AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
 from bioterms.model.user import UserApiKey, User, UserRepository
-from .doc_db import DocumentDatabase
+from .doc_db import DocumentDatabase, SearchQuery, normalise_search_query
 
 
 def _build_upsert_stmt(dialect_name: str,
@@ -550,6 +550,7 @@ class SqlDocumentDatabase(DocumentDatabase):
     Capability is probed once per instance (see `_get_native_search_mode`) and cached for the
     instance's lifetime -- it is not re-probed per query.
     """
+    _backend_name = 'sql'
 
     # Sentinel values for `self._native_search_mode`.
     _NATIVE_NONE = 'none'
@@ -1472,9 +1473,8 @@ class SqlDocumentDatabase(DocumentDatabase):
         :param limit: The top number of concepts to return.
         :return: An async iterator of (concept_id, score) tuples, best match first.
         """
-        clean_query = re.sub(r'[()"\']', '', query.lower())
-        n_gram_query = [word for word in clean_query.split() if len(word) > 2]
-        score_query = re.sub(r'\s', '', clean_query)
+        search_query = normalise_search_query(query)
+        n_gram_query = search_query.words
 
         if not n_gram_query:
             return
@@ -1487,7 +1487,7 @@ class SqlDocumentDatabase(DocumentDatabase):
                 tables=tables,
                 mode=mode,
                 n_gram_query=n_gram_query,
-                score_query=score_query,
+                score_query=search_query.compact,
                 limit=limit,
             )
 
@@ -1500,81 +1500,27 @@ class SqlDocumentDatabase(DocumentDatabase):
                     score = -score
                 yield row.concept_id, score
 
-    async def auto_complete_iter(self,
-                                 prefix: ConceptPrefix,
-                                 query: str,
-                                 limit: int = None,
-                                 model_class: type[Concept] = Concept,
-                                 ) -> AsyncIterator[ConceptUnion]:
-        """
-        Run an auto-complete search query against the document database and return an async iterator.
-        :param prefix: The vocabulary prefix to search within.
-        :param query: The search query string.
-        :param limit: The maximum number of results to return. If None, return all matches.
-        :param model_class: The Concept subclass to instantiate for results.
-        :return: An asynchronous iterator yielding Concept instances matching the auto-complete query.
-        """
-        clean_query = re.sub(r'[()"\']', '', query.lower())
-        n_gram_query = [word for word in clean_query.split() if len(word) > 2]
-        score_query = re.sub(r'\s', '', clean_query)
+    async def _auto_complete_iter(self,
+                                  prefix: ConceptPrefix,
+                                  search_query: SearchQuery,
+                                  limit: int,
+                                  model_class: type[Concept],
+                                  ) -> AsyncIterator[ConceptUnion]:
+        async with self._engine.connect() as conn:
+            tables = await self._ensure_tables_exist(conn, prefix)
+            mode = await self._get_native_search_mode()
 
-        if not n_gram_query:
-            return
+            stmt = self._build_auto_complete_stmt(
+                tables=tables,
+                mode=mode,
+                n_gram_query=search_query.words,
+                score_query=search_query.compact,
+                limit=limit,
+            )
 
-        start = time.perf_counter()
-        first_item_at = None
-        items = 0
-        result_label = 'ok'
-
-        try:
-            async with self._engine.connect() as conn:
-                tables = await self._ensure_tables_exist(conn, prefix)
-                mode = await self._get_native_search_mode()
-
-                stmt = self._build_auto_complete_stmt(
-                    tables=tables,
-                    mode=mode,
-                    n_gram_query=n_gram_query,
-                    score_query=score_query,
-                    limit=limit,
-                )
-
-                stream = await conn.stream(stmt)
-                async for row in stream:
-                    if first_item_at is None:
-                        first_item_at = time.perf_counter()
-                    items += 1
-                    yield model_class.model_validate(self._row_to_payload(row))
-        except asyncio.CancelledError:
-            result_label = 'cancelled'
-            raise
-        except Exception as e:
-            result_label = 'error'
-            DOCDB_OP_ERRORS.labels(
-                backend='sql',
-                op='auto_complete',
-                prefix=prefix.value,
-                error_type=type(e).__name__,
-            ).inc()
-            raise
-        finally:
-            end = time.perf_counter()
-            DOCDB_OP_DURATION.labels(
-                backend='sql',
-                op='auto_complete',
-                prefix=prefix.value,
-                result=result_label,
-            ).observe(end - start)
-
-            if first_item_at is not None:
-                DOCDB_OP_TTFI.labels(
-                    backend='sql',
-                    op='auto_complete',
-                    prefix=prefix.value,
-                    result=result_label,
-                ).observe(first_item_at - start)
-
-            AUTOCOMPLETE_ITEMS.labels(prefix=str(prefix.value)).observe(items)
+            stream = await conn.stream(stmt)
+            async for row in stream:
+                yield model_class.model_validate(self._row_to_payload(row))
 
     async def get_random_term_ids(self,
                                   prefix: ConceptPrefix,

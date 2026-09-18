@@ -1,6 +1,6 @@
 import math
 from copy import deepcopy
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator
 
 import networkx as nx
 import numpy as np

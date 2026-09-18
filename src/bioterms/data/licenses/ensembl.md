@@ -14,5 +14,33 @@ The European Molecular Biology Laboratory's European Bioinformatics Institute (E
 
 ## Data source and links
 
-- [Ensemble organisation](https://www.ensembl.org/index.html)
+- [Ensembl organisation](https://www.ensembl.org/index.html)
 - [FTP data release page](https://ftp.ensembl.org/pub/)
+
+## Additional mapping data and third-party terms
+
+The project uses the following mapping products published through Ensembl. They are covered
+by Ensembl's data terms and third-party-data qualification described above:
+
+- The human Ensembl-to-UniProt TSV published with each numbered Ensembl release.
+- The Ensembl BioMart projection of MIM gene and morbid accessions used for the
+  Ensembl–OMIM annotation.
+
+The Ensembl-to-UniProt TSV incorporates identifiers and cross-references from UniProtKB.
+UniProt applies the [Creative Commons Attribution 4.0 International (CC BY 4.0)
+Licence](https://creativecommons.org/licenses/by/4.0/) to all copyrightable parts of its
+databases. UniProt also notes that some data may be covered by patents or other rights and
+disclaims warranties regarding correctness. See the [UniProt licence and
+disclaimer](https://www.uniprot.org/help/license/).
+
+The BioMart MIM projection contains external OMIM identifiers. Use of OMIM content may be
+subject to OMIM's terms and, for the OMIM ontology distributed through UMLS/BioPortal, the
+[UMLS licence](https://uts.nlm.nih.gov/uts/assets/LicenseAgreement.pdf). BioTerms uses the
+projection only to associate Ensembl gene identifiers with MIM accessions; it does not treat
+the Ensembl data disclaimer as replacing any applicable OMIM or UMLS terms. See the
+[OMIM download page](https://omim.org/downloads/) and the bundled OMIM licence notice.
+
+## Mapping data source links
+
+- [Ensembl release TSV directories](https://ftp.ensembl.org/pub/)
+- [Ensembl BioMart](https://www.ensembl.org/biomart/martview/)

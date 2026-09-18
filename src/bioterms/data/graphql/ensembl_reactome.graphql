@@ -1,0 +1,6 @@
+extend type EnsemblGene { annotatedReactome: [ReactomeConcept!]! }
+extend type EnsemblTranscript { annotatedReactome: [ReactomeConcept!]! }
+extend type EnsemblProtein { annotatedReactome: [ReactomeConcept!]! }
+extend type ReactomePathway { annotatedEnsembl: [EnsemblConcept!]! }
+extend type ReactomeReaction { annotatedEnsembl: [EnsemblConcept!]! }
+extend type ReactomeGene { annotatedEnsembl: [EnsemblConcept!]! }

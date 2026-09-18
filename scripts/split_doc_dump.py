@@ -1,29 +1,7 @@
-"""
-Split a large `*.doc.dump` file (line-separated JSON documents, as produced by any
-vocabulary/annotation module's `--offline` mode - see docs/source/build-database.rst)
-into a series of smaller JSONL chunk files of a target maximum size each.
+"""Split a line-delimited document dump into size-bounded JSONL chunks.
 
-Two modes are available:
-
-* Default (copy) mode is a pure line-based streaming split: the input is read one line
-  at a time and written straight through to the current chunk file, so memory usage
-  stays constant (a single line buffer) regardless of input size. The input is left
-  untouched, so peak disk usage is roughly input size + output size (~2x the input).
-
-* ``--in-place`` mode instead peels a line-aligned block off the *tail* of the input
-  file, writes it out as a chunk, ``fsync``s it, and only then truncates the input file
-  to drop that block. Shrinking a file from the end (``ftruncate``) is a cheap metadata
-  operation - no data is rewritten - unlike removing from the front, which would require
-  rewriting the entire remaining file. Because the chunk is fully written and flushed to
-  disk before the source is truncated, peak disk usage is only input size + one chunk
-  (not 2x the input), and an interruption mid-run can only ever leave a partial chunk
-  file to discard - the source is never truncated until its data is safely elsewhere.
-  This is nonetheless a destructive, irreversible operation on the input file: only use
-  it once you're confident the chunks already written are good (e.g. after spot-checking
-  or uploading them), and never on a file you don't have a way to regenerate/redownload.
-
-Order of documents across/within chunks is not meaningful either way (each line is an
-independent JSON document), so chunks can be uploaded, restored, or reordered freely.
+Copy mode preserves the input. ``--in-place`` saves disk space by copying chunks from the
+tail and then truncating the source; it is destructive and requires a recoverable input.
 
 Usage:
 
@@ -32,15 +10,8 @@ Usage:
     python split_doc_dump.py path/to/some-prefix.doc.dump --output-dir /some/dir
     python split_doc_dump.py path/to/some-prefix.doc.dump --in-place   # shrinks the input as it goes
 
-Produces `some-prefix.doc.dump.part000`, `some-prefix.doc.dump.part001.`, ...
-next to the input file (or under --output-dir if given), each at most --chunk-size-gb
-in size (a chunk may be a few KB under/over the limit, since a line is never split
-mid-record). In ``--in-place`` mode, part numbers are assigned in the order chunks are
-cut (tail of the file first), which is unrelated to their position in the original file.
-
-Each part is plain JSONL and can be imported the same way as the original dump, e.g.:
-
-    mongoimport --db bioterms --collection <collection> --file some-prefix.doc.dump.part000
+Chunks are never split mid-record. In-place chunk numbers follow extraction order, from the
+tail backwards, rather than the source document order.
 """
 
 import argparse
@@ -146,21 +117,9 @@ def split_doc_dump_in_place(input_path: str,
                              output_dir: str | None = None,
                              chunk_size_bytes: int = 50 * 1024 ** 3,
                              ) -> list[str]:
-    """
-    Split a line-separated JSON document dump file into size-bounded JSONL chunks,
-    shrinking the input file as each chunk is cut from its tail. DESTRUCTIVE: the input
-    file is truncated in place and cannot be recovered once this returns/is interrupted
-    partway - each chunk is only cut after it has been fully written and fsync'd to
-    disk, so a crash mid-run leaves the input intact minus whatever chunks were already
-    safely written (just delete any partial last chunk file and re-run to resume).
+    """Split from the tail while truncating the source after each durable chunk write.
 
-    :param input_path: Path to the source `.doc.dump` (or any other newline-delimited
-        JSON) file. Will be truncated in place as chunks are extracted.
-    :param output_dir: Directory to write chunk files into. Defaults to the input
-        file's own directory (must not be the same file as the input, obviously).
-    :param chunk_size_bytes: Maximum size, in bytes, for each chunk file.
-    :return: The list of chunk file paths written, in the order they were cut (from the
-        tail of the input backwards - unrelated to their original order in the file).
+    This operation is destructive. Returned paths follow extraction order, not source order.
     """
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(input_path))
@@ -181,8 +140,7 @@ def split_doc_dump_in_place(input_path: str,
         chunk_path = os.path.join(output_dir, f'{base_name}.part{chunk_index:03d}')
         _copy_range(input_path, chunk_path, cut_point, total_size)
 
-        # Sanity check before touching the source: the chunk on disk must match what
-        # we intended to remove, or we abort without truncating anything.
+        # Never truncate unless the durable chunk contains the complete source range.
         if os.path.getsize(chunk_path) != total_size - cut_point:
             raise IOError(f'Chunk {chunk_path} size mismatch after write; aborting before truncating source.')
 

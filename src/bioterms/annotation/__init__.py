@@ -9,8 +9,9 @@ import aiofiles
 import aiofiles.os
 
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.utils import check_files_exist
+from bioterms.etc.restore import batched_write
 from bioterms.database import Cache, GraphDatabase, get_active_cache, get_active_graph_db
 from bioterms.model.annotation_status import AnnotationStatus
 from bioterms.model.annotation import Annotation
@@ -163,6 +164,10 @@ async def download_annotation(prefix_1: ConceptPrefix,
     :param redownload: Whether to redownload the files even if they exist.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
+    LOGGER.info(
+        'Downloading annotation %s -> %s (redownload=%s)',
+        prefix_1.value, prefix_2.value, redownload,
+    )
     annotation_module = get_annotation_module(prefix_1, prefix_2)
 
     if redownload:
@@ -176,6 +181,7 @@ async def download_annotation(prefix_1: ConceptPrefix,
     result = download_func(download_client=download_client)
     if inspect.iscoroutine(result):
         await result
+    LOGGER.info('Annotation download complete: %s -> %s', prefix_1.value, prefix_2.value)
 
 
 async def delete_annotation(prefix_1: ConceptPrefix,
@@ -188,6 +194,7 @@ async def delete_annotation(prefix_1: ConceptPrefix,
     :param prefix_2: The second prefix.
     :param graph_db: Optional GraphDatabase instance to use.
     """
+    LOGGER.info('Deleting annotation %s -> %s', prefix_1.value, prefix_2.value)
     annotation_module = get_annotation_module(prefix_1, prefix_2)
     cache = get_active_cache()
 
@@ -210,6 +217,7 @@ async def delete_annotation(prefix_1: ConceptPrefix,
             await result
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Annotation deletion complete: %s -> %s', prefix_1.value, prefix_2.value)
 
 
 def _offline_dump_already_exists(annotation_module,
@@ -242,6 +250,10 @@ async def load_annotation(prefix_1: ConceptPrefix,
     :param offline: Whether to write output to offline dump file instead of graph database.
     :param graph_db: Optional GraphDatabase instance to use.
     """
+    LOGGER.info(
+        'Loading annotation %s -> %s (overwrite=%s, offline=%s)',
+        prefix_1.value, prefix_2.value, overwrite, offline,
+    )
     annotation_module = get_annotation_module(prefix_1, prefix_2)
 
     if not check_files_exist(annotation_module.FILE_PATHS):
@@ -287,11 +299,13 @@ async def load_annotation(prefix_1: ConceptPrefix,
             return
 
     if offline:
+        LOGGER.info('Annotation load complete: %s -> %s (offline)', prefix_1.value, prefix_2.value)
         return
 
     cache = get_active_cache()
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Annotation load complete: %s -> %s', prefix_1.value, prefix_2.value)
 
 
 async def get_annotation_status(prefix_1: ConceptPrefix,
@@ -351,8 +365,7 @@ async def get_annotation_status(prefix_1: ConceptPrefix,
 
 def _infer_annotation_dump_prefixes(path: Path) -> tuple[str | None, str | None]:
     """
-    Infer zero, one, or two fallback prefixes from an annotation dump filename, mirroring
-    `scripts/load_offline_annotations.py`'s `infer_prefixes`.
+    Infer zero, one, or two fallback prefixes from an annotation dump filename.
     :param path: The annotation dump file path.
     :return: The (source, target) prefix strings inferred from the filename, or None each if
         the filename carries no prefix information (a bare `.annotation.dump`).
@@ -375,10 +388,7 @@ def _infer_annotation_dump_prefixes(path: Path) -> tuple[str | None, str | None]
 
 def _canonical_annotation_prefix(value: str | ConceptPrefix | None) -> str | ConceptPrefix | None:
     """
-    Normalise a prefix value to a `ConceptPrefix` where possible, or a lowercase string for
-    vocabularies not registered as a `ConceptPrefix` (e.g. an external vocabulary such as MeSH
-    appearing only in a cross-reference annotation), mirroring the original script's
-    `canonical_prefix`.
+    Normalise a prefix to a `ConceptPrefix` or a lowercase string for external vocabularies.
     :param value: The raw prefix value (string or ConceptPrefix), or None.
     :return: The normalised prefix, or None if `value` was None/blank.
     """
@@ -403,13 +413,12 @@ async def restore_annotation(dump_path: str | os.PathLike,
     Restore an annotation dump file (produced by `load_annotation(..., offline=True)`, i.e.
     `write_annotations_to_file`) into the live graph database.
 
-    Each row carries its own source/target prefix and CURIE columns, so -- like
-    `scripts/load_offline_annotations.py`, which this replaces -- restoring does not require
-    knowing the (prefix_1, prefix_2) annotation pair up front: `source_prefix`/`target_prefix`
+    Each row carries source/target prefix and CURIE columns, so restoring does not require
+    knowing the annotation pair up front. `source_prefix` and `target_prefix`
     (explicit, or inferred from the dump filename when omitted) are used only as a fallback for
     rows where a prefix column is empty. This goes through `GraphDatabase.save_annotations`
     (the same interface `load_annotation` itself uses when not offline) rather than talking to
-    Neo4j directly, so it works unmodified against the PostgreSQL graph driver too.
+    Neo4j directly, so it also works with the PostgreSQL graph driver.
     :param dump_path: Path to a `<prefix1>[-<prefix2>].annotation.dump` file.
     :param source_prefix: Fallback source prefix, overriding filename inference.
     :param target_prefix: Fallback target prefix, overriding filename inference.
@@ -422,6 +431,10 @@ async def restore_annotation(dump_path: str | os.PathLike,
     :return: The number of annotations restored.
     """
     dump_path = Path(dump_path)
+    LOGGER.info(
+        'Restoring annotations from %s (overwrite=%s, batch_size=%s)',
+        dump_path, overwrite, batch_size,
+    )
     if not dump_path.is_file():
         raise ValueError(f'Annotation dump not found: {dump_path}')
 
@@ -440,52 +453,48 @@ async def restore_annotation(dump_path: str | os.PathLike,
             )
         await delete_annotation(prefix_1=source_fallback, prefix_2=target_fallback, graph_db=graph_db)
 
-    total = 0
-    batch: list[Annotation] = []
+    def annotations():
+        with dump_path.open(encoding='utf-8', newline='') as f:
+            for line_number, row in enumerate(csv.reader(f), 1):
+                if not row or not any(value.strip() for value in row):
+                    continue
+                if len(row) < 6:
+                    raise ValueError(f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6')
 
-    with dump_path.open(encoding='utf-8', newline='') as f:
-        for line_number, row in enumerate(csv.reader(f), 1):
-            if not row or not any(value.strip() for value in row):
-                continue
-            if len(row) < 6:
-                raise ValueError(f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6')
+                row_source_prefix, source_id, row_target_prefix, target_id, annotation_type, properties_text = row[:6]
+                source_curie = parse_annotation_curie(
+                    _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
+                )
+                target_curie = parse_annotation_curie(
+                    _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
+                )
+                source_curie_prefix, source_curie_id = source_curie.split(':', 1)
+                target_curie_prefix, target_curie_id = target_curie.split(':', 1)
 
-            row_source_prefix, source_id, row_target_prefix, target_id, annotation_type, properties_text = row[:6]
-            source_curie = parse_annotation_curie(
-                _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
-            )
-            target_curie = parse_annotation_curie(
-                _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
-            )
-            source_curie_prefix, source_curie_id = source_curie.split(':', 1)
-            target_curie_prefix, target_curie_id = target_curie.split(':', 1)
+                try:
+                    properties = json.loads(properties_text) if properties_text.strip() else None
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f'{dump_path}:{line_number} contains invalid properties JSON') from exc
 
-            try:
-                properties = json.loads(properties_text) if properties_text.strip() else None
-            except json.JSONDecodeError as exc:
-                raise ValueError(f'{dump_path}:{line_number} contains invalid properties JSON') from exc
+                yield Annotation(
+                    prefixFrom=source_curie_prefix,
+                    conceptIdFrom=source_curie_id,
+                    prefixTo=target_curie_prefix,
+                    conceptIdTo=target_curie_id,
+                    annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
+                    properties=properties,
+                )
 
-            batch.append(Annotation(
-                prefixFrom=source_curie_prefix,
-                conceptIdFrom=source_curie_id,
-                prefixTo=target_curie_prefix,
-                conceptIdTo=target_curie_id,
-                annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
-                properties=properties,
-            ))
-
-            if len(batch) >= batch_size:
-                await graph_db.save_annotations(batch)
-                total += len(batch)
-                batch = []
-
-    if batch:
+    async def save(batch: list[Annotation]) -> None:
         await graph_db.save_annotations(batch)
-        total += len(batch)
+
+    total = await batched_write(annotations(), save, batch_size)
 
     if cache is None:
         cache = get_active_cache()
 
     await cache.rotate_dataset_version()
+
+    LOGGER.info('Annotation restore complete: %s (%s annotations)', dump_path, total)
 
     return total

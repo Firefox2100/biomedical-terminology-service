@@ -7,7 +7,7 @@ from neo4j.exceptions import TransientError
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod, ConceptRelationshipType, AnnotationType
-from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress, edge_iter, peek_first
+from bioterms.etc.utils import batch_iterable, verbose_print, aiter_progress
 from bioterms.etc.metrics import GRAPHDB_OP_DURATION, GRAPHDB_OP_TTFR, GRAPHDB_OP_ERRORS, \
     GRAPHDB_OP_RETRYS, EXPAND_DESC_COUNT, MAP_COUNT, SIM_GROUPS, SIM_PER_GROUP, SIM_TOTAL
 from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
@@ -419,27 +419,12 @@ class Neo4jGraphDatabase(GraphDatabase):
         else:
             raise ValueError('Neo4J client is not set. Cannot close connection.')
 
-    async def save_vocabulary_graph(self,
-                                    concepts: list[Concept] | Iterable[Concept],
-                                    graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Optional[str], Optional[str]]],
-                                    consume_concepts: bool = False,
-                                    ):
-        """
-        Save the vocabulary graph to the graph database.
-        :param concepts: The concepts to save. This is passed in to allow for any necessary
-            term metadata to be accessed during graph saving. May be a plain list, or any
-            other (single-pass) iterable -- e.g. a generator streaming an offline dump file --
-            in which case only one batch's worth is ever held in memory at a time.
-        :param graph: The vocabulary graph to save. Either an `nx.DiGraph`/`nx.MultiDiGraph`,
-            or an iterable of `(source_id, target_id, relationship_type, relationship_key)`
-            edge tuples in the same shape `edge_iter` produces -- see `edge_iter`.
-        :param consume_concepts: Whether to consume the list of concepts while processing
-            for memory efficiency. Only applies when `concepts` is a plain list; any other
-            iterable is already consumed lazily, one batch at a time.
-        """
-        first_concept, concepts = peek_first(concepts)
-        concept_prefix = first_concept.prefix if first_concept else ''
-
+    async def _save_vocabulary_graph(self,
+                                     prefix: ConceptPrefix,
+                                     concepts: Iterable[Concept],
+                                     edges: Iterable[tuple[str, str, Optional[str], Optional[str]]],
+                                     consume_concepts: bool,
+                                     ) -> None:
         async with self._client.session() as session:
             # Insert the concepts first before adding edges
             verbose_print('Inserting concepts into Neo4j...')
@@ -466,7 +451,7 @@ class Neo4jGraphDatabase(GraphDatabase):
 
             # Insert the edges
             verbose_print(f'Inserting edges into Neo4j...')
-            for edge_batch in batch_iterable(edge_iter(graph)):
+            for edge_batch in batch_iterable(edges):
                 await _execute_query_with_retry(
                     query="""
                     UNWIND $edges AS edge
@@ -498,8 +483,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     session=session,
                     parameters={
                         'edges': edge_batch,
-                        'concept_prefix': concept_prefix.value
-                            if isinstance(concept_prefix, ConceptPrefix) else concept_prefix,
+                        'concept_prefix': prefix.value,
                     },
                 )
 
@@ -774,22 +758,43 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             verbose_print(f'Inserting {len(annotations)} annotations into Neo4j...')
             for annotation_batch in batch_iterable(annotations):
-                await _execute_query_with_retry(
-                    query="""
-                    UNWIND $annotations AS annotation
-                    MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
-                    MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
-                    WITH source,
-                        target,
-                        coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
-                        coalesce(annotation.properties, {}) AS props
-                    MERGE (source)-[rel:$(rel_type)]->(target)
-                    SET rel += props
-                    RETURN count(rel) AS created
-                    """,
-                    session=session,
-                    parameters={'annotations': [annotation.model_dump() for annotation in annotation_batch]},
-                )
+                serialized = [annotation.model_dump() for annotation in annotation_batch]
+                sourced = [a for a in serialized if (a.get('properties') or {}).get('source')]
+                unsourced = [a for a in serialized if not (a.get('properties') or {}).get('source')]
+                if sourced:
+                    await _execute_query_with_retry(
+                        query="""
+                        UNWIND $annotations AS annotation
+                        MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
+                        MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                        WITH source,
+                            target,
+                            coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
+                            annotation.properties AS props
+                        MERGE (source)-[rel:$(rel_type) {source: props.source}]->(target)
+                        SET rel += props
+                        RETURN count(rel) AS created
+                        """,
+                        session=session,
+                        parameters={'annotations': sourced},
+                    )
+                if unsourced:
+                    await _execute_query_with_retry(
+                        query="""
+                        UNWIND $annotations AS annotation
+                        MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
+                        MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                        WITH source,
+                            target,
+                            coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
+                            coalesce(annotation.properties, {}) AS props
+                        MERGE (source)-[rel:$(rel_type)]->(target)
+                        SET rel += props
+                        RETURN count(rel) AS created
+                        """,
+                        session=session,
+                        parameters={'annotations': unsourced},
+                    )
 
     async def get_annotation_graph(self,
                                    prefix_1: ConceptPrefix,
@@ -820,8 +825,10 @@ class Neo4jGraphDatabase(GraphDatabase):
             result = await _execute_query_with_retry(
                 query="""
                 MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
-                RETURN DISTINCT source.id AS source_id,
-                    target.id AS target_id,
+                RETURN DISTINCT startNode(r).prefix AS source_prefix,
+                    startNode(r).id AS source_id,
+                    endNode(r).prefix AS target_prefix,
+                    endNode(r).id AS target_id,
                     type(r) AS rel_label,
                     properties(r) AS rel_props
                 """,
@@ -838,8 +845,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 total=annotation_count,
             ):
                 annotation_graph.add_edge(
-                    f'{prefix_1.value}:{record["source_id"]}',
-                    f'{prefix_2.value}:{record["target_id"]}',
+                    f'{record["source_prefix"]}:{record["source_id"]}',
+                    f'{record["target_prefix"]}:{record["target_id"]}',
                     label=AnnotationType(record['rel_label']),
                     **record['rel_props']
                 )
@@ -891,7 +898,7 @@ class Neo4jGraphDatabase(GraphDatabase):
             while True:
                 result = await _execute_query_with_retry(
                     query="""
-                    MATCH (:Concept {prefix: $prefix_1})-[r]->(:Concept {prefix: $prefix_2})
+                    MATCH (:Concept {prefix: $prefix_1})-[r]-(:Concept {prefix: $prefix_2})
                     WITH r LIMIT $batch_size
                     DELETE r
                     RETURN count(r) AS deleted
@@ -919,7 +926,7 @@ class Neo4jGraphDatabase(GraphDatabase):
         async with self._client.session() as session:
             result = await _execute_query_with_retry(
                 query="""
-                MATCH (source:Concept {prefix: $prefix_1})-[r]->(target:Concept {prefix: $prefix_2})
+                MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
                 RETURN count(r) AS annotation_count
                 """,
                 session=session,

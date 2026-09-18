@@ -11,14 +11,17 @@ from bioterms.etc.utils import check_files_exist, download_file, iter_progress, 
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
 from bioterms.model.concept import UniProtConcept
-from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_graph_to_file, \
+from .utils import write_concepts_to_file, write_graph_to_file, \
     write_annotations_to_file
 
 
 VOCABULARY_NAME = 'UniProtKB'
 VOCABULARY_PREFIX = ConceptPrefix.UNIPROT
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
+    ConceptPrefix.HGNC,
     ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.REACTOME,
 ]
 SIMILARITY_METHODS = []
 
@@ -29,9 +32,7 @@ FILE_PATHS = [
 TIMESTAMP_FILE = 'uniprot/.timestamp'
 CONCEPT_CLASS = UniProtConcept
 
-UNIPROT_FTP_BASE = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete'
-
-BATCH_SIZE = 100000
+_BATCH_SIZE = 100000
 
 _ID_LINE = re.compile(r'^ID\s+\S+\s+(Reviewed|Unreviewed);')
 _DE_NAME_LINE = re.compile(r'^DE\s+(?:RecName|SubName): Full=(.+?);?\s*$')
@@ -66,7 +67,10 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
         filename = os.path.basename(file_path)
         verbose_print(f'Downloading {filename} (this file may be very large)...')
         await download_file(
-            url=f'{UNIPROT_FTP_BASE}/{filename}',
+            url=(
+                'https://ftp.uniprot.org/pub/databases/uniprot/current_release/'
+                f'knowledgebase/complete/{filename}'
+            ),
             file_path=file_path,
             download_client=download_client,
         )
@@ -189,6 +193,22 @@ def _build_symbol_annotation(record: dict) -> Annotation | None:
     )
 
 
+def iter_gene_annotations():
+    """Stream UniProt to HGNC-symbol annotations from the downloaded release files."""
+    for file_path in FILE_PATHS:
+        full_path = os.path.join(CONFIG.data_dir, file_path)
+        for lines in iter_progress(
+            _iter_dat_records(full_path),
+            description=f'Processing UniProt gene annotations from {file_path}',
+        ):
+            record = _parse_dat_record(lines)
+            if record is None:
+                continue
+            annotation = _build_symbol_annotation(record)
+            if annotation is not None:
+                yield annotation
+
+
 async def _flush_batch(concepts: list[UniProtConcept],
                        annotations: list[Annotation],
                        *,
@@ -197,6 +217,7 @@ async def _flush_batch(concepts: list[UniProtConcept],
                        graph_db: GraphDatabase = None,
                        offline: bool,
                        build_search_index: bool = True,
+                       load_annotations: bool = True,
                        ):
     """
     Save one batch of concepts/annotations, either directly to the primary databases or as
@@ -211,7 +232,8 @@ async def _flush_batch(concepts: list[UniProtConcept],
             batch_graph.add_node(concept.concept_id)
         await graph_db.save_vocabulary_graph(concepts=concepts, graph=batch_graph)
 
-        await graph_db.save_annotations(annotations)
+        if load_annotations:
+            await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -230,18 +252,20 @@ async def _flush_batch(concepts: list[UniProtConcept],
             overwrite=is_first_batch,
         )
 
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            prefix_to=ConceptPrefix.HGNC_SYMBOL,
-            annotations=annotations,
-            overwrite=is_first_batch,
-        )
+        if load_annotations:
+            await write_annotations_to_file(
+                prefix_from=VOCABULARY_PREFIX,
+                prefix_to=ConceptPrefix.HGNC_SYMBOL,
+                annotations=annotations,
+                overwrite=is_first_batch,
+            )
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
                                     build_search_index: bool = True,
+                                    load_annotations: bool = True,
                                     ):
     """
     Load the complete UniProtKB vocabulary from the downloaded flat files into the primary
@@ -260,9 +284,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         if graph_db is None:
             graph_db = get_active_graph_db()
 
-        await ensure_gene_symbol_loaded(
-            doc_db=doc_db,
-            graph_db=graph_db,
+        load_annotations = load_annotations and (
+            await graph_db.count_terms(ConceptPrefix.HGNC_SYMBOL) > 0
         )
 
     total_loaded = 0
@@ -281,16 +304,18 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                 continue
 
             concepts.append(_build_uniprot_concept(record))
-            annotation = _build_symbol_annotation(record)
-            if annotation is not None:
-                annotations.append(annotation)
+            if load_annotations:
+                annotation = _build_symbol_annotation(record)
+                if annotation is not None:
+                    annotations.append(annotation)
 
-            if len(concepts) >= BATCH_SIZE:
+            if len(concepts) >= _BATCH_SIZE:
                 await _flush_batch(
                     concepts, annotations,
                     is_first_batch=(total_batches == 0),
                     doc_db=doc_db, graph_db=graph_db, offline=offline,
                     build_search_index=build_search_index,
+                    load_annotations=load_annotations,
                 )
                 total_loaded += len(concepts)
                 total_batches += 1
@@ -304,6 +329,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                 is_first_batch=(total_batches == 0),
                 doc_db=doc_db, graph_db=graph_db, offline=offline,
                 build_search_index=build_search_index,
+                load_annotations=load_annotations,
             )
             total_loaded += len(concepts)
             total_batches += 1

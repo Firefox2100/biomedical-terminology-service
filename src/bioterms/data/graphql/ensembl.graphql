@@ -1,35 +1,82 @@
-enum EnsemblConceptType {
-    gene
-    transcript
-    exon
-    protein
-}
-
-type EnsemblConcept implements Concept & GeneConcept {
+interface EnsemblConcept implements Concept {
     prefix: ConceptPrefix!
     conceptId: String!
-    conceptType: EnsemblConceptType!
     label: String
     bioType: String
     start: Int
     end: Int
     sequence: String
+    version: String
+    strand: String
+    source: String
     status: ConceptStatus!
-
-    symbols: [HgncSymbolConcept!]!
-
     similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
-    pathsTo(
-        targetPrefix: ConceptPrefix!
-        targetConceptId: String!
-        relationship: RelationshipType!
-        direction: PathDirection = forward
-        maxDepth: Int = 12
-    ): [ConceptPath!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
 }
 
-extend type HgncSymbolConcept {
-    ensemblConcepts: [EnsemblConcept!]!
+type EnsemblGene implements EnsemblConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    bioType: String
+    start: Int
+    end: Int
+    sequence: String
+    version: String
+    strand: String
+    source: String
+    status: ConceptStatus!
+    similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
+}
+
+type EnsemblTranscript implements EnsemblConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    bioType: String
+    start: Int
+    end: Int
+    sequence: String
+    version: String
+    strand: String
+    source: String
+    transcriptSupportLevel: String
+    status: ConceptStatus!
+    similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
+}
+
+type EnsemblExon implements EnsemblConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    bioType: String
+    start: Int
+    end: Int
+    sequence: String
+    version: String
+    strand: String
+    source: String
+    status: ConceptStatus!
+    similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
+}
+
+type EnsemblProtein implements EnsemblConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    bioType: String
+    start: Int
+    end: Int
+    sequence: String
+    version: String
+    strand: String
+    source: String
+    status: ConceptStatus!
+    similarConcepts(threshold: Float): [SimilarEnsemblConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
 }
 
 type SimilarEnsemblConcept implements SimilarConcept {
@@ -38,15 +85,8 @@ type SimilarEnsemblConcept implements SimilarConcept {
     score: Float!
 }
 
-type EnsemblConceptResponse {
-    error: QueryError
-    data: EnsemblConcept
-}
-
-type EnsemblConceptListResponse {
-    error: QueryError
-    data: [EnsemblConcept]
-}
+type EnsemblConceptResponse { error: QueryError, data: EnsemblConcept }
+type EnsemblConceptListResponse { error: QueryError, data: [EnsemblConcept] }
 
 type EnsemblQuery {
     ensemblConcept(conceptId: String!): EnsemblConceptResponse
@@ -54,6 +94,4 @@ type EnsemblQuery {
     search(query: String!, limit: Int): EnsemblConceptListResponse
 }
 
-extend type Query {
-    ensembl: EnsemblQuery
-}
+extend type Query { ensembl: EnsemblQuery }

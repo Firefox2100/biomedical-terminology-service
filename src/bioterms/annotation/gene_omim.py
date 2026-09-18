@@ -1,14 +1,13 @@
 import os
 import httpx
-import aiofiles.os
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip, \
-    iter_progress, verbose_print
+from bioterms.etc.utils import iter_progress, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation
+from bioterms.vocabulary.omim import download_vocabulary
 from .utils import assert_pre_requisite
 
 
@@ -20,37 +19,10 @@ FILE_PATHS = ['omim/omim.csv']
 
 async def download_annotation(download_client: httpx.AsyncClient = None):
     """
-    Download the OMIM release file.
+    Download the OMIM release file that contains the HGNC gene-symbol mapping.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
-        return
-
-    ensure_data_directory()
-
-    annotation_url = 'https://evs.nci.nih.gov/ftp1/NCI_Thesaurus/Mappings/NCIt-HGNC_Mapping.txt'
-    gzip_path = os.path.join(CONFIG.data_dir, 'omim/omim.gz')
-
-    if not CONFIG.bioportal_api_key:
-        raise ValueError('BioPortal API key is required to download OMIM ontology.')
-
-    try:
-        await download_file(
-            url=annotation_url,
-            file_path='omim/omim.gz',
-            headers={'Authorization': f'apikey token={CONFIG.bioportal_api_key}'},
-            download_client=download_client,
-        )
-
-        await extract_file_from_gzip(
-            gzip_path=gzip_path,
-            output_path=os.path.join(CONFIG.data_dir, FILE_PATHS[0])
-        )
-    finally:
-        try:
-            await aiofiles.os.remove(gzip_path)
-        except Exception:
-            pass
+    await download_vocabulary(download_client=download_client)
 
 
 async def load_annotation_from_file(graph_db: GraphDatabase = None,

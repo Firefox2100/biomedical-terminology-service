@@ -8,7 +8,7 @@ A public demonstration server is hosted by the Brookes Lab, University of Leices
 
 ## Features
 
-* Unified access to multiple biomedical vocabularies and ontologies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, OHDSI, and UniProt.
+* Unified access to multiple biomedical vocabularies and ontologies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, OHDSI, Uberon, and UniProt.
 * Cross-vocabulary annotations and mappings, for normalising subject tagging and translating between term sets.
 * Parent-child and other relationship traversal, for use in external queries.
 * Auto-complete and full-text search across loaded vocabularies.
@@ -46,7 +46,7 @@ In some countries or regions, usage of this software or the data it intends to w
 
 For complete installation instructions, refer to the [Installation Guide](https://biomedical-terminology-service.readthedocs.io/en/latest/installation.html). Below is a quick start using docker-compose:
 
-This software releases pre-built images on [Docker Hub](https://hub.docker.com/r/firefox2100/biomedical-terminology-service). The easiest way to get started is to use the provided `docker-compose.yml` file. You can run the following command in the terminal:
+This software releases pre-built images on [Docker Hub](https://hub.docker.com/r/firefox2100/biomedical-terminology-service). The easiest way to get started is to use the provided `docker-compose.yaml` file. You can run the following command in the terminal:
 
 ```bash
 git clone https://github.com/Firefox2100/biomedical-terminology-service.git

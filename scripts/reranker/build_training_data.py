@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""
-Mine a reranker training dataset from a fully built and embedded bioterms database.
-
-See README.md in this folder for the full design (dataset format, determinism/incremental
-growth, negative selection, scope/limitations). Requires the same BTS_* config as the rest of
-the service, pointed at a database that has already been loaded AND embedded.
-"""
+"""Mine reranker training data from a fully built and embedded bioterms database."""
 import argparse
 import asyncio
 import hashlib
@@ -215,7 +209,7 @@ def _select_negatives(candidates: dict[str, dict],
                       ) -> list[dict]:
     """
     Select up to `negatives_per_query` from the merged, filtered candidate pool in three
-    passes (see README for rationale): (1) source coverage -- one negative per recall arm
+    passes: (1) source coverage -- one negative per recall arm
     that found anything; (2) rank-band quotas for the remaining budget; (3) backfill from the
     best leftover candidates regardless of band.
     :param candidates: concept_id -> {"sources", "ranks", "scores"}, already filtered via
@@ -418,7 +412,7 @@ async def _run(args: argparse.Namespace) -> None:
         else output_path.parent / 'concepts'
 
     # Persisted per-vocabulary unit-count cache, so a later --skip can bypass reloading
-    # vocabularies entirely before the requested window (see README). Delete it if the
+    # vocabularies entirely before the requested window. Delete it if the
     # underlying vocabularies have changed since it was written.
     manifest_path = output_path.parent / '.reranker_vocab_unit_counts.json'
     manifest: dict[str, int] = {}
@@ -473,7 +467,7 @@ async def _run(args: argparse.Namespace) -> None:
             # Global mode: --skip/--limit slice the one cross-vocabulary sequence (units
             # before the window are walked to advance the index, never mined). Per-vocabulary
             # mode: the same values slice *this vocabulary's own* sequence, restarting at 0
-            # each time -- see README on why this guarantees per-vocabulary coverage.
+            # each time, which guarantees per-vocabulary coverage.
             window_skip, window_limit = args.skip, (per_vocab_limit if per_vocab_limit is not None else args.limit)
             window_base = 0 if per_vocab_limit is not None else global_index
             in_window = [
@@ -563,7 +557,7 @@ async def _run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Mine a reranker training dataset from a built bioterms database. See README.md.',
+        description='Mine a reranker training dataset from a built bioterms database.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument('--output', required=True, help='Output JSONL path (a "<output>.stats.json" is written alongside it).')
@@ -574,13 +568,13 @@ def main() -> None:
     )
     parser.add_argument(
         '--skip', type=int, default=0,
-        help='Query units to skip before mining starts -- see README for the incremental-growth workflow.',
+        help='Query units to skip before mining starts.',
     )
     parser.add_argument('--limit', type=int, default=100_000, help='Query units to mine and write in this run.')
     parser.add_argument(
         '--per-vocabulary-limit', type=int, default=None,
         help='Mine up to this many units from EACH vocabulary instead of one global --limit '
-             '(re-interprets --skip/--limit as per-vocabulary) -- see README.',
+             '(re-interprets --skip/--limit as per-vocabulary).',
     )
     parser.add_argument(
         '--vocabularies', nargs='*', default=None,
@@ -588,11 +582,11 @@ def main() -> None:
     )
     parser.add_argument(
         '--max-queries-per-concept', type=int, default=4,
-        help='Cap on query units per concept, hash-selected (not first-N) from its aliases -- see README.',
+        help='Cap on query units per concept, hash-selected from its aliases.',
     )
     parser.add_argument(
         '--negatives-per-query', type=int, default=8,
-        help='Target negatives kept per query, after source-coverage + rank-band selection -- see README.',
+        help='Target negatives kept per query after source-coverage and rank-band selection.',
     )
     parser.add_argument(
         '--min-negatives-per-query', type=int, default=1,

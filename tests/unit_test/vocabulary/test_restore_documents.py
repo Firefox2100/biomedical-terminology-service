@@ -5,13 +5,8 @@ build_search_index=False)` now lets a caller skip -- `save_terms` always recompu
 search indexing from the concept itself, so the dump's extra fields (or lack of them) must
 not change what ends up in the document database.
 """
-import os
-
 import pytest
 import pytest_asyncio
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine

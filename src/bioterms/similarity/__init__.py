@@ -6,7 +6,7 @@ from pathlib import Path
 import aiofiles
 import networkx as nx
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.etc.utils import verbose_print
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, get_active_doc_db, \
@@ -252,6 +252,14 @@ async def calculate_similarity(method: SimilarityMethod,
     :param doc_db: The document database instance to use. If None, use the active document database.
     :param graph_db: The graph database instance to use. If None, use the active graph database.
     """
+    LOGGER.info(
+        'Calculating %s similarity for %s -> %s (threshold=%s, offline=%s)',
+        method.value,
+        target_prefix.value,
+        corpus_prefix.value if corpus_prefix else target_prefix.value,
+        similarity_threshold if similarity_threshold is not None else 'default',
+        offline,
+    )
     similarity_module = get_similarity_module(method)
     similarity_config = get_similarity_method_config(method)
 
@@ -317,6 +325,13 @@ async def calculate_similarity(method: SimilarityMethod,
                 cache = get_active_cache()
 
             await cache.rotate_dataset_version()
+
+    LOGGER.info(
+        'Similarity calculation complete: %s for %s -> %s',
+        method.value,
+        target_prefix.value,
+        corpus_prefix.value if corpus_prefix else target_prefix.value,
+    )
 
 
 async def get_similarity_status(prefix: ConceptPrefix,
@@ -481,6 +496,10 @@ async def restore_similarity(target_prefix: ConceptPrefix,
     paths = sorted(Path(offline_dir).glob(f'{target_prefix.value}-*.similarity.dump'))
     if not paths:
         raise ValueError(f'No similarity dump files found for {target_prefix.value} in {offline_dir}')
+    LOGGER.info(
+        'Restoring similarity for %s from %s dump file(s) (batch_size=%s)',
+        target_prefix.value, len(paths), batch_size,
+    )
 
     if graph_db is None:
         graph_db = get_active_graph_db()
@@ -523,5 +542,7 @@ async def restore_similarity(target_prefix: ConceptPrefix,
         cache = get_active_cache()
 
     await cache.rotate_dataset_version()
+
+    LOGGER.info('Similarity restore complete: %s (%s scores)', target_prefix.value, total)
 
     return total

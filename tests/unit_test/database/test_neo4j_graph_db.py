@@ -5,7 +5,7 @@ from bioterms.model.concept import GRAPH_NODE_EXTRA_PROPERTIES
 
 
 def test_save_vocabulary_graph_sets_extra_properties_dynamically():
-    source = inspect.getsource(Neo4jGraphDatabase.save_vocabulary_graph)
+    source = inspect.getsource(Neo4jGraphDatabase._save_vocabulary_graph)
 
     # Generic dynamic-property mechanism: only present (non-null) keys from
     # GRAPH_NODE_EXTRA_PROPERTIES are ever written, so a vocabulary that doesn't populate a

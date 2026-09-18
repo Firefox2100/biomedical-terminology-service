@@ -1,4 +1,5 @@
 import os
+import httpx
 import networkx as nx
 import pandas as pd
 
@@ -8,17 +9,18 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
-from .hgnc import download_vocabulary
 from .utils import write_concepts_to_file, write_graph_to_file
 
 
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee Symbol'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC_SYMBOL
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
     ConceptPrefix.HPO,
     ConceptPrefix.NCIT,
     ConceptPrefix.OMIM,
     ConceptPrefix.ORDO,
+    ConceptPrefix.UNIPROT,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.CO_ANNOTATION
@@ -29,6 +31,13 @@ FILE_PATHS = [
 ]
 TIMESTAMP_FILE = 'hgnc/.timestamp'
 CONCEPT_CLASS = Concept
+
+
+async def download_vocabulary(download_client: httpx.AsyncClient = None):
+    """Reuse the HGNC release that defines approved, alias, and withdrawn gene symbols."""
+    from .hgnc import download_vocabulary as download_hgnc
+
+    await download_hgnc(download_client=download_client)
 
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,

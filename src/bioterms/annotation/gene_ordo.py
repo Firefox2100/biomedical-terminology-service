@@ -4,7 +4,7 @@ import httpx
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip, \
+from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, \
     iter_progress, verbose_print
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.model.annotation import Annotation

@@ -1,12 +1,12 @@
-import traceback
 from typing import Annotated, Optional
 from rich.table import Table
 import typer
 
 from bioterms.etc.enums import ConceptPrefix
+from bioterms.etc.utils import iter_progress
 from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, embed_vocabulary, \
     restore_vocabulary, restore_vocabulary_embeddings, get_vocabulary_status
-from .utils import CONSOLE, run_async
+from .utils import CONSOLE, observe_cli_exception, run_async, verbose_cli, verbose_targets
 
 
 app = typer.Typer(help='Manage biomedical vocabularies.')
@@ -42,12 +42,14 @@ async def download_command(vocabulary: Annotated[
         else:
             CONSOLE.print('[red]Either specify a vocabulary to download or use the --all flag.[/red]')
             return
-        for vocabulary in target_vocabularies:
+        verbose_targets('download vocabulary', target_vocabularies)
+        for vocabulary in iter_progress(target_vocabularies, description='Downloading vocabularies'):
+            verbose_cli(f'downloading {vocabulary.value} (redownload={redownload})')
             await download_vocabulary(vocabulary, redownload)
             CONSOLE.print(f'[green]Successfully downloaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
+        observe_cli_exception('download vocabulary', e)
         CONSOLE.print(f'[red]Failed to download vocabulary {vocabulary.value}: {e}[/red]')
-        traceback.print_exc()
 
 
 @app.command(name='load', help='Load a vocabulary into database.')
@@ -90,6 +92,15 @@ async def load_command(vocabulary: Annotated[
                                     'backend (including PostgreSQL), or MongoDB with native Atlas '
                                     'Search, always recomputes these from the concept itself at '
                                     'restore time regardless. Ignored outside offline mode.')
+                       ] = False,
+                       no_annotation: Annotated[
+                           bool,
+                           typer.Option(
+                               '--no-annotation',
+                               help='Do not build optional annotations bundled with the vocabulary '
+                                    'release. Required Gene Symbol links for gene vocabularies '
+                                    'are not affected.'
+                           )
                        ] = False
                        ):
     try:
@@ -100,14 +111,23 @@ async def load_command(vocabulary: Annotated[
         else:
             CONSOLE.print('[red]Either specify a vocabulary to load or use the --all flag.[/red]')
             return
-        for vocabulary in target_vocabularies:
+        verbose_targets('load vocabulary', target_vocabularies)
+        for vocabulary in iter_progress(target_vocabularies, description='Loading vocabularies'):
+            verbose_cli(
+                f'loading {vocabulary.value} (overwrite={overwrite}, offline={offline}, '
+                f'build_search_index={not no_index}, load_annotations={not no_annotation})'
+            )
             await load_vocabulary(
-                vocabulary, drop_existing=overwrite, offline=offline, build_search_index=not no_index,
+                vocabulary,
+                drop_existing=overwrite,
+                offline=offline,
+                build_search_index=not no_index,
+                load_annotations=not no_annotation,
             )
             CONSOLE.print(f'[green]Successfully loaded vocabulary {vocabulary.value}.[/green]')
     except Exception as e:
+        observe_cli_exception('load vocabulary', e)
         CONSOLE.print(f'[red]Failed to load vocabulary {vocabulary.value}: {e}[/red]')
-        traceback.print_exc()
 
 
 @app.command(name='restore', help='Restore a vocabulary from offline dump files into the database.')
@@ -165,7 +185,12 @@ async def restore_command(vocabulary: Annotated[
         else:
             CONSOLE.print('[red]Either specify a vocabulary to restore or use the --all flag.[/red]')
             return
-        for vocabulary in target_vocabularies:
+        verbose_targets('restore vocabulary', target_vocabularies)
+        for vocabulary in iter_progress(target_vocabularies, description='Restoring vocabularies'):
+            verbose_cli(
+                f'restoring {vocabulary.value} (overwrite={overwrite}, batch_size={batch_size:,}, '
+                f'embeddings={not skip_embeddings})'
+            )
             summary = await restore_vocabulary(
                 vocabulary,
                 overwrite=overwrite,
@@ -179,8 +204,8 @@ async def restore_command(vocabulary: Annotated[
                 f'embeddings {"restored" if summary["embeddingsRestored"] else "skipped"}.[/green]'
             )
     except Exception as e:
+        observe_cli_exception('restore vocabulary', e)
         CONSOLE.print(f'[red]Failed to restore vocabulary {vocabulary.value}: {e}[/red]')
-        traceback.print_exc()
 
 
 @app.command(name='embed', help='Embed a vocabulary into vector database.')
@@ -233,7 +258,12 @@ async def embed_command(v: Annotated[
         else:
             CONSOLE.print('[red]Either specify a vocabulary to embed or use the --all flag.[/red]')
             return
-        for v in target_vocabularies:
+        verbose_targets('embed vocabulary', target_vocabularies)
+        for v in iter_progress(target_vocabularies, description='Embedding vocabularies'):
+            verbose_cli(
+                f'{"restoring embeddings for" if restore else "embedding"} {v.value} '
+                f'(overwrite={overwrite}, offline={offline})'
+            )
             if restore:
                 await restore_vocabulary_embeddings(v, drop_existing=overwrite)
                 CONSOLE.print(
@@ -246,8 +276,8 @@ async def embed_command(v: Annotated[
                     f'[green]Successfully embedded vocabulary {v.value}.[/green]'
                 )
     except Exception as e:
+        observe_cli_exception('embed vocabulary', e)
         CONSOLE.print(f'[red]Failed to embed vocabulary {v.value} into the vector database: {e}[/red]')
-        traceback.print_exc()
 
 
 @app.command(name='delete', help='Delete a vocabulary from database.')
@@ -273,12 +303,14 @@ async def delete_command(vocabulary: Annotated[
         else:
             CONSOLE.print('[red]Either specify a vocabulary to delete or use the --all flag.[/red]')
             return
-        for vocabulary in target_vocabularies:
+        verbose_targets('delete vocabulary', target_vocabularies)
+        for vocabulary in iter_progress(target_vocabularies, description='Deleting vocabularies'):
+            verbose_cli(f'deleting {vocabulary.value} from configured databases')
             await delete_vocabulary(vocabulary)
             CONSOLE.print(f'[green]Successfully deleted vocabulary {vocabulary.value} from the database.[/green]')
     except Exception as e:
+        observe_cli_exception('delete vocabulary', e)
         CONSOLE.print(f'[red]Failed to delete vocabulary {vocabulary.value} from the database: {e}[/red]')
-        traceback.print_exc()
 
 
 @app.command(name='status', help='Get the status of a vocabulary.')
@@ -292,8 +324,10 @@ async def status_command(vocabulary: Annotated[
     else:
         vocabularies = list(ConceptPrefix)
 
+    verbose_targets('check vocabulary status', vocabularies)
+
     statuses = []
-    for vocab in vocabularies:
+    for vocab in iter_progress(vocabularies, description='Checking vocabulary status'):
         status = await get_vocabulary_status(vocab)
         statuses.append(status)
 

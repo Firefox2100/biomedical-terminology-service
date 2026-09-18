@@ -12,7 +12,7 @@ import hashlib
 import base64
 from typing import Annotated
 from uuid import UUID
-from urllib.parse import urlencode, urlparse, quote
+from urllib.parse import urlencode, urlparse
 from markdown import markdown
 from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
@@ -563,7 +563,7 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
 
         if prefix in [
             ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.MONDO, ConceptPrefix.NCIT,
-            ConceptPrefix.OMIM, ConceptPrefix.ORDO, ConceptPrefix.SNOMED
+            ConceptPrefix.OMIM, ConceptPrefix.ORDO, ConceptPrefix.SNOMED, ConceptPrefix.UBERON
         ]:
             params = {
                 'ontology': prefix.value,

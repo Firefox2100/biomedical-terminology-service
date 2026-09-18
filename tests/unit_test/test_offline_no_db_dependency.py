@@ -36,6 +36,36 @@ async def test_load_vocabulary_offline_does_not_require_cache(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_load_vocabulary_forwards_annotation_option_when_supported(monkeypatch):
+    received = None
+
+    async def fake_load_vocabulary_from_file(
+        doc_db=None,
+        graph_db=None,
+        offline=False,
+        build_search_index=True,
+        load_annotations=True,
+    ):
+        nonlocal received
+        received = load_annotations
+
+    fake_module = types.SimpleNamespace(
+        FILE_PATHS=['/tmp/fake-vocabulary-file'],
+        load_vocabulary_from_file=fake_load_vocabulary_from_file,
+    )
+    monkeypatch.setattr(vocabulary, 'get_vocabulary_module', lambda _: fake_module)
+    monkeypatch.setattr(vocabulary, 'check_files_exist', lambda _: True)
+
+    await vocabulary.load_vocabulary(
+        prefix=ConceptPrefix.UNIPROT,
+        offline=True,
+        load_annotations=False,
+    )
+
+    assert received is False
+
+
+@pytest.mark.asyncio
 async def test_calculate_similarity_offline_does_not_require_cache(monkeypatch, tmp_path):
     async def fake_calculate_similarity(**_kwargs):
         yield 'a', 'b', 1.0

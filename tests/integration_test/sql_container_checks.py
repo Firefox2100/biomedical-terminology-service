@@ -19,13 +19,8 @@ explicitly:
 Requires: a working Docker daemon reachable from this host, and network access the first time
 to pull the postgres image (already present locally is fine/faster).
 """
-import os
-
 import pytest
 import pytest_asyncio
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from sqlalchemy.ext.asyncio import create_async_engine
 

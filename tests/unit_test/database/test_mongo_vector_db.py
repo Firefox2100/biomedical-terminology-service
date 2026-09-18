@@ -1,8 +1,4 @@
-import os
-
 import pytest
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
 
 from bioterms.database.vector_db.mongo_vector_db import MongoVectorDatabase
 from bioterms.database.vector_db.vector_db import EmbeddingItemVector

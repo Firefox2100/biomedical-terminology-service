@@ -1,9 +1,4 @@
-"""
-Dependency-free concept-text rendering: turns a raw concept record (label/synonyms/
-definition) into the candidate string used during training and evaluation. See README.md for
-why this lives in its own module (shared with future inference-time rendering) and no
-bioterms/torch/database imports are allowed here.
-"""
+"""Dependency-free concept text rendering for training and evaluation."""
 import hashlib
 from enum import Enum
 
@@ -49,7 +44,7 @@ def render_concept(label: str | None,
     `max_aliases` remain, a deterministic subset is kept via a stable hash of
     `(alias_selection_key, alias)` -- selection is reproducible per concept, not iteration-order.
     :param exclude_aliases: Synonym strings to omit (e.g. the query's own alias text, a
-        training-only augmentation -- see README).
+        training-only augmentation).
     :param max_aliases: Cap on rendered synonyms, or None for no cap.
     :param alias_selection_key: Stable per-concept key (e.g. "<prefix>:<concept_id>") used to
         pick which aliases survive the cap.

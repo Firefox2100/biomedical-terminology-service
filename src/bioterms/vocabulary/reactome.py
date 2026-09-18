@@ -1,23 +1,29 @@
 import os
 import json
+import aiofiles.os
 import httpx
 import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType, AnnotationType
+from bioterms.etc.enums import AnnotationType, ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType
 from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_zip, \
     iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
-from bioterms.model.concept import ReactomeConcept
 from bioterms.model.annotation import Annotation
-from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
+from bioterms.annotation.utils import AnnotationSource
+from bioterms.model.concept import ReactomeConcept
+from .utils import write_concepts_to_file, write_graph_to_file
 
 
 VOCABULARY_NAME = 'Reactome Pathways'
 VOCABULARY_PREFIX = ConceptPrefix.REACTOME
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
+    ConceptPrefix.HGNC,
+    ConceptPrefix.NCIT,
+    ConceptPrefix.OMIM,
     ConceptPrefix.UNIPROT,
 ]
 SIMILARITY_METHODS = []
@@ -29,10 +35,35 @@ FILE_PATHS = [
     'reactome/reaction_pathway.csv',
     'reactome/gene.csv',
     'reactome/gene_reaction.csv',
-    'reactome/gene_mapping.csv',
+    'reactome/physical_entity.csv',
+    'reactome/physical_entity_reaction.csv',
+]
+_REFERENCE_MAPPING_FILE_PATHS = {
+    ConceptPrefix.ENSEMBL: 'reactome/ensembl_mapping.csv',
+    ConceptPrefix.HGNC: 'reactome/hgnc_mapping.csv',
+    ConceptPrefix.OMIM: 'reactome/omim_mapping.csv',
+    ConceptPrefix.NCIT: 'reactome/ncit_mapping.csv',
+    ConceptPrefix.UNIPROT: 'reactome/uniprot_mapping.csv',
+}
+_CHEBI_MAPPING_FILE_PATH = 'reactome/chebi_mapping.csv'
+_DOWNLOAD_FILE_PATHS = [
+    *FILE_PATHS, *_REFERENCE_MAPPING_FILE_PATHS.values(), _CHEBI_MAPPING_FILE_PATH,
 ]
 TIMESTAMP_FILE = 'reactome/.timestamp'
 CONCEPT_CLASS = ReactomeConcept
+
+
+async def delete_vocabulary_files():
+    """Delete the complete Reactome download, including its separately managed mapping file."""
+    for file_path in _DOWNLOAD_FILE_PATHS:
+        try:
+            await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
+        except FileNotFoundError:
+            pass
+    try:
+        await aiofiles.os.remove(os.path.join(CONFIG.data_dir, TIMESTAMP_FILE))
+    except FileNotFoundError:
+        pass
 
 
 async def download_vocabulary(download_client: httpx.AsyncClient = None):
@@ -40,7 +71,7 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     Download the Reactome vocabulary files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
+    if check_files_exist(_DOWNLOAD_FILE_PATHS):
         return
 
     ensure_data_directory()
@@ -64,7 +95,13 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             ('reaction_pathway.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[4])),
             ('gene.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[5])),
             ('gene_reaction.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[6])),
-            ('gene_mapping.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[7]))
+            ('physical_entity.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
+            ('physical_entity_reaction.csv', os.path.join(CONFIG.data_dir, FILE_PATHS[8])),
+            *(
+                (os.path.basename(file_path), os.path.join(CONFIG.data_dir, file_path))
+                for file_path in _REFERENCE_MAPPING_FILE_PATHS.values()
+            ),
+            ('chebi_mapping.csv', os.path.join(CONFIG.data_dir, _CHEBI_MAPPING_FILE_PATH)),
         ]
     )
 
@@ -97,6 +134,7 @@ def _process_concept_files() -> tuple[list[CONCEPT_CLASS], nx.DiGraph]:
     pathway_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[0])))
     reaction_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[2])))
     gene_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[5])))
+    physical_entity_df = pd.read_csv(str(os.path.join(CONFIG.data_dir, FILE_PATHS[7])))
 
     concepts = []
     reactome_graph = nx.DiGraph()
@@ -116,6 +154,35 @@ def _process_concept_files() -> tuple[list[CONCEPT_CLASS], nx.DiGraph]:
             status=ConceptStatus.ACTIVE,
         )
 
+        concepts.append(concept)
+        reactome_graph.add_node(row['st_id'])
+
+    physical_entity_types = {
+        'Complex': ConceptType.COMPLEX,
+        'DefinedSet': ConceptType.ENTITY_SET,
+        'CandidateSet': ConceptType.ENTITY_SET,
+        'SimpleEntity': ConceptType.SIMPLE_ENTITY,
+        'ChemicalDrug': ConceptType.DRUG,
+        'ProteinDrug': ConceptType.DRUG,
+        'RNADrug': ConceptType.DRUG,
+        'Polymer': ConceptType.POLYMER,
+        'Cell': ConceptType.CELL,
+        'OtherEntity': ConceptType.OTHER_ENTITY,
+    }
+    for _, row in iter_progress(
+        physical_entity_df.iterrows(),
+        description='Processing Reactome physical entities',
+        total=len(physical_entity_df),
+    ):
+        label = row['display_name'] if not pd.isna(row['display_name']) else ''
+        concept = CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX,
+            conceptId=row['st_id'],
+            conceptTypes=[physical_entity_types[row['schema_class']]],
+            label=label,
+            synonyms=_parse_synonyms(row['synonyms'], label),
+            status=ConceptStatus.ACTIVE,
+        )
         concepts.append(concept)
         reactome_graph.add_node(row['st_id'])
 
@@ -185,6 +252,9 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
     gene_reaction_df = pd.read_csv(
         str(os.path.join(CONFIG.data_dir, FILE_PATHS[6]))
     )
+    physical_entity_reaction_df = pd.read_csv(
+        str(os.path.join(CONFIG.data_dir, FILE_PATHS[8]))
+    )
 
     verbose_print('Reactome relationship files loaded from disk, processing relationships...')
 
@@ -233,6 +303,54 @@ def _process_relationship_files(reactome_graph: nx.DiGraph):
                 label=ConceptRelationshipType(f'has_{row["relationship"]}'),
             )
 
+    for _, row in iter_progress(
+        physical_entity_reaction_df.iterrows(),
+        description='Processing Reactome physical-entity relationships',
+        total=len(physical_entity_reaction_df),
+    ):
+        reactome_graph.add_edge(
+            row['reaction_id'],
+            row['entity_id'],
+            label=ConceptRelationshipType(f'has_{row["relationship"]}'),
+        )
+
+
+def build_reference_annotations(target_prefix: ConceptPrefix,
+                                source_name: str | None = 'Reactome ReferenceEntity',
+                                ) -> list[Annotation]:
+    """Build Reactome annotations from one separately exported ReferenceEntity mapping."""
+    mapping_df = pd.read_csv(os.path.join(CONFIG.data_dir, _REFERENCE_MAPPING_FILE_PATHS[target_prefix]))
+    annotation_source = (
+        AnnotationSource(source_name, ConceptPrefix.REACTOME, target_prefix)
+        if source_name is not None else None
+    )
+    annotations = []
+    for _, row in iter_progress(
+        mapping_df.iterrows(),
+        description=f'Processing Reactome {target_prefix.value} mappings',
+        total=len(mapping_df),
+    ):
+        if source_name is None:
+            annotations.append(Annotation(
+                prefixFrom=ConceptPrefix.REACTOME,
+                conceptIdFrom=str(row['reactome_id']),
+                prefixTo=target_prefix,
+                conceptIdTo=str(row['external_id']),
+                annotationType=AnnotationType.EXACT,
+            ))
+        else:
+            annotations.append(annotation_source.create(
+                publisher_concept_id=str(row['reactome_id']),
+                other_concept_id=str(row['external_id']),
+                annotation_type=AnnotationType.EXACT,
+            ))
+    return annotations
+
+
+def build_uniprot_annotations() -> list[Annotation]:
+    """Build Reactome to UniProt annotations from the ReferenceEntity export."""
+    return build_reference_annotations(ConceptPrefix.UNIPROT)
+
 
 async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
@@ -251,33 +369,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     concepts, reactome_graph = _process_concept_files()
     _process_relationship_files(reactome_graph)
 
-    verbose_print('Building Reactome -> UniProt identity annotations...')
-
-    # gene_mapping.csv's 'symbol' column is misnamed: it actually holds UniProt accessions
-    # (Reactome's native protein identifier, confirmed against Reactome's own
-    # ReferenceGeneProduct.identifier field), not HGNC gene symbols. This is Reactome's own
-    # identity claim about which protein a GenomeEncodedEntity is -- EXACT is appropriate.
-    # HGNC-symbol resolution for that UniProt accession is the UniProt vocabulary's own
-    # concern (see vocabulary/uniprot.py's has_symbol annotations), not duplicated here --
-    # collapsing Reactome's protein-identity claim and HGNC's nomenclature claim into one
-    # edge was exactly the provenance conflation this change is meant to undo.
-    annotations = []
-    mapping_df = pd.read_csv(
-        str(os.path.join(CONFIG.data_dir, FILE_PATHS[7])),
-    )
-    for _, row in iter_progress(
-        mapping_df.iterrows(),
-        description='Processing Reactome UniProt mappings',
-        total=len(mapping_df),
-    ):
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=ConceptPrefix.UNIPROT,
-            conceptIdFrom=row['gene_id'],
-            conceptIdTo=row['symbol'],
-            annotationType=AnnotationType.EXACT,
-        ))
-
     verbose_print('Reactome concepts constructed, saving to databases...')
 
     if not offline:
@@ -295,7 +386,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             graph=reactome_graph,
         )
-        await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -308,8 +398,3 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             vocabulary_graph=reactome_graph,
         )
         del concepts
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            prefix_to=ConceptPrefix.UNIPROT,
-            annotations=annotations,
-        )

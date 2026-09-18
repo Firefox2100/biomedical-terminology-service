@@ -10,9 +10,10 @@ import aiofiles
 import aiofiles.os
 import numpy as np
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 from bioterms.etc.utils import check_files_exist, verbose_print
+from bioterms.etc.restore import batched_write
 from bioterms.database import Cache, DocumentDatabase, GraphDatabase, VectorDatabase, get_active_cache, \
     get_active_doc_db, get_active_graph_db, get_active_vector_db
 from bioterms.model.concept import Concept, GRAPH_NODE_EXTRA_PROPERTIES
@@ -72,6 +73,7 @@ async def download_vocabulary(prefix: ConceptPrefix,
     :param prefix: The prefix of the vocabulary to download.
     :param redownload: Whether to redownload the files even if they exist.
     """
+    LOGGER.info('Downloading vocabulary %s (redownload=%s)', prefix.value, redownload)
     vocabulary_module = get_vocabulary_module(prefix)
 
     if redownload:
@@ -90,6 +92,7 @@ async def download_vocabulary(prefix: ConceptPrefix,
     async with aiofiles.open(timestamp_file_path, 'w') as timestamp_file:
         current_time = datetime.now(timezone.utc).isoformat()
         await timestamp_file.write(current_time)
+    LOGGER.info('Vocabulary download complete: %s', prefix.value)
 
 
 async def create_indexes(prefix: ConceptPrefix,
@@ -104,6 +107,7 @@ async def create_indexes(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
     """
+    LOGGER.info('Creating indexes for vocabulary %s (overwrite=%s)', prefix.value, overwrite)
     vocabulary_module = get_vocabulary_module(prefix)
     cache = get_active_cache()
 
@@ -138,6 +142,7 @@ async def create_indexes(prefix: ConceptPrefix,
             await result
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Vocabulary indexes ready: %s', prefix.value)
 
 
 async def delete_vocabulary(prefix: ConceptPrefix,
@@ -154,6 +159,7 @@ async def delete_vocabulary(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :param vector_db: The vector database instance.
     """
+    LOGGER.info('Deleting vocabulary %s from configured databases', prefix.value)
     vocabulary_module = get_vocabulary_module(prefix)
     cache = cache or get_active_cache()
 
@@ -182,12 +188,14 @@ async def delete_vocabulary(prefix: ConceptPrefix,
             await result
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Vocabulary deletion complete: %s', prefix.value)
 
 
 async def load_vocabulary(prefix: ConceptPrefix,
                           drop_existing: bool = True,
                           offline: bool = False,
                           build_search_index: bool = True,
+                          load_annotations: bool = True,
                           cache: Cache = None,
                           doc_db: DocumentDatabase = None,
                           graph_db: GraphDatabase = None,
@@ -201,10 +209,16 @@ async def load_vocabulary(prefix: ConceptPrefix,
         fallback-search `nGrams`/`searchText` fields into the `.doc.dump` (see
         `write_concepts_to_file`). Ignored when `offline` is False. Pass False when the
         eventual restore target doesn't need them (any SQL backend) to skip this work.
+    :param load_annotations: Whether to build optional annotations bundled with the vocabulary
+        release. Vocabulary loaders that do not expose this option are unaffected.
     :param cache: The cache instance.
     :param doc_db: The document database instance.
     :param graph_db: The graph database instance.
     """
+    LOGGER.info(
+        'Loading vocabulary %s (drop_existing=%s, offline=%s, build_search_index=%s)',
+        prefix.value, drop_existing, offline, build_search_index,
+    )
     vocabulary_module = get_vocabulary_module(prefix)
 
     if not check_files_exist(vocabulary_module.FILE_PATHS):
@@ -230,12 +244,16 @@ async def load_vocabulary(prefix: ConceptPrefix,
     if load_func is None or not callable(load_func):
         raise ValueError(f'Vocabulary module for {prefix} does not have a load_vocabulary_from_file function.')
 
-    result = load_func(
-        doc_db=doc_db,
-        graph_db=graph_db,
-        offline=offline,
-        build_search_index=build_search_index,
-    )
+    load_kwargs = {
+        'doc_db': doc_db,
+        'graph_db': graph_db,
+        'offline': offline,
+        'build_search_index': build_search_index,
+    }
+    if 'load_annotations' in inspect.signature(load_func).parameters:
+        load_kwargs['load_annotations'] = load_annotations
+
+    result = load_func(**load_kwargs)
     if inspect.iscoroutine(result):
         await result
 
@@ -246,6 +264,7 @@ async def load_vocabulary(prefix: ConceptPrefix,
 
         await cache.purge()
         await cache.rotate_dataset_version()
+    LOGGER.info('Vocabulary load complete: %s (offline=%s)', prefix.value, offline)
 
 
 async def _embed_vocabulary_online(prefix: ConceptPrefix,
@@ -381,6 +400,10 @@ async def embed_vocabulary(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :param vector_db: The vector database instance.
     """
+    LOGGER.info(
+        'Embedding vocabulary %s (drop_existing=%s, offline=%s)',
+        prefix.value, drop_existing, offline,
+    )
     config = get_vocabulary_config(prefix)
 
     if not offline:
@@ -394,6 +417,7 @@ async def embed_vocabulary(prefix: ConceptPrefix,
             cache = get_active_cache()
 
         await cache.rotate_dataset_version()
+    LOGGER.info('Vocabulary embedding complete: %s (offline=%s)', prefix.value, offline)
 
 
 async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
@@ -412,6 +436,7 @@ async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
     :param graph_db: The graph database instance.
     :param vector_db: The vector database instance.
     """
+    LOGGER.info('Restoring vocabulary embeddings for %s', prefix.value)
     if doc_db is None:
         doc_db = await get_active_doc_db()
     if vector_db is None:
@@ -455,6 +480,7 @@ async def restore_vocabulary_embeddings(prefix: ConceptPrefix,
     )
 
     await cache.rotate_dataset_version()
+    LOGGER.info('Vocabulary embedding restore complete: %s', prefix.value)
 
 
 async def _restore_documents(prefix: ConceptPrefix,
@@ -484,29 +510,23 @@ async def _restore_documents(prefix: ConceptPrefix,
         destination to already be free of this vocabulary's data (see `overwrite`).
     :return: The number of concepts parsed and written from the dump file.
     """
-    concept_count = 0
-    batch: list[Concept] = []
+    async def concepts():
+        async with aiofiles.open(doc_path, encoding='utf-8') as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                concept = concept_class.model_validate_json(line)
+                if concept.prefix != prefix:
+                    raise ValueError(
+                        f'{doc_path} contains a document for prefix {concept.prefix!r}, expected {prefix!r}'
+                    )
+                yield concept
 
-    async with aiofiles.open(doc_path, encoding='utf-8') as f:
-        async for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            concept = concept_class.model_validate_json(line)
-            if concept.prefix != prefix:
-                raise ValueError(
-                    f'{doc_path} contains a document for prefix {concept.prefix!r}, expected {prefix!r}'
-                )
-            concept_count += 1
-            batch.append(concept)
-            if len(batch) >= batch_size:
-                await doc_db.save_terms(batch, no_upsert=no_upsert)
-                batch = []
-
-    if batch:
+    async def save(batch: list[Concept]) -> None:
         await doc_db.save_terms(batch, no_upsert=no_upsert)
 
-    return concept_count
+    return await batched_write(concepts(), save, batch_size)
 
 
 def _iter_offline_graph_edges(graph_path: str,
@@ -591,25 +611,11 @@ async def restore_vocabulary(prefix: ConceptPrefix,
     Restore a vocabulary from offline dump files (produced by `load_vocabulary(prefix,
     offline=True)`) into the live databases.
 
-    Unlike the standalone `scripts/load_offline_vocabulary.py` script this replaces, restoring
-    goes through the same `DocumentDatabase`/`GraphDatabase`/`VectorDatabase` interfaces as a
-    normal (non-offline) `load_vocabulary` call, so it automatically adapts to whichever
-    concrete drivers are configured (MongoDB or SQL for documents, Neo4j or PostgreSQL for the
-    graph, Qdrant/MongoDB/PostgreSQL for vectors) instead of assuming MongoDB+Neo4j+Qdrant --
-    including the native-vs-fallback auto-complete search indexing chosen per document database
-    backend (see `DocumentDatabase.create_index`), which this picks up for free by reusing
-    `create_indexes`/`save_terms` rather than hand-rolling an "nGrams" index.
+    Restoration uses the configured document, graph, and vector database interfaces.
 
-    Similarity dumps are restored separately, via `similarity.restore_similarity` -- similarity
-    is not part of a vocabulary's core data (it may not exist yet, may be recomputed with a
-    different method later, and is keyed by target vocabulary rather than owned by it the way
-    documents/graph edges are), so it gets its own CLI command rather than a flag here.
+    Similarity dumps are restored separately with `similarity.restore_similarity`.
 
-    Restoring proceeds in three independent steps -- documents (`.doc.dump`), then graph nodes
-    (`.node_ids.dump`), then graph edges (`.graph.dump`) -- deliberately not short-circuited by
-    one another, so a masked/partial restore where one dump is empty (e.g. rebuilding only the
-    graph half, with an empty `.doc.dump`) still restores whichever dumps do have content
-    instead of silently dropping or mis-prefixing the graph nodes.
+    Documents, graph nodes, and graph edges restore independently so partial dumps are valid.
     :param prefix: The prefix of the vocabulary to restore.
     :param overwrite: Whether to drop any existing data for this vocabulary before restoring.
         When False (default), documents/graph edges/embeddings are safely upserted into
@@ -625,6 +631,10 @@ async def restore_vocabulary(prefix: ConceptPrefix,
     :param vector_db: The vector database instance.
     :return: A summary dict with `conceptCount`, `edgeCount`, and `embeddingsRestored`.
     """
+    LOGGER.info(
+        'Restoring vocabulary %s (overwrite=%s, batch_size=%s, embeddings=%s)',
+        prefix.value, overwrite, batch_size, restore_embeddings,
+    )
     config = get_vocabulary_config(prefix)
     offline_dir = str(offline_dir) if offline_dir is not None else os.path.join(CONFIG.data_dir, 'offline')
 
@@ -700,6 +710,11 @@ async def restore_vocabulary(prefix: ConceptPrefix,
 
     await cache.purge()
     await cache.rotate_dataset_version()
+
+    LOGGER.info(
+        'Vocabulary restore complete: %s (%s concepts, %s edges, embeddings=%s)',
+        prefix.value, concept_count, edge_count, embeddings_restored,
+    )
 
     return {
         'conceptCount': concept_count,

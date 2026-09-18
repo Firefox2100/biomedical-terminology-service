@@ -1,18 +1,19 @@
-import os
+from functools import lru_cache
+
 import httpx
 import networkx as nx
-from owlready2 import get_ontology, default_world, ThingClass
+from owlready2 import default_world, ThingClass
 from urllib.parse import unquote
 
-from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, SimilarityMethod, \
     AnnotationType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, iter_progress, \
-    verbose_print
+from bioterms.etc.utils import check_files_exist, download_obo_owl_release, iter_progress, \
+    load_obo_owl_classes, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.concept import Concept
 from bioterms.model.annotation import Annotation
+from bioterms.annotation.utils import AnnotationSource, is_gene_annotation_prefix
 from .utils import write_concepts_to_file, write_graph_to_file, write_annotations_to_file
 
 
@@ -34,7 +35,35 @@ SIMILARITY_METHODS = [
 FILE_PATHS = ['mondo/mondo.owl']
 TIMESTAMP_FILE = 'mondo/.timestamp'
 CONCEPT_CLASS = Concept
-CONCEPT_TYPES = []
+
+
+@lru_cache
+def _mondo_annotation_source(target_prefix: ConceptPrefix | str) -> AnnotationSource:
+    return AnnotationSource('Mondo', VOCABULARY_PREFIX, target_prefix)
+
+
+def _create_mondo_annotation(target_prefix: ConceptPrefix | str,
+                             concept_id: str,
+                             target_id: str,
+                             annotation_type: AnnotationType,
+                             properties: dict[str, str] | None,
+                             ) -> Annotation:
+    # HGNC is a gene-vocabulary link and intentionally retains the legacy, provenance-free form.
+    if is_gene_annotation_prefix(target_prefix):
+        return Annotation(
+            prefixFrom=VOCABULARY_PREFIX,
+            prefixTo=target_prefix,
+            conceptIdFrom=concept_id,
+            conceptIdTo=target_id,
+            annotationType=annotation_type,
+            properties=properties,
+        )
+    return _mondo_annotation_source(target_prefix).create(
+        publisher_concept_id=concept_id,
+        other_concept_id=target_id,
+        annotation_type=annotation_type,
+        properties=properties,
+    )
 
 
 def map_vocabulary_prefix(vocabulary_id: str) -> ConceptPrefix | str:
@@ -231,13 +260,9 @@ def _build_mondo_xref_annotations(mondo_class: ThingClass,
 
             vocabulary_prefix = map_vocabulary_prefix(curie_id.split(':', 1)[0])
             target_id = curie_id.split(':', 1)[1]
-            annotations.append(Annotation(
-                prefixFrom=VOCABULARY_PREFIX,
-                prefixTo=vocabulary_prefix,
-                conceptIdFrom=concept_id,
-                conceptIdTo=target_id,
-                annotationType=annotation_type,
-                properties=_source_properties(curie_id),
+            annotations.append(_create_mondo_annotation(
+                vocabulary_prefix, concept_id, target_id, annotation_type,
+                _source_properties(curie_id),
             ))
 
     for xref in getattr(mondo_class, 'hasDbXref', []):
@@ -250,13 +275,9 @@ def _build_mondo_xref_annotations(mondo_class: ThingClass,
 
         xref_prefix, target_id = xref.split(':', 1)
         vocabulary_prefix = map_vocabulary_prefix(xref_prefix)
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=vocabulary_prefix,
-            conceptIdFrom=concept_id,
-            conceptIdTo=target_id,
-            annotationType=AnnotationType.ANNOTATED_WITH,
-            properties=_source_properties(xref),
+        annotations.append(_create_mondo_annotation(
+            vocabulary_prefix, concept_id, target_id, AnnotationType.ANNOTATED_WITH,
+            _source_properties(xref),
         ))
 
     return annotations
@@ -267,15 +288,8 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
     Download the Mondo vocabulary files.
     :param download_client: Optional httpx.AsyncClient to use for downloading.
     """
-    if check_files_exist(FILE_PATHS):
-        return
-
-    ensure_data_directory()
-
-    owl_url = 'https://github.com/monarch-initiative/mondo/releases/latest/download/mondo.owl'
-
-    await download_file(
-        url=owl_url,
+    await download_obo_owl_release(
+        release_url='https://github.com/monarch-initiative/mondo/releases/latest/download/mondo.owl',
         file_path=FILE_PATHS[0],
         download_client=download_client,
     )
@@ -285,6 +299,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
                                     graph_db: GraphDatabase = None,
                                     offline: bool = False,
                                     build_search_index: bool = True,
+                                    load_annotations: bool = True,
                                     ):
     """
     Load the Mondo vocabulary from a file into the primary databases.
@@ -295,17 +310,18 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('Mondo owl file not found')
 
-    full_ontology_path = os.path.join(CONFIG.data_dir, FILE_PATHS[0])
-    verbose_print(f'Loading Mondo ontology from {full_ontology_path}')
-
-    owl_file_path = f'file://{full_ontology_path}'
-
-    mondo_ontology = get_ontology(owl_file_path).load()
-    mondo_classes = list(mondo_ontology.classes())
+    verbose_print('Loading Mondo ontology')
+    mondo_ontology, mondo_classes = load_obo_owl_classes(FILE_PATHS[0], 'MONDO_')
     verbose_print('Mondo ontology read from file')
 
-    xref_source_lookup = _build_xref_source_lookup(mondo_ontology.world)
-    verbose_print(f'Built per-xref provenance lookup for {len(xref_source_lookup)} hasDbXref statements')
+    xref_source_lookup = (
+        _build_xref_source_lookup(mondo_ontology.world)
+        if load_annotations else {}
+    )
+    if load_annotations:
+        verbose_print(
+            f'Built per-xref provenance lookup for {len(xref_source_lookup)} hasDbXref statements'
+        )
 
     mondo_graph = nx.DiGraph()
     concepts = []
@@ -321,7 +337,14 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         mondo_graph.add_node(concept.concept_id)
 
         _add_mondo_is_a_edges(mondo_graph, mondo_class, concept.concept_id)
-        annotations.extend(_build_mondo_xref_annotations(mondo_class, concept.concept_id, xref_source_lookup))
+        if load_annotations:
+            annotations.extend(
+                _build_mondo_xref_annotations(
+                    mondo_class,
+                    concept.concept_id,
+                    xref_source_lookup,
+                )
+            )
 
     if not offline:
         if doc_db is None:
@@ -341,8 +364,9 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             graph=mondo_graph,
         )
 
-        verbose_print(f'Saving {len(annotations)} OHDSI annotations to the database...')
-        await graph_db.save_annotations(annotations)
+        if load_annotations:
+            verbose_print(f'Saving {len(annotations)} Mondo annotations to the database...')
+            await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -354,7 +378,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             vocabulary_graph=mondo_graph,
         )
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            annotations=annotations,
-        )
+        if load_annotations:
+            await write_annotations_to_file(
+                prefix_from=VOCABULARY_PREFIX,
+                annotations=annotations,
+            )

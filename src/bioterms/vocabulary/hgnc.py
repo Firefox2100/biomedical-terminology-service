@@ -18,7 +18,11 @@ from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_grap
 VOCABULARY_NAME = 'HUGO Gene Nomenclature Committee'
 VOCABULARY_PREFIX = ConceptPrefix.HGNC
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
     ConceptPrefix.MONDO,
+    ConceptPrefix.OMIM,
+    ConceptPrefix.REACTOME,
+    ConceptPrefix.UNIPROT,
 ]
 SIMILARITY_METHODS = []
 FILE_PATHS = [
@@ -72,7 +76,7 @@ def _build_hgnc_symbol_concept(row) -> tuple[CONCEPT_CLASS, list[Annotation]]:
             annotations.append(Annotation(
                 prefixFrom=VOCABULARY_PREFIX,
                 prefixTo=ConceptPrefix.HGNC_SYMBOL,
-                conceptIdFrom=row['hgnc_id'],
+                conceptIdFrom=row['hgnc_id'].split(':', 1)[-1],
                 conceptIdTo=alias_symbol,
                 annotationType=AnnotationType.ALIAS_SYMBOL,
             ))
@@ -101,7 +105,7 @@ def _build_hgnc_symbol_concept(row) -> tuple[CONCEPT_CLASS, list[Annotation]]:
     annotations.append(Annotation(
         prefixFrom=VOCABULARY_PREFIX,
         prefixTo=ConceptPrefix.HGNC_SYMBOL,
-        conceptIdFrom=row['hgnc_id'],
+        conceptIdFrom=row['hgnc_id'].split(':', 1)[-1],
         conceptIdTo=row['symbol'],
         annotationType=AnnotationType.HAS_SYMBOL,
     ))
@@ -139,7 +143,7 @@ def _build_hgnc_withdrawn_concept(row,
     annotation = Annotation(
         prefixFrom=VOCABULARY_PREFIX,
         prefixTo=ConceptPrefix.HGNC_SYMBOL,
-        conceptIdFrom=row['HGNC_ID'],
+        conceptIdFrom=row['HGNC_ID'].split(':', 1)[-1],
         conceptIdTo=row['WITHDRAWN_SYMBOL'],
         annotationType=AnnotationType.PREVIOUS_SYMBOL,
     )

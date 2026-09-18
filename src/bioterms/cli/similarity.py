@@ -1,13 +1,13 @@
-import traceback
 from pathlib import Path
 from typing import Annotated, Optional
 import typer
 
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
+from bioterms.etc.utils import iter_progress
 from bioterms.vocabulary import get_vocabulary_config
 from bioterms.similarity import calculate_similarity, restore_similarity
-from .utils import CONSOLE, run_async
+from .utils import CONSOLE, observe_cli_exception, run_async, verbose_cli, verbose_targets
 
 
 app = typer.Typer(help='Manage similarity computations between biomedical terms.')
@@ -31,6 +31,10 @@ async def _run_one_similarity_calculation(target: ConceptPrefix,
     :param annotation_file: Optional annotation dump override for offline calculation.
     """
     try:
+        verbose_cli(
+            f'calculating {method.value} similarity for {target.value} -> {corp.value} '
+            f'(threshold={threshold if threshold is not None else "default"}, offline={offline})'
+        )
         await calculate_similarity(
             method=method,
             target_prefix=target,
@@ -44,11 +48,11 @@ async def _run_one_similarity_calculation(target: ConceptPrefix,
             f'{target.value} and {corp.value} using {method.value} method.[/green]'
         )
     except Exception as e:
+        observe_cli_exception('calculate similarity', e)
         CONSOLE.print(
             f'[red]Failed to calculate similarity between '
             f'{target.value} and {corp.value} using {method.value} method: {e}[/red]'
         )
-        traceback.print_exc()
 
 
 @app.command(name='calculate', help='Calculate similarity between two vocabularies and store the results.')
@@ -109,15 +113,23 @@ async def calculate_command(target_prefix: Annotated[
         raise typer.BadParameter('--annotation-file requires --offline.')
 
     targets = [target_prefix] if target_prefix else list(ConceptPrefix)
+    verbose_targets('calculate similarity', targets)
 
+    jobs = []
     for target in targets:
         target_config = get_vocabulary_config(target)
         corpus = [corpus_prefix] if corpus_prefix else target_config['annotations']
         methods = [method] if method else target_config['similarityMethods']
-
         for corp in corpus:
             for m in methods:
-                await _run_one_similarity_calculation(target, corp, m, threshold, offline, annotation_file)
+                jobs.append((target, corp, m))
+
+    verbose_cli(f'calculate similarity: planned {len(jobs):,} target/corpus/method combination(s)')
+    for target, corp, selected_method in iter_progress(
+            jobs, description='Calculating similarities'):
+        await _run_one_similarity_calculation(
+            target, corp, selected_method, threshold, offline, annotation_file,
+        )
 
 
 @app.command(name='restore', help='Restore similarity scores from offline dump files into the database.')
@@ -161,14 +173,17 @@ async def restore_command(target_prefix: Annotated[
         targets = [target_prefix]
 
     search_dir = Path(offline_dir) if offline_dir else Path(CONFIG.data_dir) / 'offline'
+    verbose_targets('restore similarity', targets)
+    verbose_cli(f'searching for similarity dumps in {search_dir} (batch_size={batch_size:,})')
 
-    for target in targets:
+    for target in iter_progress(targets, description='Restoring vocabulary similarities'):
         if restore_all and not list(search_dir.glob(f'{target.value}-*.similarity.dump')):
             # --all sweeps every prefix; most won't have similarity dumps, which is expected
             # (only a few vocabularies get similarity calculated at all) -- skip silently
             # rather than reporting every vocabulary without one as a failure.
             continue
         try:
+            verbose_cli(f'restoring similarity scores for {target.value}')
             count = await restore_similarity(
                 target_prefix=target,
                 batch_size=batch_size,
@@ -178,5 +193,5 @@ async def restore_command(target_prefix: Annotated[
                 f'[green]Successfully restored {count} similarity scores for {target.value}.[/green]'
             )
         except Exception as e:
+            observe_cli_exception('restore similarity', e)
             CONSOLE.print(f'[red]Failed to restore similarity scores for {target.value}: {e}[/red]')
-            traceback.print_exc()

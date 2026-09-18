@@ -8,20 +8,24 @@ import networkx as nx
 import pandas as pd
 
 from bioterms.etc.consts import CONFIG
-from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType, AnnotationType
+from bioterms.etc.enums import ConceptPrefix, ConceptStatus, ConceptRelationshipType, ConceptType
 from bioterms.etc.errors import FilesNotFound
-from bioterms.etc.utils import check_files_exist, ensure_data_directory, download_file, extract_file_from_gzip, \
-    iter_progress, verbose_print
+from bioterms.etc.utils import check_files_exist, discover_latest_numbered_release, \
+    ensure_data_directory, download_file, extract_file_from_gzip, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
-from bioterms.model.annotation import Annotation
 from bioterms.model.concept import EnsemblConcept
-from .utils import ensure_gene_symbol_loaded, write_concepts_to_file, write_graph_to_file, \
-    write_annotations_to_file
+from .utils import write_concepts_to_file, write_graph_to_file
 
 
 VOCABULARY_NAME = 'Ensembl'
 VOCABULARY_PREFIX = ConceptPrefix.ENSEMBL
-ANNOTATIONS = []
+ANNOTATIONS = [
+    ConceptPrefix.HGNC,
+    ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.OMIM,
+    ConceptPrefix.REACTOME,
+    ConceptPrefix.UNIPROT,
+]
 SIMILARITY_METHODS = []
 FILE_PATHS = [
     'ensembl/homo-sapien.gtf',
@@ -40,7 +44,27 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
 
     ensure_data_directory()
 
-    annotation_url = 'https://ftp.ensembl.org/pub/release-115/gtf/homo_sapiens/Homo_sapiens.GRCh38.115.gtf.gz'
+    release, release_url = await discover_latest_numbered_release(
+        'https://ftp.ensembl.org/pub/', download_client,
+    )
+    directory_url = f'{release_url}gtf/homo_sapiens/'
+    close_client = download_client is None
+    client = download_client or httpx.AsyncClient(follow_redirects=True)
+    try:
+        response = await client.get(directory_url)
+        response.raise_for_status()
+        filenames = re.findall(
+            rf'href="(Homo_sapiens\.GRCh38\.{release}\.gtf\.gz)"',
+            response.text,
+        )
+    finally:
+        if close_client:
+            await client.aclose()
+
+    if not filenames:
+        raise ValueError('Could not discover the current Ensembl human GTF release.')
+
+    annotation_url = f'{directory_url}{filenames[0]}'
     gzip_path = os.path.join(CONFIG.data_dir, 'ensembl/homo-sapien.gz')
 
     try:
@@ -61,92 +85,29 @@ async def download_vocabulary(download_client: httpx.AsyncClient = None):
             pass
 
 
-def _load_hgnc_ensembl_symbol_lookup() -> dict[str, str]:
-    """
-    Build an ensembl_gene_id -> HGNC-approved symbol lookup from HGNC's own release file.
-
-    Ensembl's GTF gene_name is externally documented (Ensembl genebuild gene-naming docs)
-    as HGNC-sourced for the great majority of human protein-coding genes -- so asserting it
-    as a fresh has_symbol edge risks double-counting one HGNC nomenclature decision as two
-    independent votes (Ensembl's and HGNC's own). This lookup is used only to TAG (never to
-    filter, replace, or remove) Ensembl's GTF-derived has_symbol edges when the GTF's
-    gene_name matches HGNC's own ensembl_gene_id crosswalk for that gene -- downstream
-    consensus/provenance modelling can then discount a tagged edge without bts having to
-    change what it serves.
-    :return: A dict mapping ensembl_gene_id to HGNC's approved symbol. Empty if HGNC's
-        release file is not present -- this is a provenance enrichment, not a hard
-        prerequisite for loading Ensembl's own gene/transcript/exon/protein data.
-    """
-    hgnc_symbol_path = os.path.join(CONFIG.data_dir, 'hgnc/symbol.txt')
-    if not os.path.exists(hgnc_symbol_path):
-        verbose_print(
-            'HGNC symbol file not found -- Ensembl has_symbol edges will not be tagged '
-            'with HGNC crosswalk provenance.'
-        )
-        return {}
-
-    hgnc_df = pd.read_csv(
-        hgnc_symbol_path,
-        sep='\t',
-        dtype=str,
-        usecols=['ensembl_gene_id', 'symbol'],
-    )
-
-    lookup: dict[str, str] = {}
-    for _, row in hgnc_df.iterrows():
-        if pd.isna(row['ensembl_gene_id']) or pd.isna(row['symbol']):
-            continue
-        # A small number of ensembl_gene_id values (3 of 42,346 in the 2026-07-22 release)
-        # appear on more than one HGNC row; last one wins, which is an acceptable
-        # approximation for a tagging-only lookup.
-        lookup[row['ensembl_gene_id']] = row['symbol']
-
-    return lookup
-
-
 def _handle_gene_feature(attributes: dict,
                          row,
                          genes: dict[str, CONCEPT_CLASS],
                          ensembl_graph: nx.DiGraph,
-                         annotations: list[Annotation],
-                         hgnc_ensembl_lookup: dict[str, str] = None,
                          ):
     """
-    Process a GTF 'gene' feature row into a gene Concept and its HGNC symbol annotation.
+    Process a GTF 'gene' feature row into a gene Concept.
     """
     if attributes['gene_id'] in genes:
         return
 
-    hgnc_ensembl_lookup = hgnc_ensembl_lookup or {}
-
-    if 'gene_name' in attributes:
-        label = attributes['gene_name']
-        hgnc_symbol = hgnc_ensembl_lookup.get(attributes['gene_id'])
-        properties = (
-            {'derivation': 'hgnc_ensembl_gene_id_xref'}
-            if hgnc_symbol is not None and hgnc_symbol == attributes['gene_name']
-            else None
-        )
-        annotations.append(Annotation(
-            prefixFrom=VOCABULARY_PREFIX,
-            prefixTo=ConceptPrefix.HGNC_SYMBOL,
-            conceptIdFrom=attributes['gene_id'],
-            conceptIdTo=attributes['gene_name'],
-            annotationType=AnnotationType.HAS_SYMBOL,
-            properties=properties,
-        ))
-    else:
-        label = None
-
     gene_concept = CONCEPT_CLASS(
         prefix=VOCABULARY_PREFIX,
         conceptId=attributes['gene_id'],
-        label=label,
+        label=attributes.get('gene_name'),
         conceptTypes=[ConceptType.GENE],
         bioType=attributes['gene_biotype'],
         start=int(row['start']),
         end=int(row['end']),
         sequence=row['seqname'],
+        version=attributes.get('gene_version'),
+        strand=row['strand'],
+        source=attributes.get('gene_source', row['source']),
         status=ConceptStatus.ACTIVE,
     )
 
@@ -172,6 +133,10 @@ def _handle_transcript_feature(attributes: dict,
             start=int(row['start']),
             end=int(row['end']),
             sequence=row['seqname'],
+            version=attributes.get('transcript_version'),
+            strand=row['strand'],
+            source=attributes.get('transcript_source', row['source']),
+            transcriptSupportLevel=attributes.get('transcript_support_level'),
             status=ConceptStatus.ACTIVE,
         )
 
@@ -201,6 +166,9 @@ def _handle_exon_feature(attributes: dict,
             start=int(row['start']),
             end=int(row['end']),
             sequence=row['seqname'],
+            version=attributes.get('exon_version'),
+            strand=row['strand'],
+            source=row['source'],
             status=ConceptStatus.ACTIVE,
         )
 
@@ -230,11 +198,18 @@ def _handle_cds_feature(attributes: dict,
             start=int(row['start']),
             end=int(row['end']),
             sequence=row['seqname'],
+            version=attributes.get('protein_version'),
+            strand=row['strand'],
+            source=row['source'],
             status=ConceptStatus.ACTIVE,
         )
 
         proteins[attributes['protein_id']] = protein_concept
         ensembl_graph.add_node(protein_concept.concept_id)
+    else:
+        protein_concept = proteins[attributes['protein_id']]
+        protein_concept.start = min(protein_concept.start, int(row['start']))
+        protein_concept.end = max(protein_concept.end, int(row['end']))
 
     ensembl_graph.add_edge(
         attributes['protein_id'],
@@ -257,15 +232,7 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     if not check_files_exist(FILE_PATHS):
         raise FilesNotFound('Ensembl gtf file not found')
 
-    verbose_print('Checking if HGNC symbols are loaded...')
-
-    if not offline:
-        await ensure_gene_symbol_loaded(
-            doc_db=doc_db,
-            graph_db=graph_db,
-        )
-
-    gene_df = pd.read_csv(
+    gene_chunks = pd.read_csv(
         str(os.path.join(CONFIG.data_dir, FILE_PATHS[0])),
         sep='\t',
         comment='#',
@@ -283,7 +250,8 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
         ],
         dtype={
             'seqname': str,
-        }
+        },
+        chunksize=100000,
     )
 
     genes: dict[str, CONCEPT_CLASS] = {}
@@ -291,30 +259,28 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
     exons: dict[str, CONCEPT_CLASS] = {}
     proteins: dict[str, CONCEPT_CLASS] = {}
     ensembl_graph = nx.DiGraph()
-    annotations = []
-    hgnc_ensembl_lookup = _load_hgnc_ensembl_symbol_lookup()
 
     verbose_print('Ensembl GTF file read, processing entries...')
 
-    for _, row in iter_progress(gene_df.iterrows(), description='Processing GTF entries', total=len(gene_df)):
-        # Parse the attribute into a dictionary. GTF attributes are `key "value";` pairs --
-        # shlex.split already splits each pair into two separate tokens (key, value), so they
-        # are recombined here by pairing up consecutive tokens rather than re-splitting each
-        # token on a space it no longer contains.
-        attribute_tokens = shlex.split(row['attribute'].replace(';', ' '))
-        attributes = dict(zip(attribute_tokens[0::2], attribute_tokens[1::2]))
+    for gene_df in gene_chunks:
+        for _, row in iter_progress(
+            gene_df.iterrows(), description='Processing GTF entries', total=len(gene_df),
+        ):
+            # GTF attributes are `key "value";` pairs. shlex splits each pair into two
+            # tokens, which are recombined here. Repeated attributes such as `tag` are not
+            # currently persisted and therefore do not affect the feature model.
+            attribute_tokens = shlex.split(row['attribute'].replace(';', ' '))
+            attributes = dict(zip(attribute_tokens[0::2], attribute_tokens[1::2]))
 
-        feature = row['feature']
-        if feature == 'gene':
-            _handle_gene_feature(attributes, row, genes, ensembl_graph, annotations, hgnc_ensembl_lookup)
-        elif feature == 'transcript':
-            _handle_transcript_feature(attributes, row, transcripts, ensembl_graph)
-        elif feature == 'exon':
-            _handle_exon_feature(attributes, row, exons, ensembl_graph)
-        elif feature == 'CDS':
-            _handle_cds_feature(attributes, row, proteins, ensembl_graph)
-
-    del gene_df
+            feature = row['feature']
+            if feature == 'gene':
+                _handle_gene_feature(attributes, row, genes, ensembl_graph)
+            elif feature == 'transcript':
+                _handle_transcript_feature(attributes, row, transcripts, ensembl_graph)
+            elif feature == 'exon':
+                _handle_exon_feature(attributes, row, exons, ensembl_graph)
+            elif feature == 'CDS':
+                _handle_cds_feature(attributes, row, proteins, ensembl_graph)
 
     verbose_print('Ensembl concepts processed, saving to databases...')
 
@@ -342,7 +308,6 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             concepts=concepts,
             graph=ensembl_graph,
         )
-        await graph_db.save_annotations(annotations)
     else:
         await write_concepts_to_file(
             prefix=VOCABULARY_PREFIX,
@@ -355,8 +320,3 @@ async def load_vocabulary_from_file(doc_db: DocumentDatabase = None,
             vocabulary_graph=ensembl_graph,
         )
         del concepts
-        await write_annotations_to_file(
-            prefix_from=VOCABULARY_PREFIX,
-            prefix_to=ConceptPrefix.HGNC_SYMBOL,
-            annotations=annotations,
-        )

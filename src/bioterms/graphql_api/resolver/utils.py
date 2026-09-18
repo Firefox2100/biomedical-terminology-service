@@ -62,6 +62,7 @@ def prefix_to_concept_type(prefix: ConceptPrefix) -> str:
         ConceptPrefix.ORDO: 'OrdoConcept',
         ConceptPrefix.REACTOME: 'ReactomeConcept',
         ConceptPrefix.SNOMED: 'SnomedConcept',
+        ConceptPrefix.UNIPROT: 'UniProtConcept',
     }
     
     if prefix in mapping:
@@ -84,6 +85,20 @@ def type_to_reactome_concept_type(type_name: str) -> str:
         return 'ReactomeGene'
 
     raise ValueError(f'Unknown Reactome concept type: {type_name}')
+
+
+def type_to_ensembl_concept_type(type_name: str) -> str:
+    """Map an Ensembl concept type value to its concrete GraphQL object type."""
+    mapping = {
+        'gene': 'EnsemblGene',
+        'transcript': 'EnsemblTranscript',
+        'exon': 'EnsemblExon',
+        'protein': 'EnsemblProtein',
+    }
+    try:
+        return mapping[type_name]
+    except KeyError as exc:
+        raise ValueError(f'Unknown Ensembl concept type: {type_name}') from exc
 
 
 @GRAPHQL_QUERY_TYPE.field('loadedPrefixes')
@@ -296,14 +311,32 @@ async def resolve_concept_paths_to(obj,
     ))
 
     reactome_loader = data_loader.get_concept_loader(ConceptPrefix.REACTOME)
+    ensembl_loader = data_loader.get_concept_loader(ConceptPrefix.ENSEMBL)
     reactome_concept_ids = set()
+    ensembl_concept_ids = set()
     for path in paths:
         for node in path[1]:
             if node[0] == ConceptPrefix.REACTOME.value:
                 reactome_concept_ids.add(node[1])
+            elif node[0] == ConceptPrefix.ENSEMBL.value:
+                ensembl_concept_ids.add(node[1])
 
     reactome_concepts = await reactome_loader.id.load_many(list(reactome_concept_ids))
     reactome_concept_map = {concept['conceptId']: concept for concept in reactome_concepts if concept}
+    ensembl_concepts = await ensembl_loader.id.load_many(list(ensembl_concept_ids))
+    ensembl_concept_map = {concept['conceptId']: concept for concept in ensembl_concepts if concept}
+
+    def graphql_type(node_prefix: str, concept_id: str) -> str:
+        prefix_value = ConceptPrefix(node_prefix)
+        if prefix_value == ConceptPrefix.REACTOME:
+            return type_to_reactome_concept_type(
+                reactome_concept_map[concept_id]['conceptTypes'][0],
+            )
+        if prefix_value == ConceptPrefix.ENSEMBL:
+            return type_to_ensembl_concept_type(
+                ensembl_concept_map[concept_id]['conceptTypes'][0],
+            )
+        return prefix_to_concept_type(prefix_value)
 
     return [
         {
@@ -311,9 +344,7 @@ async def resolve_concept_paths_to(obj,
             'nodes': [
                 {
                     # Concept is an interface so need to set the type manually
-                    '__typename': prefix_to_concept_type(ConceptPrefix(node[0]))
-                        if ConceptPrefix(node[0]) != ConceptPrefix.REACTOME
-                        else type_to_reactome_concept_type(reactome_concept_map[node[1]]['conceptTypes'][0]),
+                    '__typename': graphql_type(node[0], node[1]),
                     'conceptId': node[1],
                     'prefix': node[0],
                 } for node in nodes

@@ -28,7 +28,8 @@ from bioterms import __version__
 from bioterms.etc.consts import LOGGER, CONFIG, STATIC_FILE_PATH
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import BtsError
-from bioterms.etc.utils import report_exception
+from bioterms.etc.utils import initialize_error_reporting, report_exception
+from bioterms.etc.metrics import initialize_metrics
 from bioterms.etc.asgi_management import ReloadableASGIApp
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.vocabulary import get_vocabulary_status
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
     :param app: The FastAPI application instance.
     """
     LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
+    initialize_metrics()
 
     cache = get_active_cache()
     doc_db = await get_active_doc_db()
@@ -107,35 +109,6 @@ async def rebuild_cache():
             doc_db=doc_db,
             graph_db=graph_db,
             use_cache=False,
-        )
-
-
-def _init_error_reporting():
-    """
-    Initialise Sentry error reporting if enabled and configured.
-    """
-    if not CONFIG.enable_error_reporting:
-        return
-
-    import sentry_sdk
-
-    if not CONFIG.sentry_dsn:
-        LOGGER.warning('Sentry DSN is not provided; error reporting will not be enabled.')
-        return
-
-    if CONFIG.enable_profiling:
-        sentry_sdk.init(
-            dsn=CONFIG.sentry_dsn,
-            release=__version__,
-            send_default_pii=True,
-            traces_sample_rate=1.0,
-            profile_session_sample_rate=1.0,
-            profile_lifecycle="trace",
-        )
-    else:
-        sentry_sdk.init(
-            dsn=CONFIG.sentry_dsn,
-            release=__version__,
         )
 
 
@@ -302,7 +275,7 @@ def create_app() -> FastAPI:
     FastAPI application factory function.
     :return: An instance of FastAPI application.
     """
-    _init_error_reporting()
+    initialize_error_reporting(__version__)
 
     mcp_app = mcp.http_app(path='/')
 

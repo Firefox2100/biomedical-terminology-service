@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from collections.abc import AsyncIterator
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import VectorDatabaseDriverType, ConceptPrefix, EmbeddingKind
 from bioterms.model.concept import Concept
 
@@ -277,6 +277,7 @@ def get_active_vector_db() -> VectorDatabase:
         QdrantVectorDatabase.set_client(qdrant_client)
 
         _active_vector_db = QdrantVectorDatabase()
+        LOGGER.info('Initialized vector database backend: qdrant')
 
         return _active_vector_db
 
@@ -295,6 +296,7 @@ def get_active_vector_db() -> VectorDatabase:
         MongoVectorDatabase.set_client(mongo_client)
 
         _active_vector_db = MongoVectorDatabase()
+        LOGGER.info('Initialized vector database backend: mongodb')
 
         return _active_vector_db
 
@@ -306,6 +308,7 @@ def get_active_vector_db() -> VectorDatabase:
         PostgresVectorDatabase.set_engine(pg_engine)
 
         _active_vector_db = PostgresVectorDatabase()
+        LOGGER.info('Initialized vector database backend: postgresql')
 
         return _active_vector_db
 

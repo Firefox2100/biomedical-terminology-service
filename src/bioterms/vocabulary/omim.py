@@ -18,9 +18,13 @@ from .utils import write_concepts_to_file, write_graph_to_file
 VOCABULARY_NAME = 'Online Mendelian Inheritance in Man'
 VOCABULARY_PREFIX = ConceptPrefix.OMIM
 ANNOTATIONS = [
+    ConceptPrefix.ENSEMBL,
+    ConceptPrefix.HGNC,
     ConceptPrefix.HGNC_SYMBOL,
+    ConceptPrefix.HPO,
     ConceptPrefix.MONDO,
     ConceptPrefix.ORDO,
+    ConceptPrefix.REACTOME,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,

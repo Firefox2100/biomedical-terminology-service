@@ -50,8 +50,8 @@ type ReactomeReaction implements ReactomeConcept & Concept {
 
     pathways: [ReactomePathway!]!
 
-    inputs: [ReactomeGene!]!
-    outputs: [ReactomeGene!]!
+    inputs: [ReactomeConcept!]!
+    outputs: [ReactomeConcept!]!
 
     similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
     pathsTo(
@@ -75,6 +75,27 @@ type ReactomeGene implements ReactomeConcept & Concept & GeneConcept {
     isOutput: [ReactomeReaction!]!
 
     symbols: [HgncSymbolConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
+    pathsTo(
+        targetPrefix: ConceptPrefix!
+        targetConceptId: String!
+        relationship: RelationshipType!
+        direction: PathDirection = forward
+        maxDepth: Int = 12
+    ): [ConceptPath!]!
+}
+
+type ReactomePhysicalEntity implements ReactomeConcept & Concept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    synonyms: [String!]
+    inferred: Boolean
+    status: ConceptStatus!
+
+    isInput: [ReactomeReaction!]!
+    isOutput: [ReactomeReaction!]!
 
     similarConcepts(threshold: Float): [SimilarReactomeConcept!]!
     pathsTo(

@@ -1,0 +1,12 @@
+name: reactome
+
+services:
+  reactome-graphdb:
+    image: public.ecr.aws/reactome/graphdb:latest
+    container_name: reactome-graphdb
+    ports:
+      - "27474:7474"
+      - "27687:7687"
+    environment:
+      NEO4J_dbms_memory_heap_maxSize: 2g
+    restart: unless-stopped

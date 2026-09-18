@@ -11,10 +11,10 @@ This software aims to support a wide range of biomedical vocabularies and ontolo
 Vocabulary                   Status             Note
 ============================ ================== ===========================================================================
 CTV3                         Supported          Downloaded from the NHS TRUD API.
-Ensembl                      Supported          Downloaded via FTP from Ensembl.
+Ensembl                      Supported          Current human GTF downloaded via FTP; genes, transcripts, exons, and
+                                                 proteins are first-class concepts. External mappings are separate annotations.
 HGNC                         Supported          Downloaded from the HGNC release on Google Drive.
-HGNC Symbol (``gene``)       Supported          Derived automatically from the HGNC release when HGNC or Ensembl is
-                                                 loaded; it is not downloaded separately.
+HGNC Symbol (``gene``)       Supported          Derived from the HGNC release. Ensembl mapping is independently managed.
 HPO                          Supported          Downloaded from a GitHub release.
 Mondo                        Supported          Downloaded from a GitHub release.
 NCIT                         Supported          Downloaded via FTP from NIH.
@@ -23,10 +23,14 @@ OHDSI                        Supported          No public download API. The rele
 OMIM                         Supported          Downloaded from the BioPortal API.
 ORDO                         Supported          Downloaded from the BioPortal API.
 Reactome                     Supported          Reactome only releases a Neo4j/SQL dump; this project provides a script
-                                                 to convert that dump into the CSV import format it expects.
+                                                 to convert that dump into the CSV import format it expects. Pathways,
+                                                 reactions, genes, complexes, entity sets, simple entities, drugs,
+                                                 polymers, cells, and other stable physical entities are first-class.
 SNOMED CT                    Supported          Downloaded from the NHS TRUD API, including its historical Association
                                                  Reference Set files (SAME_AS/REPLACED_BY/WAS_A/etc, loaded as
                                                  ``snomed_association`` relationships).
+Uberon                       Supported          Canonical ``uberon.owl`` product downloaded from the official release.
+                                                 Imported classes from other OBO ontologies are excluded.
 UniProt                      Supported          Downloaded via FTP from UniProt. The **complete** UniProtKB release
                                                  (Swiss-Prot + TrEMBL, every organism) is loaded, not a subset scoped
                                                  to another vocabulary - see :doc:`build-database` for its size and
@@ -59,15 +63,15 @@ Annotations Support
 
 This software also utilises mappings and annotations between the supported vocabularies to enhance the connectivity and semantic richness of the integrated knowledge graph. These annotations help link concepts across different vocabularies, facilitating more comprehensive queries and analyses. Annotations are loaded with ``bioterms-cli annotation load <vocabulary> <another-vocabulary>``, as described in :doc:`build-database`. Below is a list of supported annotation pairs and their sources:
 
-===================== ======================================================================================
+===================== =====================================================================================================================================================
 Vocabulary Pair       Source
-===================== ======================================================================================
+===================== =====================================================================================================================================================
 CTV3 - SNOMED         SNOMED's CTV3 map file, from the NHS TRUD API (requires an NHS TRUD API key).
 Gene Symbol - HPO     HPO's own gene mapping file, downloaded alongside HPO.
 Gene Symbol - NCIT    NCIT's own gene mapping file, downloaded alongside NCIT.
 Gene Symbol - OMIM    Derived from the OMIM release (BioPortal API).
 Gene Symbol - ORDO    ORDO's own gene mapping file, downloaded alongside ORDO.
-Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference, loaded alongside UniProt.
+Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference. Loaded alongside UniProt by default when Gene Symbol is present, or explicitly as a normal annotation.
 HGNC - Mondo          Derived from cross-references in the Mondo release.
 HPO - Mondo           Derived from cross-references in the Mondo release.
 HPO - ORDO            HPO-ORDO Ontological Module (HOOM), from the BioPortal API (requires a BioPortal API key).
@@ -76,10 +80,14 @@ Mondo - OMIM          Derived from cross-references in the Mondo release.
 Mondo - ORDO          Derived from cross-references in the Mondo release.
 Mondo - SNOMED        Derived from cross-references in the Mondo release.
 NCIT - OHDSI          Derived from the OHDSI release.
+NCIT - Reactome       Reactome ReferenceEntity records for stable Reactome drug entities.
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
-Reactome - UniProt    UniProt accession Reactome's own gene/protein records reference, loaded alongside Reactome.
-===================== ======================================================================================
+Reactome - Ensembl    Reactome ReferenceEntity records plus Reactome's Ensembl2Reactome pathway mapping.
+Reactome - HGNC       Reactome ReferenceEntity ``referenceGene`` records.
+Reactome - OMIM       Reactome ReferenceEntity ``referenceGene`` records.
+Reactome - UniProt    UniProt accessions from Reactome ReferenceEntity records.
+===================== =====================================================================================================================================================
 
 Annotation pairs that are derived from a vocabulary's own release files (Mondo's cross-references, or a vocabulary's own gene/mapping file) do not require a separate download step or credential beyond what the parent vocabulary already needs.

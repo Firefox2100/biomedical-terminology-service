@@ -5,7 +5,7 @@ from rich.table import Table
 from bioterms.etc.consts import PH
 from bioterms.database import get_active_doc_db
 from bioterms.model.user import User
-from .utils import run_async, CONSOLE
+from .utils import run_async, CONSOLE, verbose_cli
 
 
 app = typer.Typer()
@@ -16,6 +16,7 @@ app = typer.Typer()
 async def create_user(username: Annotated[str, typer.Argument(help='Username of the new user, must be unique')],
                       password: Annotated[str, typer.Option(help='Password of the new user')] = None,
                       ):
+    verbose_cli(f'creating administrator user {username}')
     db = await get_active_doc_db()
 
     if not password:
@@ -49,6 +50,7 @@ async def create_user(username: Annotated[str, typer.Argument(help='Username of 
 @app.command(name='list', help='List all users')
 @run_async
 async def list_users():
+    verbose_cli('listing administrator users')
     db = await get_active_doc_db()
 
     users = await db.users.filter()
@@ -68,6 +70,7 @@ async def list_users():
 @run_async
 async def delete_user(username: Annotated[str, typer.Argument(help='Username of the user to delete')],
                       ):
+    verbose_cli(f'deleting administrator user {username}')
     db = await get_active_doc_db()
 
     user = await db.users.get(username)

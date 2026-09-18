@@ -1,0 +1,2 @@
+extend type HgncConcept { annotatedReactome: [ReactomeConcept!]! }
+extend type ReactomeGene { annotatedHgnc: [HgncConcept!]! }

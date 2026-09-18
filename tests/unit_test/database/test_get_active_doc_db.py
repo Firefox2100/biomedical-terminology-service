@@ -5,12 +5,7 @@ called its `initialize()` -- the one call that runs `SqlUserRepository.ensure_sc
 `UndefinedTableError: relation "users" does not exist` on a freshly provisioned database that
 had never otherwise gone through the SQL doc DB's concept-table creation path.
 """
-import os
-
 import pytest
-
-os.environ.setdefault('BTS_SERVER_HMAC_KEY', 'test-hmac-key')
-os.environ.setdefault('BTS_ENABLE_METRICS', 'false')
 
 from bioterms.database.doc_db import doc_db as doc_db_module
 from bioterms.etc.consts import CONFIG
