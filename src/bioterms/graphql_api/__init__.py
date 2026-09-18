@@ -143,7 +143,9 @@ _ANNOTATION_GRAPHQL_SCHEMAS: dict[tuple[ConceptPrefix, ConceptPrefix], tuple[str
     (ConceptPrefix.OHDSI, ConceptPrefix.SNOMED): ('OHDSI_SNOMED_SCHEMA', 'ohdsi_snomed'),
     (ConceptPrefix.OMIM, ConceptPrefix.ORDO): ('OMIM_ORDO_SCHEMA', 'omim_ordo'),
     (ConceptPrefix.OMIM, ConceptPrefix.REACTOME): ('OMIM_REACTOME_SCHEMA', 'omim_reactome'),
+    (ConceptPrefix.OMIM, ConceptPrefix.UNIPROT): ('OMIM_UNIPROT_SCHEMA', 'omim_uniprot'),
     (ConceptPrefix.ORDO, ConceptPrefix.SNOMED): ('ORDO_SNOMED_SCHEMA', 'ordo_snomed'),
+    (ConceptPrefix.ORDO, ConceptPrefix.UNIPROT): ('ORDO_UNIPROT_SCHEMA', 'ordo_uniprot'),
     (ConceptPrefix.REACTOME, ConceptPrefix.UNIPROT): (
         'REACTOME_UNIPROT_SCHEMA', 'reactome_uniprot',
     ),

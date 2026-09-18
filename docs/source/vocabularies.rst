@@ -45,7 +45,8 @@ UniProt                      Supported          Downloaded via FTP from UniProt.
                                                  (Swiss-Prot + TrEMBL, every organism) is loaded, not a subset scoped
                                                  to another vocabulary - see :doc:`build-database` for its size and
                                                  the ``organismTaxId``/``organismName`` properties used to scope it
-                                                 at query time instead.
+                                                 at query time instead. Secondary accessions resolve to their current
+                                                 primary accession.
 ICD 10                       Not Supported       On the roadmap for future support.
 ICD 11                       Will Not Support    ICD 11 does not release the full terminology, only some linearizations.
 ============================ ================== ===========================================================================
@@ -81,7 +82,7 @@ Ensembl - HGNC        HGNC's official ``ensembl_gene_id`` cross-reference column
 Ensembl - Gene Symbol Ensembl's HGNC-symbol projection.
 Ensembl - OMIM        Ensembl BioMart's MIM gene and morbid-accession projection.
 Ensembl - Reactome    Reactome ReferenceEntity records plus Reactome's Ensembl2Reactome pathway mapping.
-Ensembl - UniProt     Ensembl's release-specific UniProt mapping product.
+Ensembl - UniProt     Both Ensembl's release-specific mapping and human protein cross-references published by UniProtKB.
 GO - Reactome         Both GO's Reactome class cross-references (GO to Reactome) and Reactome's curated biological
                        process, compartment, and molecular-function assignments (Reactome to GO). Provenance and
                        direction are retained as separate relationships.
@@ -96,7 +97,7 @@ Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference.
 HGNC - Mondo          Derived from cross-references in the Mondo release.
 HGNC - OMIM           HGNC's official ``omim_id`` cross-reference column.
 HGNC - Reactome       Reactome ReferenceEntity ``referenceGene`` records.
-HGNC - UniProt        HGNC's official ``uniprot_ids`` cross-reference column.
+HGNC - UniProt        Both HGNC's ``uniprot_ids`` column and UniProtKB's ``DR HGNC`` records, retaining both directions.
 HPO - Mondo           Derived from cross-references in the Mondo release.
 HPO - OMIM            HPO's ``phenotype.hpoa`` disease-phenotype annotations.
 HPO - ORDO            Both the HPO-published ``phenotype.hpoa`` mapping (HPO to ORDO) and the Orphanet-authored
@@ -118,8 +119,10 @@ OHDSI - RxNorm        RxNorm vocabulary rows in the OHDSI Athena ``CONCEPT.csv``
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
+ORDO - UniProt        UniProtKB's ``DR Orphanet`` protein-to-disease associations.
+OMIM - UniProt        UniProtKB's ``DR MIM`` links to OMIM gene and phenotype records.
 Reactome - OMIM       Reactome ReferenceEntity ``referenceGene`` records.
-Reactome - UniProt    UniProt accessions from Reactome ReferenceEntity records.
+Reactome - UniProt    Both Reactome ReferenceEntity records and UniProtKB's pathway assignments, with provenance.
 RxNorm - SNOMED       SNOMED CT source-code atoms in NLM's full RxNorm release, retaining RxNorm/NLM publisher direction.
 SNOMED - Uberon       Uberon's official SCTID cross-references.
 ===================== =====================================================================================================================================================

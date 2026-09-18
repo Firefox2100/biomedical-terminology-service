@@ -135,7 +135,7 @@ And not all vocabularies can be downloaded this way. Particularly:
   and relationship tables in bounded-memory chunks. The full release includes third-party source
   vocabulary atoms subject to the UMLS licence; this software neither redistributes the release nor
   grants those rights. See the bundled RxNorm licence notice before hosting derived data.
-* UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
+* UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded. Alternative protein names, gene names, entry name, sequence length, fragment status, and protein-existence evidence are retained without storing sequence content. Secondary accessions are deprecated identifiers linked to the current primary accession.
 
 The LOINC downloader first queries the official API for current release metadata, downloads with
 HTTP Basic authentication, verifies the publisher-provided MD5 checksum, and extracts only the
@@ -165,6 +165,12 @@ the vocabulary load when the gene-symbol vocabulary is present. Offline UniProt 
 write this annotation dump. Pass ``--no-annotation`` to suppress that bundled work. An explicit
 ``bioterms-cli annotation load uniprot gene`` is independent and therefore streams the UniProt
 release files again; an existing annotation dump can instead be restored directly.
+
+UniProtKB also publishes mappings to GO, HGNC, Ensembl, Reactome, OMIM, and ORDO. These remain normal,
+explicitly loaded annotations; each explicit load re-streams the compressed release. UniProt's
+Ensembl projection is restricted to human entries because the supported Ensembl vocabulary is
+human-only, and maps to the Ensembl protein identifier while retaining transcript and gene IDs
+as annotation metadata.
 
 The same ``--no-annotation`` option suppresses cross-vocabulary annotations derived while loading
 Mondo and OHDSI, including their offline annotation dumps. HGNC's own relationship to the Gene

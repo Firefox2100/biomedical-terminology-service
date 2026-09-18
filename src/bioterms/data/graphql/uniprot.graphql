@@ -2,10 +2,18 @@ type UniProtConcept implements Concept {
     prefix: ConceptPrefix!
     conceptId: String!
     label: String
+    synonyms: [String!]
     status: ConceptStatus!
     reviewed: Boolean
     organismTaxId: String
     organismName: String
+    entryName: String
+    geneNames: [String!]
+    proteinExistence: String
+    sequenceLength: Int
+    fragment: Boolean
+    replaces: [UniProtConcept!]!
+    replacedBy: [UniProtConcept!]!
 
     similarConcepts(threshold: Float): [SimilarUniProtConcept!]!
     pathsTo(

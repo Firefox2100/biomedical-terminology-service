@@ -21,7 +21,6 @@ provides the database without warranties regarding correctness.
 
 ## Additional annotation data published under the same licence
 
-The project extracts protein-to-Gene-Ontology records from UniProtKB's `DR GO` cross-reference
-lines, including aspect and evidence metadata. These records are distributed in the same
-UniProtKB release under the terms above. Gene Ontology term content itself remains covered by
-the separate GO licence notice.
+The project extracts cross-reference records published in UniProtKB for Gene Ontology, HGNC,
+Ensembl, Reactome, OMIM, and Orphanet. These records are distributed in the same release under the terms
+above. Content belonging to each referenced vocabulary remains covered by its separate licence.

@@ -7,6 +7,7 @@ from bioterms.etc.enums import AnnotationType, ConceptPrefix
 from bioterms.graphql_api import _VOCABULARY_GRAPHQL_MODULES
 from bioterms.vocabulary import get_vocabulary_license
 import bioterms.vocabulary.uniprot as uniprot
+from bioterms.vocabulary import get_vocabulary_config
 
 
 REVIEWED_HUMAN_RECORD = """\
@@ -23,6 +24,7 @@ OX   NCBI_TaxID=9606;
 DR   RefSeq; NP_001393.1; NM_001402.6.
 DR   HGNC; HGNC:3189; EEF1A1.
 DR   PDB; 3C5J; X-ray; 1.80 A; C=343-355.
+PE   1: Evidence at protein level;
 SQ   SEQUENCE   462 AA;  50141 MW;  74B44B5F1AD5A462 CRC64;
      MGKEKTHINI VVIGHVDSGK STTTGHLIYK CGGIDKRTIE KFEKEAAEMG KGSFKYAWVL
      DKLKAERERG ITIDISLWKF ETSKYYVTII DAPGHRDFIK NMITGTSQAD CAVLIVAAGV
@@ -63,6 +65,15 @@ SQ   SEQUENCE   1 AA;  1 MW;  0 CRC64;
 //
 """
 
+MAPPING_RECORD = REVIEWED_HUMAN_RECORD.replace(
+    'DR   RefSeq;',
+    'DR   Ensembl; ENST00000309268.10; ENSP00000307911.6; ENSG00000156508.19.\n'
+    'DR   Reactome; R-HSA-12345; Example pathway.\n'
+    'DR   MIM; 130590; gene.\n'
+    'DR   Orphanet; 531; Miller-Dieker syndrome.\n'
+    'DR   RefSeq;',
+)
+
 
 def test_uniprot_has_graphql_and_license_support():
     assert _VOCABULARY_GRAPHQL_MODULES[ConceptPrefix.UNIPROT] == (
@@ -72,6 +83,7 @@ def test_uniprot_has_graphql_and_license_support():
         'UNIPROT_QUERY',
     )
     assert 'Creative Commons Attribution 4.0' in get_vocabulary_license(ConceptPrefix.UNIPROT)
+    assert ConceptPrefix.OMIM in get_vocabulary_config(ConceptPrefix.UNIPROT)['annotations']
 
 
 def _write_gz(path, content: str):
@@ -106,6 +118,14 @@ def test_parse_dat_record_reviewed_human_with_hgnc():
     assert record['organism_name'] == 'Homo sapiens (Human)'
     assert record['organism_tax_id'] == '9606'
     assert record['hgnc_symbol'] == 'EEF1A1'
+    assert record['secondary_accessions'] == ['P04719', 'P04720', 'Q6IQ15']
+    assert record['entry_name'] == 'EF1A1_HUMAN'
+    assert record['sequence_length'] == 462
+    assert record['protein_existence'] == 'Evidence at protein level'
+    assert record['gene_names'] == ['EEF1A1', 'EEF1A', 'EF1A', 'LENG7']
+    assert record['synonyms'] == [
+        'EF-1-alpha-1', 'Elongation factor Tu', 'EEF1A1', 'EEF1A', 'EF1A', 'LENG7',
+    ]
 
 
 def test_parse_dat_record_nonhuman_has_no_hgnc_and_uses_top_level_name():
@@ -156,6 +176,7 @@ def test_build_uniprot_concept_stamps_organism_fields():
     assert concept.organism_tax_id == '9606'
     assert concept.organism_name == 'Homo sapiens (Human)'
     assert concept.prefix == ConceptPrefix.UNIPROT
+    assert concept.entry_name is None
 
 
 def test_build_symbol_annotation_present_and_absent():
@@ -169,6 +190,44 @@ def test_build_symbol_annotation_present_and_absent():
     assert annotation.prefix_to == ConceptPrefix.HGNC_SYMBOL
 
     assert uniprot._build_symbol_annotation(without_symbol) is None
+
+
+def test_supported_cross_reference_iterators_preserve_uniprot_direction(monkeypatch, tmp_path):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    directory = tmp_path / 'uniprot'
+    directory.mkdir()
+    _write_gz(directory / 'uniprot_sprot.dat.gz', MAPPING_RECORD)
+    _write_gz(directory / 'uniprot_trembl.dat.gz', '')
+
+    hgnc = list(uniprot.iter_hgnc_annotations())
+    ensembl = list(uniprot.iter_ensembl_annotations())
+    reactome = list(uniprot.iter_reactome_annotations())
+    omim = list(uniprot.iter_omim_annotations())
+    ordo = list(uniprot.iter_ordo_annotations())
+
+    assert (hgnc[0].prefix_from, hgnc[0].concept_id_from,
+            hgnc[0].prefix_to, hgnc[0].concept_id_to) == (
+        ConceptPrefix.UNIPROT, 'P68104', ConceptPrefix.HGNC, '3189',
+    )
+    assert hgnc[0].properties == {
+        'symbol': 'EEF1A1', 'source': 'UniProtKB HGNC cross-reference',
+    }
+    assert ensembl[0].concept_id_to == 'ENSP00000307911'
+    assert ensembl[0].properties == {
+        'transcriptId': 'ENST00000309268', 'geneId': 'ENSG00000156508',
+        'source': 'UniProtKB Ensembl cross-reference',
+    }
+    assert reactome[0].concept_id_to == 'R-HSA-12345'
+    assert reactome[0].properties['source'] == 'UniProtKB Reactome cross-reference'
+    assert omim[0].concept_id_to == '130590'
+    assert omim[0].properties == {
+        'recordType': 'gene', 'source': 'UniProtKB MIM cross-reference',
+    }
+    assert ordo[0].concept_id_to == '531'
+    assert ordo[0].properties == {
+        'disease': 'Miller-Dieker syndrome',
+        'source': 'UniProtKB Orphanet cross-reference',
+    }
 
 
 @pytest.mark.asyncio
@@ -190,12 +249,14 @@ async def test_load_vocabulary_from_file_streams_in_batches_offline(monkeypatch,
 
     doc_dump_path = tmp_path / 'offline' / 'uniprot.doc.dump'
     doc_lines = doc_dump_path.read_text().strip().splitlines()
-    # 3 valid records from sprot + 0 from trembl (its only record has no accession) = 3.
-    assert len(doc_lines) == 3
+    # Three primary entries plus the reviewed record's three secondary accessions.
+    assert len(doc_lines) == 6
 
     node_id_path = tmp_path / 'offline' / 'uniprot.node_ids.dump'
     node_ids = [line.split(',')[0] for line in node_id_path.read_text().strip().splitlines()]
-    assert set(node_ids) == {'P68104', 'P0DTD1', 'A0A0A0MS99'}
+    assert set(node_ids) == {
+        'P68104', 'P04719', 'P04720', 'Q6IQ15', 'P0DTD1', 'A0A0A0MS99',
+    }
 
     annotation_path = tmp_path / 'offline' / 'uniprot-gene.annotation.dump'
     annotation_lines = annotation_path.read_text().strip().splitlines()
@@ -222,11 +283,14 @@ async def test_load_vocabulary_from_file_skips_gene_annotation_when_gene_symbol_
     class FakeGraphDb:
         saved_annotations = []
 
+        def __init__(self):
+            self.graphs = []
+
         async def count_terms(self, prefix):
             return 0
 
         async def save_vocabulary_graph(self, concepts, graph):
-            pass
+            self.graphs.append(graph.copy())
 
         async def save_annotations(self, annotations):
             self.saved_annotations.extend(annotations)
@@ -235,8 +299,9 @@ async def test_load_vocabulary_from_file_skips_gene_annotation_when_gene_symbol_
     graph_db = FakeGraphDb()
     await uniprot.load_vocabulary_from_file(doc_db=doc_db, graph_db=graph_db, offline=False)
 
-    assert doc_db.saved == 1
+    assert doc_db.saved == 4
     assert graph_db.saved_annotations == []
+    assert graph_db.graphs[0].has_edge('P04719', 'P68104', 'replaced_by')
 
 
 @pytest.mark.asyncio

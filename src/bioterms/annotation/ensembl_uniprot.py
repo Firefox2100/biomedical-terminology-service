@@ -6,8 +6,11 @@ import pandas as pd
 from bioterms.database import GraphDatabase, get_active_graph_db
 from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import AnnotationType, ConceptPrefix
-from bioterms.etc.utils import check_files_exist, iter_progress
-from .utils import AnnotationSource, assert_pre_requisite, download_current_ensembl_tsv
+from bioterms.etc.utils import check_files_exist, iter_progress, verbose_print
+from bioterms.vocabulary.uniprot import FILE_PATHS as UNIPROT_FILE_PATHS, \
+    iter_ensembl_annotations
+from .utils import AnnotationSource, assert_pre_requisite, download_current_ensembl_tsv, \
+    save_annotation_stream
 
 
 ANNOTATION_NAME = 'Ensembl Protein Mapping to UniProtKB'
@@ -44,3 +47,6 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None):
             annotation_type=AnnotationType.EXACT, properties=properties,
         ))
     await graph_db.save_annotations(annotations)
+    if check_files_exist(UNIPROT_FILE_PATHS):
+        count = await save_annotation_stream(graph_db, iter_ensembl_annotations())
+        verbose_print(f'Loaded {count} UniProtKB to Ensembl protein annotations.')

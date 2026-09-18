@@ -31,3 +31,27 @@ class UniProtConcept(Concept):
         description="The source organism's scientific name.",
         alias='organismName',
     )
+    entry_name: Optional[str] = Field(
+        None,
+        description='The stable mnemonic entry name from the UniProt ID line.',
+        alias='entryName',
+    )
+    gene_names: Optional[list[str]] = Field(
+        None,
+        description='Gene names and synonyms stated by the UniProt entry.',
+        alias='geneNames',
+    )
+    protein_existence: Optional[str] = Field(
+        None,
+        description='The UniProt protein-existence evidence level.',
+        alias='proteinExistence',
+    )
+    sequence_length: Optional[int] = Field(
+        None,
+        description='Canonical sequence length in amino acids; the sequence itself is not loaded.',
+        alias='sequenceLength',
+    )
+    fragment: Optional[bool] = Field(
+        None,
+        description='Whether UniProt marks the entry as a fragment or fragments.',
+    )

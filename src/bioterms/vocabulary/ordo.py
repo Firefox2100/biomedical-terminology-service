@@ -20,6 +20,7 @@ ANNOTATIONS = [
     ConceptPrefix.HPO,
     ConceptPrefix.MONDO,
     ConceptPrefix.OMIM,
+    ConceptPrefix.UNIPROT,
 ]
 SIMILARITY_METHODS = [
     SimilarityMethod.RELEVANCE,

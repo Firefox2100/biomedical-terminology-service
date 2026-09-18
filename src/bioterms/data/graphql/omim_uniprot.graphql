@@ -1,0 +1,2 @@
+extend type OmimConcept { annotatedUniProt: [UniProtConcept!]! }
+extend type UniProtConcept { annotatedOmim: [OmimConcept!]! }
