@@ -59,7 +59,11 @@ When an annotation pair is loaded between two vocabularies (see :doc:`vocabulari
         annotatedHpo: [HpoConcept!]!
     }
 
-The field name follows the pattern ``annotated<OtherVocabulary>``.
+Field names generally follow the pattern ``annotated<OtherVocabulary>``. Mappings with a more
+specific domain meaning use semantic names instead: gene-symbol links use ``symbols`` on the
+source side and fields such as ``ensemblGenes`` or ``uniprotConcepts`` on the reverse side.
+Ensembl annotations that only target gene features likewise return ``EnsemblGene`` objects,
+not arbitrary Ensembl feature types.
 
 Example query
 ==============

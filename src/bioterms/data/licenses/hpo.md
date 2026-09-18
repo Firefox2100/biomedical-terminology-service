@@ -31,3 +31,7 @@ The project utilises the following additional data published by the same entity,
 The HPO documentation notes that annotations electronically derived from OMIM require users to
 contact OMIM before reusing them in other software products. The applicable OMIM terms are also
 reported with the OMIM vocabulary licence in this service.
+
+The ORPHA records in `phenotype.hpoa` identify Orphanet diseases and may carry Orphanet-supplied
+provenance even though HPO publishes the combined annotation file. The applicable Orphadata
+attribution terms are included in this service's ORDO licence notice.

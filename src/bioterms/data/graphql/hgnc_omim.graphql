@@ -1,0 +1,7 @@
+extend type HgncConcept {
+    annotatedOmim: [OmimConcept!]!
+}
+
+extend type OmimConcept {
+    annotatedHgnc: [HgncConcept!]!
+}

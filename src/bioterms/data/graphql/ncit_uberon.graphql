@@ -1,0 +1,7 @@
+extend type NcitConcept {
+    annotatedUberon: [UberonConcept!]!
+}
+
+extend type UberonConcept {
+    annotatedNcit: [NcitConcept!]!
+}

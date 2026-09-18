@@ -1,0 +1,7 @@
+extend type HgncConcept {
+    annotatedUniProt: [UniProtConcept!]!
+}
+
+extend type UniProtConcept {
+    annotatedHgnc: [HgncConcept!]!
+}

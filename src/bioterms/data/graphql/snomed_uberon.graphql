@@ -1,0 +1,7 @@
+extend type SnomedConcept {
+    annotatedUberon: [UberonConcept!]!
+}
+
+extend type UberonConcept {
+    annotatedSnomed: [SnomedConcept!]!
+}

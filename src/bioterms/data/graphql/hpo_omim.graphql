@@ -1,0 +1,7 @@
+extend type HpoConcept {
+    annotatedOmim: [OmimConcept!]!
+}
+
+extend type OmimConcept {
+    annotatedHpo: [HpoConcept!]!
+}

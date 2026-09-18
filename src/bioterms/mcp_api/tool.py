@@ -20,12 +20,14 @@ class OntologyPrefix(StrEnum):
     """
     CTV3 = 'ctv3'
     HPO = 'hpo'
+    MONDO = 'mondo'
     NCIT = 'ncit'
     OHDSI = 'ohdsi'
     OMIM = 'omim'
     ORDO = 'ordo'
     REACTOME = 'reactome'
     SNOMED = 'snomed'
+    UBERON = 'uberon'
 
 
 @mcp.tool(

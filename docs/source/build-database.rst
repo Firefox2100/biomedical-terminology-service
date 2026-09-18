@@ -171,8 +171,9 @@ also available endpoints. The Ensembl annotation combines the graph export with 
 separate ``Ensembl2Reactome.txt`` pathway mapping while preserving each source independently.
 
 Ensembl mappings are normal, independently managed annotations. Once both endpoint vocabularies
-are loaded, they can be downloaded and loaded for ``ensembl gene``, ``ensembl uniprot``,
-``ensembl reactome``, and ``ensembl omim``. Ensembl loading itself never creates these mappings.
+are loaded, they can be downloaded and loaded for ``ensembl hgnc``, ``ensembl gene``,
+``ensembl uniprot``, ``ensembl reactome``, and ``ensembl omim``. Ensembl loading itself never
+creates these mappings.
 
 The Read v2 migration overlay (below) is a separate script, not part of this load order, but expects ``ohdsi``, ``ctv3``, and ``snomed`` to already be loaded for a clean result.
 

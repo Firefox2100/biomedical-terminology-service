@@ -13,9 +13,10 @@ Vocabulary                   Status             Note
 CTV3                         Supported          Downloaded from the NHS TRUD API.
 Ensembl                      Supported          Current human GTF downloaded via FTP; genes, transcripts, exons, and
                                                  proteins are first-class concepts. External mappings are separate annotations.
-HGNC                         Supported          Downloaded from the HGNC release on Google Drive.
-HGNC Symbol (``gene``)       Supported          Derived from the HGNC release. Ensembl mapping is independently managed.
-HPO                          Supported          Downloaded from a GitHub release.
+HGNC                         Supported          Downloaded from HGNC's public Google Cloud Storage release. Its links to
+                                                 approved, alias, and previous gene symbols are part of the vocabulary model.
+HGNC Symbol (``gene``)       Supported          Derived from the HGNC release and required by HGNC.
+HPO                          Supported          Ontology and annotation products downloaded from the official GitHub release.
 Mondo                        Supported          Downloaded from a GitHub release.
 NCIT                         Supported          Downloaded via FTP from NIH.
 OHDSI                        Supported          No public download API. The release must be obtained manually from
@@ -30,7 +31,8 @@ SNOMED CT                    Supported          Downloaded from the NHS TRUD API
                                                  Reference Set files (SAME_AS/REPLACED_BY/WAS_A/etc, loaded as
                                                  ``snomed_association`` relationships).
 Uberon                       Supported          Canonical ``uberon.owl`` product downloaded from the official release.
-                                                 Imported classes from other OBO ontologies are excluded.
+                                                 Imported classes from other OBO ontologies are excluded; NCIt and
+                                                 SNOMED mappings are exposed as independently managed annotations.
 UniProt                      Supported          Downloaded via FTP from UniProt. The **complete** UniProtKB release
                                                  (Swiss-Prot + TrEMBL, every organism) is loaded, not a subset scoped
                                                  to another vocabulary - see :doc:`build-database` for its size and
@@ -67,27 +69,41 @@ This software also utilises mappings and annotations between the supported vocab
 Vocabulary Pair       Source
 ===================== =====================================================================================================================================================
 CTV3 - SNOMED         SNOMED's CTV3 map file, from the NHS TRUD API (requires an NHS TRUD API key).
+Ensembl - HGNC        HGNC's official ``ensembl_gene_id`` cross-reference column.
+Ensembl - Gene Symbol Ensembl's HGNC-symbol projection.
+Ensembl - OMIM        Ensembl BioMart's MIM gene and morbid-accession projection.
+Ensembl - Reactome    Reactome ReferenceEntity records plus Reactome's Ensembl2Reactome pathway mapping.
+Ensembl - UniProt     Ensembl's release-specific UniProt mapping product.
 Gene Symbol - HPO     HPO's own gene mapping file, downloaded alongside HPO.
 Gene Symbol - NCIT    NCIT's own gene mapping file, downloaded alongside NCIT.
 Gene Symbol - OMIM    Derived from the OMIM release (BioPortal API).
 Gene Symbol - ORDO    ORDO's own gene mapping file, downloaded alongside ORDO.
 Gene Symbol - UniProt Derived from UniProt entries with an HGNC cross-reference. Loaded alongside UniProt by default when Gene Symbol is present, or explicitly as a normal annotation.
 HGNC - Mondo          Derived from cross-references in the Mondo release.
+HGNC - OMIM           HGNC's official ``omim_id`` cross-reference column.
+HGNC - Reactome       Reactome ReferenceEntity ``referenceGene`` records.
+HGNC - UniProt        HGNC's official ``uniprot_ids`` cross-reference column.
 HPO - Mondo           Derived from cross-references in the Mondo release.
-HPO - ORDO            HPO-ORDO Ontological Module (HOOM), from the BioPortal API (requires a BioPortal API key).
+HPO - OMIM            HPO's ``phenotype.hpoa`` disease-phenotype annotations.
+HPO - ORDO            Both the HPO-published ``phenotype.hpoa`` mapping (HPO to ORDO) and the Orphanet-authored
+                       HPO-ORDO Ontological Module (ORDO to HPO; BioPortal API key required). Provenance and direction
+                       are retained as separate relationships.
 Mondo - NCIT          Derived from cross-references in the Mondo release.
 Mondo - OMIM          Derived from cross-references in the Mondo release.
 Mondo - ORDO          Derived from cross-references in the Mondo release.
 Mondo - SNOMED        Derived from cross-references in the Mondo release.
 NCIT - OHDSI          Derived from the OHDSI release.
 NCIT - Reactome       Reactome ReferenceEntity records for stable Reactome drug entities.
+NCIT - Uberon         Uberon's official NCIt cross-references.
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
-Reactome - Ensembl    Reactome ReferenceEntity records plus Reactome's Ensembl2Reactome pathway mapping.
-Reactome - HGNC       Reactome ReferenceEntity ``referenceGene`` records.
 Reactome - OMIM       Reactome ReferenceEntity ``referenceGene`` records.
 Reactome - UniProt    UniProt accessions from Reactome ReferenceEntity records.
+SNOMED - Uberon       Uberon's official SCTID cross-references.
 ===================== =====================================================================================================================================================
 
-Annotation pairs that are derived from a vocabulary's own release files (Mondo's cross-references, or a vocabulary's own gene/mapping file) do not require a separate download step or credential beyond what the parent vocabulary already needs.
+Annotation pairs derived from a vocabulary publisher's own release reuse that release or its
+companion mapping product and require no additional credential beyond the parent vocabulary's.
+They remain separate annotations and must still be loaded explicitly unless
+:doc:`build-database` documents a bundled-load exception.

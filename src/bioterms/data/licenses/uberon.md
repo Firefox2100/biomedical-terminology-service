@@ -20,3 +20,7 @@ NCIt and SNOMED CT identifiers. These cross-references are part of the official 
 and are the source of truth for Uberon's NCIt and SCTID bridge products.
 
 - [Uberon bridge and cross-reference documentation](https://github.com/obophenotype/uberon/blob/master/docs/bridges.md)
+
+The bridge data stores identifiers only and does not redistribute NCIt or SNOMED CT terminology
+content. When the mappings are used with locally loaded NCIt or SNOMED CT releases, the separate
+licence terms bundled for those vocabularies also apply to that content.

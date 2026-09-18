@@ -43,6 +43,12 @@ def get_hpo_license():
     return get_vocabulary_license(ConceptPrefix.HPO)
 
 
+@mcp.resource('license://mondo')
+def get_mondo_license():
+    """Get the release licence for the Mondo vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.MONDO)
+
+
 @mcp.resource('license://ncit')
 def get_ncit_license():
     """
@@ -89,3 +95,15 @@ def get_snomed_license():
     Get the release licence for the SNOMED vocabulary.
     """
     return get_vocabulary_license(ConceptPrefix.SNOMED)
+
+
+@mcp.resource('license://uberon')
+def get_uberon_license():
+    """Get the release licence for the Uberon vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.UBERON)
+
+
+@mcp.resource('license://uniprot')
+def get_uniprot_license():
+    """Get the release licence for the UniProt vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.UNIPROT)
