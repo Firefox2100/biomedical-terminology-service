@@ -1,6 +1,7 @@
 enum ConceptPrefix {
     ctv3
     ensembl
+    go
     gene
     hgnc
     hpo
@@ -35,6 +36,9 @@ enum RelationshipType {
     annotated_with
     is_a
     part_of
+    regulates
+    negatively_regulates
+    positively_regulates
     replaced_by
     preceded_by
     has_input

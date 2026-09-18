@@ -42,9 +42,11 @@ def test_uberon_is_registered_as_a_vocabulary():
 
     assert config['prefix'] == ConceptPrefix.UBERON
     assert config['filePaths'] == ['uberon/uberon.owl']
-    assert config['annotations'] == [ConceptPrefix.NCIT, ConceptPrefix.SNOMED]
+    assert config['annotations'] == [
+        ConceptPrefix.GO, ConceptPrefix.NCIT, ConceptPrefix.SNOMED,
+    ]
     assert 'Creative Commons Attribution 3.0' in get_vocabulary_license(ConceptPrefix.UBERON)
-    assert 'NCIt and SNOMED CT identifiers' in get_vocabulary_license(ConceptPrefix.UBERON)
+    assert 'GO, NCIt, and SNOMED CT identifiers' in get_vocabulary_license(ConceptPrefix.UBERON)
 
 
 def test_process_uberon_class_preserves_obo_relationship_semantics(monkeypatch):

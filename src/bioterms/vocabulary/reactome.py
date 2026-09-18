@@ -21,6 +21,7 @@ VOCABULARY_NAME = 'Reactome Pathways'
 VOCABULARY_PREFIX = ConceptPrefix.REACTOME
 ANNOTATIONS = [
     ConceptPrefix.ENSEMBL,
+    ConceptPrefix.GO,
     ConceptPrefix.HGNC,
     ConceptPrefix.NCIT,
     ConceptPrefix.OMIM,
@@ -40,6 +41,7 @@ FILE_PATHS = [
 ]
 _REFERENCE_MAPPING_FILE_PATHS = {
     ConceptPrefix.ENSEMBL: 'reactome/ensembl_mapping.csv',
+    ConceptPrefix.GO: 'reactome/go_mapping.csv',
     ConceptPrefix.HGNC: 'reactome/hgnc_mapping.csv',
     ConceptPrefix.OMIM: 'reactome/omim_mapping.csv',
     ConceptPrefix.NCIT: 'reactome/ncit_mapping.csv',

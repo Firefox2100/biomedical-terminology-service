@@ -62,6 +62,7 @@ def test_transcript_exon_and_protein_relationships_and_metadata():
 
 def test_ensembl_annotation_discovery_is_symmetric():
     expected = {
+        ensembl.ConceptPrefix.HGNC,
         ensembl.ConceptPrefix.HGNC_SYMBOL,
         ensembl.ConceptPrefix.OMIM,
         ensembl.ConceptPrefix.REACTOME,

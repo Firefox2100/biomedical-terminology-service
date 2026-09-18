@@ -10,6 +10,7 @@ from bioterms.etc.errors import FilesNotFound
 from bioterms.etc.utils import check_files_exist, download_file, iter_progress, verbose_print
 from bioterms.database import DocumentDatabase, GraphDatabase, get_active_doc_db, get_active_graph_db
 from bioterms.model.annotation import Annotation
+from bioterms.annotation.utils import AnnotationSource
 from bioterms.model.concept import UniProtConcept
 from .utils import write_concepts_to_file, write_graph_to_file, \
     write_annotations_to_file
@@ -19,6 +20,7 @@ VOCABULARY_NAME = 'UniProtKB'
 VOCABULARY_PREFIX = ConceptPrefix.UNIPROT
 ANNOTATIONS = [
     ConceptPrefix.ENSEMBL,
+    ConceptPrefix.GO,
     ConceptPrefix.HGNC,
     ConceptPrefix.HGNC_SYMBOL,
     ConceptPrefix.REACTOME,
@@ -39,6 +41,7 @@ _DE_NAME_LINE = re.compile(r'^DE\s+(?:RecName|SubName): Full=(.+?);?\s*$')
 _GN_NAME = re.compile(r'Name=([^;{]+)')
 _OX_TAXID = re.compile(r'NCBI_TaxID=(\d+)')
 _DR_HGNC_LINE = re.compile(r'^DR\s+HGNC;\s*(HGNC:\d+);\s*([^.]+)\.')
+_DR_GO_LINE = re.compile(r'^DR\s+GO;\s*GO:(\d+);\s*([CFP]):([^;]+);\s*([^.]+)\.')
 _EVIDENCE_TAG = re.compile(r'\s*\{[^}]*\}')
 
 
@@ -207,6 +210,51 @@ def iter_gene_annotations():
             annotation = _build_symbol_annotation(record)
             if annotation is not None:
                 yield annotation
+
+
+def iter_go_annotations():
+    """Stream UniProt-published protein-to-GO annotations from the release flat files."""
+    source = AnnotationSource(
+        'UniProtKB GO cross-reference', ConceptPrefix.UNIPROT, ConceptPrefix.GO,
+    )
+    aspect_names = {
+        'C': 'cellular_component',
+        'F': 'molecular_function',
+        'P': 'biological_process',
+    }
+    for file_path in FILE_PATHS:
+        full_path = os.path.join(CONFIG.data_dir, file_path)
+        for lines in iter_progress(
+            _iter_dat_records(full_path),
+            description=f'Processing UniProt GO annotations from {file_path}',
+        ):
+            accession = None
+            mappings: dict[str, dict[str, list[str] | str]] = {}
+            for line in lines:
+                if accession is None and line.startswith('AC   '):
+                    accession = line[5:].strip().split(';')[0].strip()
+                elif line.startswith('DR   GO;'):
+                    match = _DR_GO_LINE.match(line)
+                    if match:
+                        go_id, aspect, term, evidence = match.groups()
+                        mapping = mappings.setdefault(go_id, {
+                            'aspect': aspect_names[aspect], 'term': term.strip(), 'evidence': [],
+                        })
+                        if evidence.strip() not in mapping['evidence']:
+                            mapping['evidence'].append(evidence.strip())
+            if accession is None:
+                continue
+            for go_id, mapping in mappings.items():
+                yield source.create(
+                    publisher_concept_id=accession,
+                    other_concept_id=go_id,
+                    annotation_type=AnnotationType.ANNOTATED_WITH,
+                    properties={
+                        'aspect': mapping['aspect'],
+                        'term': mapping['term'],
+                        'evidence': ';'.join(mapping['evidence']),
+                    },
+                )
 
 
 async def _flush_batch(concepts: list[UniProtConcept],

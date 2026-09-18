@@ -13,6 +13,8 @@ Vocabulary                   Status             Note
 CTV3                         Supported          Downloaded from the NHS TRUD API.
 Ensembl                      Supported          Current human GTF downloaded via FTP; genes, transcripts, exons, and
                                                  proteins are first-class concepts. External mappings are separate annotations.
+GO                           Supported          The hierarchy-safe ``go-basic.owl`` production product, including ``is_a``,
+                                                 ``part_of``, and positive/negative/general regulation relationships.
 HGNC                         Supported          Downloaded from HGNC's public Google Cloud Storage release. Its links to
                                                  approved, alias, and previous gene symbols are part of the vocabulary model.
 HGNC Symbol (``gene``)       Supported          Derived from the HGNC release and required by HGNC.
@@ -74,6 +76,12 @@ Ensembl - Gene Symbol Ensembl's HGNC-symbol projection.
 Ensembl - OMIM        Ensembl BioMart's MIM gene and morbid-accession projection.
 Ensembl - Reactome    Reactome ReferenceEntity records plus Reactome's Ensembl2Reactome pathway mapping.
 Ensembl - UniProt     Ensembl's release-specific UniProt mapping product.
+GO - Reactome         Both GO's Reactome class cross-references (GO to Reactome) and Reactome's curated biological
+                       process, compartment, and molecular-function assignments (Reactome to GO). Provenance and
+                       direction are retained as separate relationships.
+GO - Uberon           Uberon's official GO cross-references.
+GO - UniProt          UniProtKB's protein-to-GO annotations, including aspect and evidence metadata. Explicit loading
+                       re-streams the complete UniProtKB release.
 Gene Symbol - HPO     HPO's own gene mapping file, downloaded alongside HPO.
 Gene Symbol - NCIT    NCIT's own gene mapping file, downloaded alongside NCIT.
 Gene Symbol - OMIM    Derived from the OMIM release (BioPortal API).

@@ -300,6 +300,43 @@ def extract_external_reference_annotations(driver: Driver):
         )
 
 
+def extract_go_annotations(driver: Driver):
+    """Export Reactome-authored assignments to all three Gene Ontology aspects."""
+    go_result = driver.execute_query(
+        """
+        MATCH (event:Event)-[:goBiologicalProcess]->(go:GO_BiologicalProcess)
+        WHERE event.stId STARTS WITH "R-HSA-"
+        RETURN DISTINCT event.stId AS reactome_id,
+            go.accession AS external_id,
+            "goBiologicalProcess" AS source_relation
+        UNION
+        MATCH (event:Event)-[:compartment]->(go:GO_CellularComponent)
+        WHERE event.stId STARTS WITH "R-HSA-"
+        RETURN DISTINCT event.stId AS reactome_id,
+            go.accession AS external_id,
+            "compartment" AS source_relation
+        UNION
+        MATCH (entity:PhysicalEntity)-[:compartment]->(go:GO_CellularComponent)
+        WHERE entity.stId STARTS WITH "R-HSA-" OR entity.stId STARTS WITH "R-ALL-"
+        RETURN DISTINCT entity.stId AS reactome_id,
+            go.accession AS external_id,
+            "compartment" AS source_relation
+        UNION
+        MATCH (reaction:ReactionLikeEvent)-[:catalystActivity]->(:CatalystActivity)
+            -[:activity]->(go:GO_MolecularFunction)
+        WHERE reaction.stId STARTS WITH "R-HSA-"
+        RETURN DISTINCT reaction.stId AS reactome_id,
+            go.accession AS external_id,
+            "activity" AS source_relation
+        """
+    )
+    write_to_csv(
+        file_path=f'{output_dir}/go_mapping.csv',
+        field_names=['reactome_id', 'external_id', 'source_relation'],
+        query_result=go_result,
+    )
+
+
 def extract_reactome_data():
     driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
     try:
@@ -311,6 +348,7 @@ def extract_reactome_data():
         extract_genes(driver)
         extract_physical_entities(driver)
         extract_external_reference_annotations(driver)
+        extract_go_annotations(driver)
     finally:
         driver.close()
 

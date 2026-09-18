@@ -1,0 +1,2 @@
+extend type GoConcept { annotatedUberon: [UberonConcept!]! }
+extend type UberonConcept { annotatedGo: [GoConcept!]! }

@@ -19,6 +19,12 @@ def get_ensembl_license():
     return get_vocabulary_license(ConceptPrefix.ENSEMBL)
 
 
+@mcp.resource('license://go')
+def get_go_license():
+    """Get the release licence for the Gene Ontology vocabulary."""
+    return get_vocabulary_license(ConceptPrefix.GO)
+
+
 @mcp.resource('license://hgnc')
 def get_hgnc_license():
     """

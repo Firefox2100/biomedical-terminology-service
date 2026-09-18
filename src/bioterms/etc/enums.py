@@ -32,6 +32,7 @@ class ConceptPrefix(Enum):
     """
     CTV3 = 'ctv3'
     ENSEMBL = 'ensembl'
+    GO = 'go'
     HGNC = 'hgnc'
     HGNC_SYMBOL = 'gene'
     HPO = 'hpo'
@@ -79,6 +80,9 @@ class ConceptRelationshipType(Enum):
     """
     IS_A = 'is_a'
     PART_OF = 'part_of'
+    REGULATES = 'regulates'
+    NEGATIVELY_REGULATES = 'negatively_regulates'
+    POSITIVELY_REGULATES = 'positively_regulates'
     REPLACED_BY = 'replaced_by'
     PRECEDED_BY = 'preceded_by'
     HAS_INPUT = 'has_input'

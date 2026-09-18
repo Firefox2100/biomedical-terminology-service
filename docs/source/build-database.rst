@@ -124,7 +124,7 @@ Some vocabularies require an API key to download. The supported credentials are:
 
 And not all vocabularies can be downloaded this way. Particularly:
 
-* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into the Neo4j 4 container in ``scripts/docker-compose.reactome.yaml``, then ``scripts/dump_reactome_to_csv.py`` exports the CSV release consumed here. The export includes stable physical entities (complexes, entity sets, simple entities, drugs, polymers, cells, and other entities), their reaction input/output edges, and separate ReferenceEntity mapping files for UniProt, Ensembl, HGNC, OMIM, NCIt, and ChEBI. ChEBI is exported for forward compatibility but has no annotation loader until ChEBI itself is supported. The supported mappings are normal annotations and are loaded explicitly after both endpoint vocabularies.
+* Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into the Neo4j 4 container in ``scripts/docker-compose.reactome.yaml``, then ``scripts/dump_reactome_to_csv.py`` exports the CSV release consumed here. The export includes stable physical entities (complexes, entity sets, simple entities, drugs, polymers, cells, and other entities), their reaction input/output edges, separate ReferenceEntity mapping files for UniProt, Ensembl, HGNC, OMIM, NCIt, and ChEBI, and Reactome's GO biological-process, compartment, and molecular-function assignments. ChEBI is exported for forward compatibility but has no annotation loader until ChEBI itself is supported. The supported mappings are normal annotations and are loaded explicitly after both endpoint vocabularies.
 * OHDSI standardized vocabularies are not open for public download, and provides no download API. You need to manually download the latest release from Athena, and unzip it to the data folder.
 * UMLS system provides no way to fetch the latest release files automatically, so the files downloaded from UMLS are using hard-coded URL. If you need a different version, you need to manually download the files from UMLS and place them in the data folder, or open an issue/pull request to notify us of the desired version.
 * UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
@@ -161,14 +161,22 @@ the Gene Symbol vocabulary, so load vocabularies individually in this order when
 database:
 
 #. ``hgnc_symbol`` first - HGNC requires it. UniProt itself does not, but only emits its bundled gene-symbol annotation online when the target vocabulary is present.
-#. ``hgnc``, ``ctv3``, ``snomed``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon``, ``ensembl`` - independent of each other except for HGNC's step 1 requirement; any order among the others is fine.
+#. ``hgnc``, ``ctv3``, ``snomed``, ``go``, ``hpo``, ``mondo``, ``ncit``, ``omim``, ``ordo``, ``ohdsi``, ``uberon``, ``ensembl`` - independent of each other except for HGNC's step 1 requirement; any order among the others is fine.
 #. ``uniprot`` - independent of Reactome; load ``annotation load uniprot gene`` explicitly later if the bundled annotation was skipped.
 #. ``reactome`` - see the Reactome download note above for its own two-step (dump-then-CSV) process.
 
-Reactome ReferenceEntity mappings are loaded explicitly after both endpoint vocabularies, for
+Reactome mappings are loaded explicitly after both endpoint vocabularies, for
 example ``bioterms-cli annotation load reactome uniprot``. Ensembl, HGNC, OMIM, and NCIt are
-also available endpoints. The Ensembl annotation combines the graph export with Reactome's
+also available endpoints, while GO combines Reactome's curated GO assignments with GO-published
+Reactome cross-references. The Ensembl annotation combines the graph export with Reactome's
 separate ``Ensembl2Reactome.txt`` pathway mapping while preserving each source independently.
+
+GO uses ``go-basic.owl`` rather than ``go.owl`` or ``go-plus.owl``. This is GO's recommended
+acyclic product for annotation propagation: it retains ``is_a``, ``part_of``, ``regulates``,
+``negatively_regulates``, and ``positively_regulates`` while excluding unsafe cross-aspect cycles
+and imported external ontology classes. GO–Uberon, GO–Reactome, and GO–UniProt are independently
+managed annotations. Explicit ``annotation load go uniprot`` re-streams the complete UniProtKB
+flat files, just like an explicit UniProt–gene-symbol rebuild.
 
 Ensembl mappings are normal, independently managed annotations. Once both endpoint vocabularies
 are loaded, they can be downloaded and loaded for ``ensembl hgnc``, ``ensembl gene``,

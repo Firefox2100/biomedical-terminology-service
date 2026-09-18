@@ -1,0 +1,6 @@
+extend type GoConcept { annotatedReactome: [ReactomeConcept!]! }
+extend interface ReactomeConcept { annotatedGo: [GoConcept!]! }
+extend type ReactomePathway { annotatedGo: [GoConcept!]! }
+extend type ReactomeReaction { annotatedGo: [GoConcept!]! }
+extend type ReactomeGene { annotatedGo: [GoConcept!]! }
+extend type ReactomePhysicalEntity { annotatedGo: [GoConcept!]! }

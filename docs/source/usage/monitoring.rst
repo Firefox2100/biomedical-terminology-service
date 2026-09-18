@@ -15,7 +15,7 @@ Returns a minimal JSON response confirming the application process is alive:
 
    {"status": "ok"}
 
-This endpoint has no authentication requirement and does not check the health of the connected databases, so it may return ``200 OK`` even when the service cannot serve queries because a backend is unreachable. Use it for liveness probes; use the vocabulary status endpoint (:doc:`usage/data-management` → ``GET /api/vocabularies/<prefix>/status``) for readiness probes that validate data availability.
+This endpoint has no authentication requirement and does not check the health of the connected databases, so it may return ``200 OK`` even when the service cannot serve queries because a backend is unreachable. Use it for liveness probes; use the vocabulary status endpoint (:doc:`data-management` → ``GET /api/vocabularies/<prefix>/status``) for readiness probes that validate data availability.
 
 Prometheus Metrics
 ==================

@@ -18,3 +18,10 @@ provides the database without warranties regarding correctness.
 - [UniProt](https://www.uniprot.org/)
 - [UniProt licence and disclaimer](https://www.uniprot.org/help/license/)
 - [UniProt downloads](https://www.uniprot.org/help/downloads/)
+
+## Additional annotation data published under the same licence
+
+The project extracts protein-to-Gene-Ontology records from UniProtKB's `DR GO` cross-reference
+lines, including aspect and evidence metadata. These records are distributed in the same
+UniProtKB release under the terms above. Gene Ontology term content itself remains covered by
+the separate GO licence notice.

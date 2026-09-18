@@ -25,6 +25,7 @@ from bioterms.model.annotation import Annotation
 ALL_VOCABULARIES = {
     ConceptPrefix.CTV3: 'ctv3',
     ConceptPrefix.ENSEMBL: 'ensembl',
+    ConceptPrefix.GO: 'go',
     ConceptPrefix.HGNC: 'hgnc',
     ConceptPrefix.HGNC_SYMBOL: 'hgnc_symbol',
     ConceptPrefix.HPO: 'hpo',

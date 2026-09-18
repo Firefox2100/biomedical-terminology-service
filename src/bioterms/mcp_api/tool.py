@@ -19,6 +19,7 @@ class OntologyPrefix(StrEnum):
     The ontology prefixes supported by the MCP API.
     """
     CTV3 = 'ctv3'
+    GO = 'go'
     HPO = 'hpo'
     MONDO = 'mondo'
     NCIT = 'ncit'

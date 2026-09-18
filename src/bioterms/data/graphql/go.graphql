@@ -1,0 +1,33 @@
+type GoConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    definition: String
+    comment: String
+    status: ConceptStatus!
+
+    replaces: [GoConcept!]!
+    replacedBy: [GoConcept!]!
+    children: [GoConcept!]!
+    parents: [GoConcept!]!
+
+    similarConcepts(threshold: Float): [SimilarGoConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
+}
+
+type SimilarGoConcept implements SimilarConcept {
+    from: GoConcept!
+    to: GoConcept!
+    score: Float!
+}
+
+type GoConceptResponse { error: QueryError, data: GoConcept }
+type GoConceptListResponse { error: QueryError, data: [GoConcept] }
+
+type GoQuery {
+    goConcept(conceptId: String!): GoConceptResponse
+    autoComplete(query: String!, limit: Int): GoConceptListResponse
+    search(query: String!, limit: Int): GoConceptListResponse
+}
+
+extend type Query { go: GoQuery }
