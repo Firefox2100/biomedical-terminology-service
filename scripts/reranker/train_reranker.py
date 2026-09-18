@@ -25,6 +25,39 @@ from concept_rendering import ALL_VARIANTS, RenderVariant, render_concept
 MIN_CONCEPT_RESOLUTION_FRACTION = 0.5
 
 
+def _normalise_query(text: str) -> str:
+    """Normalise query text for ambiguity/deduplication checks (not model input)."""
+    return ' '.join(text.casefold().split())
+
+
+def _deduplicate_groups(groups: list[dict]) -> tuple[list[dict], int]:
+    """Remove byte-logical duplicate query groups while preserving first-seen order."""
+    deduplicated = []
+    seen: set[tuple] = set()
+    removed = 0
+    for group in groups:
+        key = (
+            group['prefix'], group['query_id'], group['gold_concept_id'],
+            _normalise_query(group['query']),
+        )
+        if key in seen:
+            removed += 1
+            continue
+        seen.add(key)
+        deduplicated.append(group)
+    return deduplicated, removed
+
+
+def _ambiguous_query_keys(groups: list[dict]) -> set[tuple[str, str]]:
+    """Return (prefix, normalised query) keys associated with more than one gold concept."""
+    golds_by_query: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for group in groups:
+        golds_by_query[(group['prefix'], _normalise_query(group['query']))].add(
+            group['gold_concept_id']
+        )
+    return {key for key, golds in golds_by_query.items() if len(golds) > 1}
+
+
 def _load_groups(paths: list[Path]) -> list[dict]:
     """Load every query-group record from the given JSONL files (not lazy: sampling/splitting need the full pool first)."""
     groups: list[dict] = []
@@ -101,6 +134,34 @@ def _vocab_balanced_sample(groups: list[dict],
     for _ in range(size):
         vocab = rng.choices(vocabs, weights=weights, k=1)[0]
         sampled.append(rng.choice(by_vocab[vocab]))
+    return sampled
+
+
+def _stratified_eval_sample(groups: list[dict],
+                            target_size: int | None,
+                            seed: int,
+                            ) -> list[dict]:
+    """Deterministically sample held-out groups approximately equally across vocabularies."""
+    if target_size is None or target_size >= len(groups):
+        return groups
+
+    by_vocab: dict[str, list[dict]] = defaultdict(list)
+    for group in groups:
+        by_vocab[group['prefix']].append(group)
+
+    rng = random.Random(seed)
+    vocabs = sorted(by_vocab)
+    base, remainder = divmod(target_size, len(vocabs))
+    sampled = []
+    for index, vocab in enumerate(vocabs):
+        take = min(len(by_vocab[vocab]), base + (1 if index < remainder else 0))
+        sampled.extend(rng.sample(by_vocab[vocab], take))
+
+    # Backfill when a small vocabulary could not supply its nominal share.
+    if len(sampled) < target_size:
+        selected_ids = {id(group) for group in sampled}
+        remainder_pool = [group for group in groups if id(group) not in selected_ids]
+        sampled.extend(rng.sample(remainder_pool, min(target_size - len(sampled), len(remainder_pool))))
     return sampled
 
 
@@ -273,6 +334,11 @@ def _build_candidate_sets(eval_groups: list[dict],
             continue
 
         candidate_ids = [group['gold_concept_id']]
+        exact_alias_ids = []
+        normalised_query = _normalise_query(group['query'])
+        gold_aliases = [gold_concept.get('label')] + (gold_concept.get('synonyms') or [])
+        if any(value and _normalise_query(value) == normalised_query for value in gold_aliases):
+            exact_alias_ids.append(group['gold_concept_id'])
         candidate_texts = [render_concept(
             label=gold_concept['label'], synonyms=gold_concept['synonyms'], definition=gold_concept['definition'],
             variant=eval_variant, max_aliases=max_aliases,
@@ -288,6 +354,9 @@ def _build_candidate_sets(eval_groups: list[dict],
             if neg_concept is None:
                 continue
             candidate_ids.append(concept_id)
+            negative_aliases = [neg_concept.get('label')] + (neg_concept.get('synonyms') or [])
+            if any(value and _normalise_query(value) == normalised_query for value in negative_aliases):
+                exact_alias_ids.append(concept_id)
             candidate_texts.append(render_concept(
                 label=neg_concept['label'], synonyms=neg_concept['synonyms'], definition=neg_concept['definition'],
                 variant=eval_variant, max_aliases=max_aliases,
@@ -304,6 +373,7 @@ def _build_candidate_sets(eval_groups: list[dict],
             'query': group['query'],
             'candidate_ids': candidate_ids,
             'candidate_texts': candidate_texts,
+            'exact_alias_ids': exact_alias_ids,
         })
 
     return examples
@@ -342,6 +412,7 @@ def _run_candidate_set_evaluation(model, examples: list[dict], batch_size: int) 
     )
 
     ranks_by_vocab: dict[str, list[int | None]] = defaultdict(list)
+    hybrid_ranks_by_vocab: dict[str, list[int | None]] = defaultdict(list)
     for example, results in zip(examples, reranked):
         ranked_ids = [r['id'] for r in results]
         try:
@@ -350,10 +421,54 @@ def _run_candidate_set_evaluation(model, examples: list[dict], batch_size: int) 
             gold_rank = None
         ranks_by_vocab[example['prefix']].append(gold_rank)
 
+        # A unique exact label/synonym match is stronger evidence than semantic similarity.
+        # Multiple exact matches remain ambiguous and are deliberately left to the model.
+        hybrid_ids = ranked_ids
+        exact_alias_ids = example.get('exact_alias_ids') or []
+        if len(exact_alias_ids) == 1 and exact_alias_ids[0] in ranked_ids:
+            exact_id = exact_alias_ids[0]
+            hybrid_ids = [exact_id] + [candidate_id for candidate_id in ranked_ids if candidate_id != exact_id]
+        try:
+            hybrid_rank = hybrid_ids.index(example['gold_concept_id']) + 1
+        except ValueError:
+            hybrid_rank = None
+        hybrid_ranks_by_vocab[example['prefix']].append(hybrid_rank)
+
     metrics = {'global': _candidate_set_metrics([r for ranks in ranks_by_vocab.values() for r in ranks])}
     for prefix, ranks in ranks_by_vocab.items():
         metrics[prefix] = _candidate_set_metrics(ranks)
+    metrics['hybrid_exact_alias'] = {
+        'global': _candidate_set_metrics([
+            rank for ranks in hybrid_ranks_by_vocab.values() for rank in ranks
+        ]),
+        'per_vocabulary': {
+            prefix: _candidate_set_metrics(ranks)
+            for prefix, ranks in hybrid_ranks_by_vocab.items()
+        },
+    }
     return metrics
+
+
+class CandidateSetEvaluator:
+    """SentenceTransformer-compatible evaluator using the real multi-candidate ranking task."""
+
+    greater_is_better = True
+    primary_metric = 'candidate_mrr'
+
+    def __init__(self, examples: list[dict], batch_size: int):
+        self.examples = examples
+        self.batch_size = batch_size
+
+    def __call__(self, model, output_path=None, epoch=-1, steps=-1) -> dict[str, float]:
+        del output_path, epoch, steps
+        result = _run_candidate_set_evaluation(model, self.examples, self.batch_size)
+        global_metrics = result.get('global', {})
+        return {
+            'candidate_accuracy_at_1': global_metrics.get('accuracy_at_1', 0.0),
+            'candidate_mrr': global_metrics.get('mrr', 0.0),
+            'candidate_recall_at_3': global_metrics.get('recall_at_3', 0.0),
+            'candidate_recall_at_5': global_metrics.get('recall_at_5', 0.0),
+        }
 
 
 def _report_candidate_length_distribution(model,
@@ -526,7 +641,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--save-total-limit', type=int, default=3)
     parser.add_argument(
         '--eval-steps', type=int, default=0,
-        help='Run the secondary smoke-test evaluator every N steps (0 disables). The primary evaluation always runs once after training.',
+        help='Run primary candidate-set evaluation every N steps (0 disables). The primary evaluation always runs once after training.',
+    )
+    parser.add_argument(
+        '--periodic-eval-max-groups', type=int, default=1000,
+        help='Vocabulary-stratified held-out groups used for periodic candidate-set evaluation; non-positive uses all.',
+    )
+    parser.add_argument(
+        '--drop-ambiguous-training-queries', action='store_true',
+        help='Exclude train groups whose normalised query maps to multiple gold IDs in the loaded pool; evaluation remains unchanged.',
     )
     parser.add_argument('--resume-from-checkpoint', default=None, help='Path to a checkpoint directory to resume from.')
     parser.add_argument(
@@ -556,6 +679,10 @@ def _validate_args(args: argparse.Namespace) -> None:
             'contrastive batches use --cached-loss, increase --batch-size, and control memory '
             'with --cached-mini-batch-size.'
         )
+    if args.eval_steps < 0:
+        errors.append('--eval-steps must be >= 0.')
+    if args.eval_steps > 0 and args.save_steps % args.eval_steps != 0:
+        errors.append('--save-steps must be a multiple of --eval-steps for best-checkpoint selection.')
 
     if errors:
         raise SystemExit('Invalid arguments:\n' + '\n'.join(f'  - {e}' for e in errors))
@@ -572,6 +699,9 @@ def main() -> None:
     concept_store_dirs = [Path(p) for p in args.concept_store_dir]
 
     all_groups = _load_groups(train_paths)
+    all_groups, duplicate_count = _deduplicate_groups(all_groups)
+    if duplicate_count:
+        print(f'Deduplication: removed {duplicate_count} repeated query groups.')
     concept_store = _load_concept_store(concept_store_dirs)
     print(f'Loaded {len(all_groups)} query groups and {len(concept_store)} concepts.')
 
@@ -587,6 +717,21 @@ def main() -> None:
 
     train_groups, eval_groups = _split_by_concept(all_groups, args.eval_fraction, args.split_seed)
     print(f'Concept-grouped split: {len(train_groups)} train groups, {len(eval_groups)} eval groups.')
+
+    ambiguous_keys = _ambiguous_query_keys(all_groups)
+    ambiguous_train_count = sum(
+        (g['prefix'], _normalise_query(g['query'])) in ambiguous_keys for g in train_groups
+    )
+    print(
+        f'Ambiguity audit: {len(ambiguous_keys)} normalised query keys map to multiple gold '
+        f'concepts ({ambiguous_train_count} train groups).'
+    )
+    if args.drop_ambiguous_training_queries:
+        train_groups = [
+            g for g in train_groups
+            if (g['prefix'], _normalise_query(g['query'])) not in ambiguous_keys
+        ]
+        print(f'After --drop-ambiguous-training-queries: {len(train_groups)} train groups.')
 
     eval_examples = _build_candidate_sets(eval_groups, concept_store, eval_variant, max_aliases)
     if not eval_examples:
@@ -619,9 +764,13 @@ def main() -> None:
     from datasets import Dataset
     from sentence_transformers import SentenceTransformerTrainer, SentenceTransformerTrainingArguments
     from pylate import evaluation, losses, models, utils
+    from transformers import set_seed
 
     train_dataset = Dataset.from_list(rows)
 
+    # SentenceTransformerTrainingArguments seeds training later, but the ColBERT projection is
+    # created before Trainer construction. Seed explicitly so the step-zero model is reproducible.
+    set_seed(args.seed)
     model = models.ColBERT(
         model_name_or_path=args.base_model,
         query_length=args.query_length,
@@ -661,6 +810,16 @@ def main() -> None:
 
     extra_args = json.loads(args.trainer_args_json) if args.trainer_args_json else {}
 
+    periodic_examples = []
+    if args.eval_steps > 0:
+        periodic_groups = _stratified_eval_sample(
+            eval_groups,
+            target_size=(args.periodic_eval_max_groups if args.periodic_eval_max_groups > 0 else None),
+            seed=args.split_seed,
+        )
+        periodic_examples = _build_candidate_sets(periodic_groups, concept_store, eval_variant, max_aliases)
+        print(f'Periodic candidate-set evaluation examples: {len(periodic_examples)}')
+
     training_args = SentenceTransformerTrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
@@ -675,8 +834,11 @@ def main() -> None:
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
-        eval_strategy='steps' if (triplet_evaluator is not None and args.eval_steps > 0) else 'no',
+        eval_strategy='steps' if periodic_examples else 'no',
         eval_steps=args.eval_steps if args.eval_steps > 0 else None,
+        load_best_model_at_end=bool(periodic_examples),
+        metric_for_best_model='eval_candidate_mrr' if periodic_examples else None,
+        greater_is_better=True if periodic_examples else None,
         report_to=extra_args.pop('report_to', 'none'),
         **extra_args,
     )
@@ -685,9 +847,15 @@ def main() -> None:
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        # The held-out Dataset is only needed by the cheap final triplet smoke test. Periodic
+        # selection is performed directly by CandidateSetEvaluator, avoiding a redundant loss
+        # pass over all held-out triplets before every ranking evaluation.
+        eval_dataset=None,
         loss=train_loss,
-        evaluator=triplet_evaluator,
+        # SentenceTransformerTrainer wraps supplied evaluators in SequentialEvaluator and
+        # therefore expects an iterable even when there is only one primary evaluator.
+        evaluator=([CandidateSetEvaluator(periodic_examples, args.eval_batch_size)]
+                   if periodic_examples else None),
         data_collator=utils.ColBERTCollator(model.tokenize),
     )
 

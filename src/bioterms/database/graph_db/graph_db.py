@@ -257,6 +257,14 @@ class GraphDatabase(ABC):
         """
 
     @abstractmethod
+    async def get_annotation_edges(self,
+                                   prefix_1: ConceptPrefix,
+                                   prefix_2: ConceptPrefix,
+                                   annotation_type: AnnotationType | None = None,
+                                   ) -> AsyncIterator[tuple[str, str, str, str, AnnotationType]]:
+        """Stream annotation edges, optionally filtered by type at the database."""
+
+    @abstractmethod
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,
                                  prefix_2: ConceptPrefix,

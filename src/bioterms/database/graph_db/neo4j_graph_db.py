@@ -846,6 +846,33 @@ class Neo4jGraphDatabase(GraphDatabase):
 
         return annotation_graph
 
+    async def get_annotation_edges(self,
+                                   prefix_1: ConceptPrefix,
+                                   prefix_2: ConceptPrefix,
+                                   annotation_type: AnnotationType | None = None,
+                                   ) -> AsyncIterator[tuple[str, str, str, str, AnnotationType]]:
+        """Stream cross-vocabulary annotations without materialising a NetworkX graph."""
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $prefix_1})-[r]-(target:Concept {prefix: $prefix_2})
+                WHERE $rel_type IS NULL OR type(r) = $rel_type
+                RETURN DISTINCT source.id AS source_id, target.id AS target_id,
+                    type(r) AS rel_label
+                """,
+                session=session,
+                parameters={
+                    'prefix_1': prefix_1.value,
+                    'prefix_2': prefix_2.value,
+                    'rel_type': annotation_type.value if annotation_type is not None else None,
+                },
+            )
+            async for record in result:
+                yield (
+                    prefix_1.value, record['source_id'], prefix_2.value, record['target_id'],
+                    AnnotationType(record['rel_label']),
+                )
+
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,
                                  prefix_2: ConceptPrefix,

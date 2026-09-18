@@ -478,6 +478,10 @@ async def test_annotations(graph_db):
 
     g = await graph_db.get_annotation_graph(ConceptPrefix.HGNC, ConceptPrefix.MONDO)
     assert g.has_edge('hgnc:HGNC:1', 'mondo:MONDO:1')
+    exact_edges = [edge async for edge in graph_db.get_annotation_edges(
+        ConceptPrefix.HGNC, ConceptPrefix.MONDO, AnnotationType.EXACT,
+    )]
+    assert exact_edges == [('hgnc', 'HGNC:1', 'mondo', 'MONDO:1', AnnotationType.EXACT)]
 
     await graph_db.delete_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO)
     assert await graph_db.count_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO) == 0

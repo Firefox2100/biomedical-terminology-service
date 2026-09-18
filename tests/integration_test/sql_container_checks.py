@@ -174,3 +174,20 @@ async def test_get_random_term_ids(doc_db):
     await doc_db.save_terms([make_concept('HP:1', 'Foo'), make_concept('HP:2', 'Bar')])
     ids = await doc_db.get_random_term_ids(ConceptPrefix.HPO, 2)
     assert sorted(ids) == ['HP:1', 'HP:2']
+
+
+@pytest.mark.asyncio
+async def test_get_terms_by_ids_handles_more_than_32767_ids(doc_db):
+    """
+    SQLAlchemy's `.in_()` binds one parameter per ID rather than a single array value, and
+    PostgreSQL/asyncpg reject a query with more than 32767 bound parameters -- a caller
+    requesting a very large ID batch (e.g. every concept cross-vocabulary-mapped into a huge
+    vocabulary) used to crash outright. The real concepts should still come back correctly
+    even when buried in a batch far past that limit, made mostly of IDs that don't exist.
+    """
+    await doc_db.save_terms([make_concept('HP:1', 'Foo'), make_concept('HP:2', 'Bar')])
+
+    huge_id_list = ['HP:1'] + [f'HP:nonexistent-{i}' for i in range(40000)] + ['HP:2']
+    concepts = await doc_db.get_terms_by_ids(ConceptPrefix.HPO, huge_id_list)
+
+    assert sorted(c.concept_id for c in concepts) == ['HP:1', 'HP:2']

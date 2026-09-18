@@ -890,25 +890,42 @@ class PostgresGraphDatabase(GraphDatabase):
         :return: The annotation graph between the two vocabularies.
         """
         annotation_graph = nx.DiGraph()
-
-        async with self.engine.connect() as conn:
-            if not await self._table_exists(conn, 'graph_annotation'):
-                return annotation_graph
-
-            result = await conn.execute(text("""
-                SELECT prefix_from, concept_from, prefix_to, concept_to, rel_type
-                FROM graph_annotation
-                WHERE (prefix_from = :p1 AND prefix_to = :p2) OR (prefix_from = :p2 AND prefix_to = :p1)
-            """), {'p1': prefix_1.value, 'p2': prefix_2.value})
-
-            for row in result:
-                annotation_graph.add_edge(
-                    f'{row.prefix_from}:{row.concept_from}',
-                    f'{row.prefix_to}:{row.concept_to}',
-                    label=AnnotationType(row.rel_type),
-                )
+        async for prefix_from, concept_from, prefix_to, concept_to, annotation_type in (
+            self.get_annotation_edges(prefix_1, prefix_2)
+        ):
+            annotation_graph.add_edge(
+                f'{prefix_from}:{concept_from}',
+                f'{prefix_to}:{concept_to}',
+                label=annotation_type,
+            )
 
         return annotation_graph
+
+    async def get_annotation_edges(self,
+                                   prefix_1: ConceptPrefix,
+                                   prefix_2: ConceptPrefix,
+                                   annotation_type: AnnotationType | None = None,
+                                   ) -> AsyncIterator[tuple[str, str, str, str, AnnotationType]]:
+        """Stream cross-vocabulary annotations without materialising a NetworkX graph."""
+        async with self.engine.connect() as conn:
+            if not await self._table_exists(conn, 'graph_annotation'):
+                return
+
+            type_clause = ' AND rel_type = :rel_type' if annotation_type is not None else ''
+            params = {'p1': prefix_1.value, 'p2': prefix_2.value}
+            if annotation_type is not None:
+                params['rel_type'] = annotation_type.value
+            stream = await conn.stream(text(f"""
+                SELECT prefix_from, concept_from, prefix_to, concept_to, rel_type
+                FROM graph_annotation
+                WHERE ((prefix_from = :p1 AND prefix_to = :p2)
+                    OR (prefix_from = :p2 AND prefix_to = :p1)){type_clause}
+            """), params)
+            async for row in stream:
+                yield (
+                    row.prefix_from, row.concept_from, row.prefix_to, row.concept_to,
+                    AnnotationType(row.rel_type),
+                )
 
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,

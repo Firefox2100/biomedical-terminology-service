@@ -17,6 +17,7 @@ from sqlalchemy.types import JSON
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
+from bioterms.etc.utils import batch_iterable
 from bioterms.etc.metrics import DOCDB_OP_DURATION, DOCDB_OP_TTFI, DOCDB_OP_ERRORS, \
     AUTOCOMPLETE_ITEMS
 from bioterms.model.concept import Concept, ConceptUnion
@@ -1168,14 +1169,22 @@ class SqlDocumentDatabase(DocumentDatabase):
         try:
             async with self._engine.connect() as conn:
                 tables = await self._ensure_tables_exist(conn, prefix)
-                stmt = select(
-                    tables.concept.c.payload
-                ).where(tables.concept.c.concept_id.in_(concept_ids))
-                stream = await conn.stream(stmt)
-                async for row in stream:
-                    if first_item_at is None:
-                        first_item_at = time.perf_counter()
-                    yield model_class.model_validate(self._row_to_payload(row))
+                # SQLAlchemy's .in_() binds one parameter per ID rather than a single array
+                # value, and PostgreSQL/asyncpg reject a query with more than 32767 bound
+                # parameters -- callers passing a very large ID list (e.g. every concept
+                # mapped to a huge vocabulary via a cross-vocabulary annotation) can exceed that
+                # in one call. Chunk well under the limit so this stays correct regardless of
+                # how many IDs are requested, without needing a Postgres-specific ARRAY bind
+                # (this driver also supports MySQL/SQLite).
+                for chunk in batch_iterable(concept_ids, batch_size=30000):
+                    stmt = select(
+                        tables.concept.c.payload
+                    ).where(tables.concept.c.concept_id.in_(chunk))
+                    stream = await conn.stream(stmt)
+                    async for row in stream:
+                        if first_item_at is None:
+                            first_item_at = time.perf_counter()
+                        yield model_class.model_validate(self._row_to_payload(row))
         except asyncio.CancelledError:
             result_label = 'cancelled'
             raise

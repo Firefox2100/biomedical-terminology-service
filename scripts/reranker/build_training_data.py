@@ -11,11 +11,13 @@ import asyncio
 import hashlib
 import json
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from bioterms.etc.enums import ConceptPrefix, EmbeddingKind
-from bioterms.database import DocumentDatabase, VectorDatabase, get_active_doc_db, get_active_vector_db
+from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType, EmbeddingKind
+from bioterms.database import DocumentDatabase, GraphDatabase, VectorDatabase, get_active_doc_db, \
+    get_active_graph_db, get_active_vector_db
 from bioterms.embedding import TextTransformer
 from bioterms.model.concept import Concept, EmbeddingItem
 from bioterms.vocabulary import get_vocabulary_config
@@ -55,6 +57,7 @@ class MiningStats:
     duplicate_cross_source_hits_merged: int = 0
     rejected_by_equivalence_filter: int = 0
     skipped_below_min_negatives: int = 0
+    skipped_gold_not_retrieved: int = 0
 
     def record(self, negatives: list[dict], duplicate_merges: int, rejected: int) -> None:
         self.total_negatives += len(negatives)
@@ -78,20 +81,62 @@ class MiningStats:
             'duplicate_cross_source_hits_merged': self.duplicate_cross_source_hits_merged,
             'rejected_by_equivalence_filter': self.rejected_by_equivalence_filter,
             'skipped_below_min_negatives': self.skipped_below_min_negatives,
+            'skipped_gold_not_retrieved': self.skipped_gold_not_retrieved,
         }
 
 
 def is_valid_negative(prefix: ConceptPrefix,
                       gold_concept_id: str,
                       candidate_concept_id: str,
+                      equivalence_index: dict[str, set[str]] | None = None,
                       ) -> bool:
     """
     Single hook for rejecting a negative candidate equivalent to the gold concept (trusted
-    same-as/replacement, not just a different id). No equivalence data is wired in yet, so
-    this only rejects the gold concept itself -- extend here once that data exists.
+    same-as/replacement, not just a different id).
+
+    `equivalence_index` (see `_build_equivalence_index`) maps a concept_id to every other
+    concept_id in the *same* vocabulary it is `REPLACED_BY`-linked to, in either direction.
+    `REPLACED_BY` is the only `ConceptRelationshipType` used for this -- it is the one
+    relationship that unambiguously means "this is the same real-world thing under a
+    different code" rather than a hierarchical or approximate relation (IS_A/PART_OF are
+    not equivalence; treating them as such here would reject perfectly valid negatives).
+
+    Cross-vocabulary annotations (e.g. `AnnotationType.EXACT`) are deliberately NOT
+    consulted here: negative mining is same-vocabulary only (see `_mine_negatives`), so a
+    cross-vocabulary equivalence could never produce a same-vocabulary negative candidate in
+    the first place -- there is nothing for it to filter.
+    :param prefix: The vocabulary prefix (kept in the signature for callers that key
+        `equivalence_index` externally by prefix; unused directly here since
+        `equivalence_index` is already scoped to one vocabulary by the caller).
+    :param gold_concept_id: The query's gold concept ID.
+    :param candidate_concept_id: The candidate negative's concept ID.
+    :param equivalence_index: This vocabulary's REPLACED_BY equivalence index, or None to
+        skip equivalence checking (only the gold-concept-itself check still applies).
+    :return: True if `candidate_concept_id` is a valid negative for `gold_concept_id`.
     """
-    del prefix  # unused for now -- kept in the signature for when equivalence data is wired in
-    return candidate_concept_id != gold_concept_id
+    del prefix
+    if candidate_concept_id == gold_concept_id:
+        return False
+    if equivalence_index and candidate_concept_id in equivalence_index.get(gold_concept_id, ()):
+        return False
+    return True
+
+
+async def _build_equivalence_index(graph_db: GraphDatabase,
+                                   prefix: ConceptPrefix,
+                                   ) -> dict[str, set[str]]:
+    """
+    Build a same-vocabulary equivalence index from `REPLACED_BY` edges, for `is_valid_negative`.
+    :param graph_db: The graph database instance.
+    :param prefix: The vocabulary prefix to build the index for.
+    :return: A dict mapping each concept_id to the set of concept_ids it is equivalent to
+        (empty if the vocabulary has no REPLACED_BY edges at all).
+    """
+    index: dict[str, set[str]] = defaultdict(set)
+    async for source_id, target_id in graph_db.get_relationship_edges(prefix, ConceptRelationshipType.REPLACED_BY):
+        index[source_id].add(target_id)
+        index[target_id].add(source_id)
+    return dict(index)
 
 
 def _iter_vocabularies(requested: list[str] | None) -> list[ConceptPrefix]:
@@ -109,14 +154,23 @@ def _build_query_units(prefix: ConceptPrefix,
                        max_queries_per_concept: int,
                        ) -> list[QueryUnit]:
     """
-    Enumerate query units for one vocabulary's concepts (sorted by concept_id). Each concept
-    contributes at most `max_queries_per_concept` alias items, chosen by sorting aliases on a
-    stable hash rather than taking the first N (see README) -- deterministic, but not biased
-    toward the same "front of the list" aliases every time.
+    Enumerate query units for one vocabulary's concepts, ordered by a stable hash of
+    (prefix, concept_id) rather than plain concept_id sort order -- a `--skip`/`--limit` or
+    `--per-vocabulary-limit` window is still fully deterministic/reproducible run to run (same
+    inputs always hash to the same order), but no longer silently biased toward whichever
+    concepts happen to sort first alphabetically. This matters most when the window covers a
+    small fraction of a large vocabulary's concepts (e.g. capping SNOMED at a few thousand out
+    of over a million), where "first by concept_id" would otherwise select a narrow, arbitrary
+    slice rather than a representative one. Each concept contributes at most
+    `max_queries_per_concept` alias items, chosen by sorting aliases on a stable hash rather
+    than taking the first N (see README) -- deterministic, but not biased toward the same
+    "front of the list" aliases every time.
     """
     units: list[QueryUnit] = []
 
-    for concept_id in sorted(concepts.keys()):
+    ordered_concept_ids = sorted(concepts.keys(), key=lambda cid: _stable_hash_int(prefix.value, cid))
+
+    for concept_id in ordered_concept_ids:
         concept = concepts[concept_id]
         alias_items = [i for i in concept.embedding_items() if i.kind == EmbeddingKind.ALIAS]
         alias_items.sort(key=lambda item: _stable_hash_int(prefix.value, concept_id, item.item_id))
@@ -247,14 +301,24 @@ async def _mine_negatives(doc_db: DocumentDatabase,
                           unit: QueryUnit,
                           negatives_per_query: int,
                           candidate_pool: int,
-                          ) -> tuple[list[dict], int, int]:
+                          equivalence_index: dict[str, set[str]] | None = None,
+                          query_vector: list[float] | None = None,
+                          ) -> tuple[list[dict], int, int, dict | None]:
     """
     Run the query through the lexical/alias-embedding/definition-embedding recall arms,
     aggregate hits by concept_id (a concept hit by several arms becomes one candidate with all
     evidence attached), reject invalid candidates, and select negatives.
-    :return: (negatives, duplicate_cross_source_merges, rejected_by_equivalence_filter).
+    :return: (negatives, duplicate_cross_source_merges, rejected_by_equivalence_filter,
+        gold_retrieval_evidence). The last value records the gold's ranks/scores before it is
+        removed from the negative pool, or None if no recall arm retrieved it.
     """
-    query_vector = transformer.embed_strings([unit.item.text])[0]
+    if query_vector is None:
+        # Keep this fallback for direct callers. Production mining supplies one vector from a
+        # batch encode, which is substantially faster and avoids serial one-text GPU launches.
+        loop = asyncio.get_running_loop()
+        query_vector = (await loop.run_in_executor(
+            None, transformer.embed_strings, [unit.item.text]
+        ))[0]
 
     lexical_task = doc_db.lexical_search(unit.prefix, unit.item.text, limit=candidate_pool)
     alias_task = vector_db.search_items(query_vector, unit.prefix, EmbeddingKind.ALIAS, limit=candidate_pool)
@@ -296,15 +360,23 @@ async def _mine_negatives(doc_db: DocumentDatabase,
     add_hits(alias_hits, 'alias_embedding')
     add_hits(definition_hits, 'definition_embedding')
 
+    gold_evidence = merged.get(unit.concept_id)
+    if gold_evidence is not None:
+        gold_evidence = {
+            'sources': sorted(set(gold_evidence['sources'])),
+            'ranks': dict(gold_evidence['ranks']),
+            'scores': dict(gold_evidence['scores']),
+        }
+
     rejected = 0
     for concept_id in list(merged.keys()):
-        if not is_valid_negative(unit.prefix, unit.concept_id, concept_id):
+        if not is_valid_negative(unit.prefix, unit.concept_id, concept_id, equivalence_index):
             del merged[concept_id]
             rejected += 1
 
     negatives = _select_negatives(merged, negatives_per_query)
 
-    return negatives, duplicate_merges, rejected
+    return negatives, duplicate_merges, rejected, gold_evidence
 
 
 def _write_concept_store(concept_store_dir: Path,
@@ -332,6 +404,7 @@ def _write_concept_store(concept_store_dir: Path,
 async def _run(args: argparse.Namespace) -> None:
     doc_db = await get_active_doc_db()
     vector_db = get_active_vector_db()
+    graph_db = get_active_graph_db()
     transformer = TextTransformer()
 
     stats = MiningStats()
@@ -385,6 +458,13 @@ async def _run(args: argparse.Namespace) -> None:
 
             _write_concept_store(concept_store_dir, prefix, concepts)
 
+            equivalence_index = await _build_equivalence_index(graph_db, prefix)
+            if equivalence_index:
+                print(
+                    f'[{prefix.value}] {len(equivalence_index)} concepts have a REPLACED_BY '
+                    f'equivalence -- these will not be mined as negatives for each other.'
+                )
+
             units = _build_query_units(prefix, concepts, args.max_queries_per_concept)
             manifest[prefix.value] = len(units)
             stats.vocabularies[prefix.value] = len(units)
@@ -402,12 +482,16 @@ async def _run(args: argparse.Namespace) -> None:
             ]
             global_index += len(units)
 
-            async def process_one(unit: QueryUnit) -> tuple[dict | None, int, int, bool]:
+            async def process_one(unit: QueryUnit,
+                                  query_vector: list[float],
+                                  ) -> tuple[dict | None, int, int, bool]:
                 async with semaphore:
-                    negatives, duplicate_merges, rejected = await _mine_negatives(
+                    negatives, duplicate_merges, rejected, _gold_evidence = await _mine_negatives(
                         doc_db, vector_db, transformer, unit,
                         negatives_per_query=args.negatives_per_query,
                         candidate_pool=args.candidate_pool,
+                        equivalence_index=equivalence_index,
+                        query_vector=query_vector,
                     )
                 if len(negatives) < args.min_negatives_per_query:
                     return None, duplicate_merges, rejected, True
@@ -424,7 +508,14 @@ async def _run(args: argparse.Namespace) -> None:
             vocab_written = 0
             for batch_start in range(0, len(in_window), args.batch_size):
                 batch = in_window[batch_start:batch_start + args.batch_size]
-                results = await asyncio.gather(*(process_one(unit) for _idx, unit in batch))
+                loop = asyncio.get_running_loop()
+                query_vectors = await loop.run_in_executor(
+                    None, transformer.embed_strings, [unit.item.text for _idx, unit in batch]
+                )
+                results = await asyncio.gather(*(
+                    process_one(unit, query_vector)
+                    for (_idx, unit), query_vector in zip(batch, query_vectors)
+                ))
 
                 for record, duplicate_merges, rejected, below_min in results:
                     if below_min:
@@ -467,6 +558,7 @@ async def _run(args: argparse.Namespace) -> None:
     print(f'Done. Wrote {written} query units to {output_path} (stats: {stats_path}).')
     await doc_db.close()
     await vector_db.close()
+    await graph_db.close()
 
 
 def main() -> None:
@@ -514,6 +606,22 @@ def main() -> None:
     parser.add_argument('--concurrency', type=int, default=16, help='Max query units being mined at once.')
 
     args = parser.parse_args()
+    if args.skip < 0:
+        parser.error('--skip must be >= 0')
+    if args.limit < 1:
+        parser.error('--limit must be >= 1')
+    if args.per_vocabulary_limit is not None and args.per_vocabulary_limit < 1:
+        parser.error('--per-vocabulary-limit must be >= 1 when set')
+    if args.max_queries_per_concept < 1:
+        parser.error('--max-queries-per-concept must be >= 1')
+    if args.negatives_per_query < 1:
+        parser.error('--negatives-per-query must be >= 1')
+    if not 0 <= args.min_negatives_per_query <= args.negatives_per_query:
+        parser.error('--min-negatives-per-query must be between 0 and --negatives-per-query')
+    if args.candidate_pool < 1:
+        parser.error('--candidate-pool must be >= 1')
+    if args.batch_size < 1 or args.concurrency < 1:
+        parser.error('--batch-size and --concurrency must be >= 1')
     asyncio.run(_run(args))
 
 

@@ -182,6 +182,10 @@ async def test_save_query_and_delete_annotations(graph_db):
     edge_data = annotation_graph.edges['hgnc:H1', 'mondo:M1']
     assert edge_data['label'] == AnnotationType.EXACT
     assert edge_data['evidence'] == 'manual'
+    exact_edges = [edge async for edge in graph_db.get_annotation_edges(
+        ConceptPrefix.HGNC, ConceptPrefix.MONDO, AnnotationType.EXACT,
+    )]
+    assert exact_edges == [('hgnc', 'H1', 'mondo', 'M1', AnnotationType.EXACT)]
 
     await graph_db.delete_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO)
     assert await graph_db.count_annotations(ConceptPrefix.HGNC, ConceptPrefix.MONDO) == 0
