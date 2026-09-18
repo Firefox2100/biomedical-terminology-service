@@ -158,6 +158,25 @@ class Settings(BaseSettings):
                     '`mongodb-search` compose profile). Falls back to the legacy "nGrams" '
                     'field/index automatically when unsupported.',
     )
+    elasticsearch_url: str = Field(
+        'http://localhost:9200',
+        description='Elasticsearch URL used by both document and vector drivers.',
+    )
+    elasticsearch_username: Optional[str] = Field(
+        None, description='Optional Elasticsearch basic-auth username.',
+    )
+    elasticsearch_password: Optional[str] = Field(
+        None, description='Optional Elasticsearch basic-auth password.',
+    )
+    elasticsearch_api_key: Optional[str] = Field(
+        None, description='Optional Elasticsearch API key; takes precedence over basic auth.',
+    )
+    elasticsearch_index_prefix: str = Field(
+        'bts', description='Prefix for all Elasticsearch indices created by this service.',
+    )
+    elasticsearch_batch_size: int = Field(
+        1000, description='Bulk indexing chunk size for Elasticsearch drivers.',
+    )
     sql_db_url: str = Field(
         'sqlite+aiosqlite:///./bts.sqlite3',
         description='Database URL for the SQL database',
@@ -354,6 +373,10 @@ class Settings(BaseSettings):
                     'instance -- embedding items still live in their own '
                     '"concept_<prefix>_vector_item" tables, so this works whether or not the '
                     'document database is also PostgreSQL.',
+    )
+    elasticsearch_vector_num_candidates_multiplier: int = Field(
+        10,
+        description='Multiplier used to derive num_candidates for Elasticsearch kNN search.',
     )
 
     verbose_print: bool = Field(

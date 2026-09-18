@@ -312,4 +312,20 @@ def get_active_vector_db() -> VectorDatabase:
 
         return _active_vector_db
 
+    if CONFIG.vector_database_driver == VectorDatabaseDriverType.ELASTICSEARCH:
+        from elasticsearch import AsyncElasticsearch
+        from .elasticsearch_vector_db import ElasticsearchVectorDatabase
+
+        kwargs = {}
+        if CONFIG.elasticsearch_api_key:
+            kwargs['api_key'] = CONFIG.elasticsearch_api_key
+        elif CONFIG.elasticsearch_username:
+            kwargs['basic_auth'] = (
+                CONFIG.elasticsearch_username, CONFIG.elasticsearch_password or '',
+            )
+        client = AsyncElasticsearch(CONFIG.elasticsearch_url, **kwargs)
+        _active_vector_db = ElasticsearchVectorDatabase(client)
+        LOGGER.info('Initialized vector database backend: elasticsearch')
+        return _active_vector_db
+
     raise ValueError(f'Unsupported vector database driver: {CONFIG.vector_database_driver}')

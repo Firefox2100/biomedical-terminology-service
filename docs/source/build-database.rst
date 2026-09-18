@@ -21,17 +21,43 @@ As an alternative to MongoDB, the document database can be backed by a SQL datab
 
 Set ``BTS_DOC_DATABASE_DRIVER=sql`` and ``BTS_SQL_DB_URL`` to a SQLAlchemy async URL to enable it, e.g. ``postgresql+asyncpg://user:password@host:5432/bts``. For PostgreSQL, install the ``postgres`` extra (``pip install .[postgres]``), which bundles the ``asyncpg`` driver - no separate driver package to track down. For MySQL/MariaDB or SQLite, install the plain ``sql`` extra (``pip install .[sql]``) plus an async driver package this project does not bundle, e.g. ``aiomysql``/``asyncmy`` for MySQL/MariaDB or ``aiosqlite`` for SQLite. SQLite is convenient for local development and small deployments but is not recommended for the concurrent write load of a full database build.
 
+Elasticsearch (document and vector storage)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Elasticsearch can provide the document store, the vector store, or both from one cluster.
+Install ``pip install .[elasticsearch]``, set ``BTS_ELASTICSEARCH_URL``, and select
+``BTS_DOC_DATABASE_DRIVER=elasticsearch`` and/or
+``BTS_VECTOR_DATABASE_DRIVER=elasticsearch``. Authentication uses
+``BTS_ELASTICSEARCH_API_KEY`` when set, otherwise the optional
+``BTS_ELASTICSEARCH_USERNAME`` and ``BTS_ELASTICSEARCH_PASSWORD`` pair.
+
+The document driver creates one concept index per vocabulary, keys documents by
+``conceptId``, and maps IDs, labels, and synonyms through a native 3-20 character n-gram
+analyzer so autocomplete retains the existing substring semantics. The
+vector driver creates a separate index per vocabulary with one dense-vector document per
+alias or definition embedding item and cosine kNN search filtered by item kind. Keeping the
+indices separate means rebuilding embeddings never removes concept documents.
+``BTS_ELASTICSEARCH_INDEX_PREFIX`` lets several BTS deployments safely share a cluster.
+
+For local development, start the bundled, unauthenticated single-node service with::
+
+    docker compose --profile elasticsearch up -d elasticsearch
+
+It listens on ``http://localhost:9200``. Enable security and supply credentials for any
+non-local deployment.
+
 Auto-complete search indexing
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The auto-complete endpoints (``/api/*/auto-complete``, and the equivalent GraphQL/MCP/FHIR paths) need to find every concept whose label, synonyms, or ID contain each word of the query as a substring - not just as a prefix. The original implementation of this (still used as the fallback below) pre-computes every substring from 3 to 20 characters of each word in a concept's label/synonyms (``Concept.n_grams()``) and stores each one as its own row/array entry, so a query word can be matched with a plain equality lookup. This is simple and portable, but for a vocabulary the size this service targets (SNOMED-scale and up), materialising every substring of every word is a large multiple of the underlying text in extra storage and write I/O, on both the document database and (for MongoDB) the collection itself.
 
-Since this was first built (against plain MongoDB), both of the document database backends have gained a built-in way to do the same kind of substring indexing natively, without exploding the data into a side table/field. Each document database driver now **probes, once per process, whether its connected deployment actually has that native capability available** (a driver being selected does not by itself guarantee the capability - e.g. plain community MongoDB without the ``mongodb-search`` Compose profile, or a PostgreSQL user without permission to install extensions) and uses it when present, falling back to the original n-gram approach otherwise. This choice is cached for the life of the process; if you enable/disable the native capability on a live deployment (e.g. install ``pg_trgm`` after the fact), restart the service to pick it up.
+Since this was first built (against plain MongoDB), the document database backends have gained built-in ways to do the same kind of substring indexing natively, without exploding the data into a side table/field. Drivers whose capability is optional **probe, once per process, whether their connected deployment actually supports it** (e.g. plain community MongoDB without the ``mongodb-search`` Compose profile, or a PostgreSQL user without permission to install extensions) and fall back to the original n-gram approach when needed. This choice is cached for the life of the process; if you enable/disable the native capability on a live deployment (e.g. install ``pg_trgm`` after the fact), restart the service to pick it up.
 
 Because the underlying engines don't expose comparable relevance scoring, results are **not** guaranteed to come back in the exact same order across backends - every mode still guarantees an exact substring match per query word (AND across words), and orders ties by shorter label first then concept ID, but how "more relevant first" is approximated differs:
 
 - **MongoDB, native** (Atlas Search/mongot support detected - see the MongoDB section above): an Atlas Search index of type ``autocomplete`` (``tokenization: nGram``, ``minGrams``/``maxGrams`` matching ``Concept.n_grams()``'s own 3-20 range) is created directly on the ``conceptId``/``label``/``synonyms`` document fields (name configurable via ``BTS_MONGODB_TEXT_INDEX_NAME``). No ``nGrams``/``searchText`` field is written to documents at all. Queried via a ``$search`` ``compound.must`` of one ``autocomplete`` clause per query word; ranked by mongot's own relevance score.
 - **MongoDB, fallback** (no Atlas Search/mongot): unchanged from the original implementation - the ``nGrams`` array field plus a plain index, matched via ``$all`` and ranked by the query's byte offset within a precomputed ``searchText`` field.
+- **Elasticsearch**: a native custom n-gram analyzer indexes 3-20 character substrings directly on ``conceptId``/``label``/``synonyms``. Queries require every normalized query word and use Elasticsearch's relevance score, with label and concept ID tie-breaks for deterministic output. No application-generated ``nGrams`` payload is stored.
 - **PostgreSQL, native**: the `pg_trgm <https://www.postgresql.org/docs/current/pgtrgm.html>`_ extension (enabled automatically via ``CREATE EXTENSION IF NOT EXISTS pg_trgm`` if the connection has privileges to do so) backs a GIN trigram index on the existing ``search_text`` column - no separate n-gram table. Queried with ``ILIKE '%word%'`` per word, index-accelerated by the trigram index for the expensive substring filtering; ranked with the same position-based (``strpos``) score as the fallback path, since trigram ``similarity()`` scores whole-string trigram overlap rather than reliably preferring an earlier/more exact match of the query itself.
 - **MySQL, native** (not MariaDB - see below): a ``FULLTEXT ... WITH PARSER ngram`` index on ``search_text``, using MySQL's built-in ngram full-text parser plugin. Queried with ``MATCH ... AGAINST (... IN BOOLEAN MODE)``, requiring every query word (``+word``); the same boolean-mode match score is reused for ranking. The parser's own ``ngram_token_size`` server variable (default 2) controls its internal n-gram length, independent of and coarser than ``Concept.n_grams()``'s 3-20 range - this does not affect correctness, only how much of the index tokenises finer than the words being searched for.
 - **SQLite, native**: an `FTS5 virtual table using the built-in trigram tokenizer <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>`_ (SQLite >= 3.34.0), mirrored by hand alongside the concept row on every write (FTS5 has no native upsert/trigger sync). Queried with one ``MATCH`` per word intersected together, index-accelerated the same way as PostgreSQL's trigram index; FTS5 does not expose a relevance score meaningful across an intersection of independent trigram matches, so ranking falls back to the same position-based (``instr``) score, computed over the already-small matched set rather than the full table.

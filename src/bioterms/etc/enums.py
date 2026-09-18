@@ -108,6 +108,7 @@ class DocDatabaseDriverType(Enum):
     """
     MONGO = 'mongo'
     SQL = 'sql'
+    ELASTICSEARCH = 'elasticsearch'
 
 
 class EmbeddingKind(Enum):
@@ -152,6 +153,7 @@ class VectorDatabaseDriverType(Enum):
     QDRANT = 'qdrant'
     MONGODB = 'mongodb'
     POSTGRESQL = 'postgresql'
+    ELASTICSEARCH = 'elasticsearch'
 
 
 class QdrantStorageType(Enum):

@@ -58,6 +58,26 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # Optional combined document/vector backend.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.4
+    restart: unless-stopped
+    container_name: elasticsearch
+    profiles: ["elasticsearch"]
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
   # Redis as the caching layer
   redis:
     image: redis:8.8
@@ -413,3 +433,4 @@ volumes:
   mongodb_search_shared:
   mongot_data:
   postgres_data:
+  elasticsearch_data:
