@@ -98,6 +98,7 @@ _VOCABULARY_GRAPHQL_MODULES: dict[ConceptPrefix, tuple[str, str, list[str], str]
          'REACTOME_PHYSICAL_ENTITY'],
         'REACTOME_QUERY',
     ),
+    ConceptPrefix.RXNORM: ('RXNORM_SCHEMA', 'rxnorm', ['RXNORM_CONCEPT'], 'RXNORM_QUERY'),
     ConceptPrefix.SNOMED: ('SNOMED_SCHEMA', 'snomed', ['SNOMED_CONCEPT'], 'SNOMED_QUERY'),
     ConceptPrefix.UBERON: ('UBERON_SCHEMA', 'uberon', ['UBERON_CONCEPT'], 'UBERON_QUERY'),
     ConceptPrefix.UNIPROT: ('UNIPROT_SCHEMA', 'uniprot', ['UNIPROT_CONCEPT'], 'UNIPROT_QUERY'),
@@ -130,6 +131,8 @@ _ANNOTATION_GRAPHQL_SCHEMAS: dict[tuple[ConceptPrefix, ConceptPrefix], tuple[str
     (ConceptPrefix.HPO, ConceptPrefix.MONDO): ('HPO_MONDO_SCHEMA', 'hpo_mondo'),
     (ConceptPrefix.HPO, ConceptPrefix.OMIM): ('HPO_OMIM_SCHEMA', 'hpo_omim'),
     (ConceptPrefix.LOINC, ConceptPrefix.SNOMED): ('LOINC_SNOMED_SCHEMA', 'loinc_snomed'),
+    (ConceptPrefix.LOINC, ConceptPrefix.RXNORM): ('LOINC_RXNORM_SCHEMA', 'loinc_rxnorm'),
+    (ConceptPrefix.OHDSI, ConceptPrefix.RXNORM): ('OHDSI_RXNORM_SCHEMA', 'ohdsi_rxnorm'),
     (ConceptPrefix.MONDO, ConceptPrefix.NCIT): ('MONDO_NCIT_SCHEMA', 'mondo_ncit'),
     (ConceptPrefix.MONDO, ConceptPrefix.OMIM): ('MONDO_OMIM_SCHEMA', 'mondo_omim'),
     (ConceptPrefix.MONDO, ConceptPrefix.ORDO): ('MONDO_ORDO_SCHEMA', 'mondo_ordo'),
@@ -144,6 +147,7 @@ _ANNOTATION_GRAPHQL_SCHEMAS: dict[tuple[ConceptPrefix, ConceptPrefix], tuple[str
     (ConceptPrefix.REACTOME, ConceptPrefix.UNIPROT): (
         'REACTOME_UNIPROT_SCHEMA', 'reactome_uniprot',
     ),
+    (ConceptPrefix.RXNORM, ConceptPrefix.SNOMED): ('RXNORM_SNOMED_SCHEMA', 'rxnorm_snomed'),
     (ConceptPrefix.SNOMED, ConceptPrefix.UBERON): ('SNOMED_UBERON_SCHEMA', 'snomed_uberon'),
 }
 

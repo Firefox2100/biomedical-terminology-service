@@ -110,6 +110,22 @@ async def test_download_file_fresh_download_sends_no_range_header(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_download_file_redacts_url_credentials_in_logs(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    client = _FakeDownloadClient([_FakeStreamResponse(200, b'content')])
+
+    with caplog.at_level('INFO'):
+        await download_file(
+            'https://example.com/file?apiKey=secret-value&release=current',
+            'f.bin', download_client=client,
+        )
+
+    assert 'secret-value' not in caplog.text
+    assert '%5BREDACTED%5D' in caplog.text
+    assert 'release=current' in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_download_file_resumes_partial_file_with_range_header(monkeypatch, tmp_path):
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
     target = tmp_path / 'f.bin'

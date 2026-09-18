@@ -120,7 +120,8 @@ Some vocabularies require an API key to download. The supported credentials are:
 
 * NHS TRUD API key for CTV3 and SNOMED CT. You need to subscribe to these vocabularies and wait for them to approve the subscription, before the API key can be used to download the files. SNOMED's download also includes its historical Association Reference Set files (SAME_AS/REPLACED_BY/WAS_A/POSSIBLY_EQUIVALENT_TO/etc, loaded as ``snomed_association`` relationships distinguished by SNOMED's own numeric ``refsetId``) - no separate credential or step needed, but if you downloaded SNOMED before this was added, re-run ``vocabulary download snomed --redownload`` to pick them up.
 * BioPortal API key for OMIM and ORDO
-* NIH UMLS API key for SNOMED-ORDO mapping files
+* NIH UMLS API key for the full monthly RxNorm release and SNOMED-ORDO mapping files. A free
+  UMLS Terminology Services licence is required.
 * LOINC username and password for the official LOINC download API. Register with LOINC and
   accept its current licence, then set ``BTS_LOINC_USERNAME`` and ``BTS_LOINC_PASSWORD``.
 
@@ -129,6 +130,11 @@ And not all vocabularies can be downloaded this way. Particularly:
 * Reactome releases only a Neo4j dump and a SQL dump. They are both complicated to read from plain Python without restoring them into a database first. Therefore, Reactome must be loaded into the Neo4j 4 container in ``scripts/docker-compose.reactome.yaml``, then ``scripts/dump_reactome_to_csv.py`` exports the CSV release consumed here. The export includes stable physical entities (complexes, entity sets, simple entities, drugs, polymers, cells, and other entities), their reaction input/output edges, separate ReferenceEntity mapping files for UniProt, Ensembl, HGNC, OMIM, NCIt, and ChEBI, and Reactome's GO biological-process, compartment, and molecular-function assignments. ChEBI is exported for forward compatibility but has no annotation loader until ChEBI itself is supported. The supported mappings are normal annotations and are loaded explicitly after both endpoint vocabularies.
 * OHDSI standardized vocabularies are not open for public download, and provides no download API. You need to manually download the latest release from Athena, and unzip it to the data folder.
 * UMLS system provides no way to fetch the latest release files automatically, so the files downloaded from UMLS are using hard-coded URL. If you need a different version, you need to manually download the files from UMLS and place them in the data folder, or open an issue/pull request to notify us of the desired version.
+* RxNorm uses NLM's stable ``RxNorm_full_current.zip`` endpoint through UTS authentication. The
+  loader extracts ``RXNCONSO.RRF``, ``RXNREL.RRF``, and ``RXNCUI.RRF`` and streams the large atom
+  and relationship tables in bounded-memory chunks. The full release includes third-party source
+  vocabulary atoms subject to the UMLS licence; this software neither redistributes the release nor
+  grants those rights. See the bundled RxNorm licence notice before hosting derived data.
 * UniProt requires no credential and no other vocabulary downloaded first, but it is the **complete** UniProtKB release (Swiss-Prot + TrEMBL, every organism) rather than a subset scoped to any other vocabulary's needs - a partial UniProt cannot be claimed as "supported." Expect it to dominate both download time and disk usage: TrEMBL alone is on the order of 100GB compressed at the time of writing. Both files are kept gzip-compressed on disk and streamed/decompressed on the fly while loading, so disk usage stays close to the download size rather than growing several times larger. Loading (both online and ``--offline``) is fully batched and streamed - memory stays bounded regardless of total release size - but budget real wall-clock time for TrEMBL specifically; parsing Swiss-Prot alone (~575k entries) takes on the order of a minute or two. Organism is not filtered at load time: every entry's NCBI taxonomy ID and organism name are stamped as the ``organismTaxId``/``organismName`` node properties instead (indexed - see below), so scoping to e.g. human (``organismTaxId = '9606'``) is a query-time filter, not a permanent restriction on what was loaded.
 
 The LOINC downloader first queries the official API for current release metadata, downloads with

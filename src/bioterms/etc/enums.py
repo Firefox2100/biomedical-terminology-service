@@ -43,6 +43,7 @@ class ConceptPrefix(Enum):
     OMIM = 'omim'
     ORDO = 'ordo'
     REACTOME = 'reactome'
+    RXNORM = 'rxnorm'
     SNOMED = 'snomed'
     UBERON = 'uberon'
     UNIPROT = 'uniprot'
@@ -73,6 +74,12 @@ class ConceptType(Enum):
     POLYMER = 'polymer'
     CELL = 'cell'
     OTHER_ENTITY = 'other_entity'
+    INGREDIENT = 'ingredient'
+    BRAND = 'brand'
+    DOSE_FORM = 'dose_form'
+    CLINICAL_DRUG = 'clinical_drug'
+    BRANDED_DRUG = 'branded_drug'
+    PACK = 'pack'
 
 
 class ConceptRelationshipType(Enum):
@@ -92,6 +99,7 @@ class ConceptRelationshipType(Enum):
     ANNOTATED_WITH = 'annotated_with'
     CONSIDER = 'consider'
     SNOMED_ASSOCIATION = 'snomed_association'
+    RXNORM_RELATIONSHIP = 'rxnorm_relationship'
 
 
 class DocDatabaseDriverType(Enum):

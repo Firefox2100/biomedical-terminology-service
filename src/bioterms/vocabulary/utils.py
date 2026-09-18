@@ -36,6 +36,7 @@ ALL_VOCABULARIES = {
     ConceptPrefix.OMIM: 'omim',
     ConceptPrefix.ORDO: 'ordo',
     ConceptPrefix.REACTOME: 'reactome',
+    ConceptPrefix.RXNORM: 'rxnorm',
     ConceptPrefix.SNOMED: 'snomed',
     ConceptPrefix.UBERON: 'uberon',
     ConceptPrefix.UNIPROT: 'uniprot',

@@ -101,6 +101,12 @@ def get_reactome_license():
     return get_vocabulary_license(ConceptPrefix.REACTOME)
 
 
+@mcp.resource('license://rxnorm')
+def get_rxnorm_license():
+    """Get the RxNorm and UMLS licence notice."""
+    return get_vocabulary_license(ConceptPrefix.RXNORM)
+
+
 @mcp.resource('license://snomed')
 def get_snomed_license():
     """

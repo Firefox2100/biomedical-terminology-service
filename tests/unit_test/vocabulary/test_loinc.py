@@ -62,11 +62,11 @@ def _write_release_files(tmp_path):
     (release / 'license.txt').write_text('Official release licence')
 
 
-def test_loinc_is_registered_with_license_and_no_annotations():
+def test_loinc_is_registered_with_license_and_annotations():
     config = get_vocabulary_config(ConceptPrefix.LOINC)
 
     assert config['filePaths'] == loinc.FILE_PATHS
-    assert config['annotations'] == [ConceptPrefix.SNOMED]
+    assert config['annotations'] == [ConceptPrefix.RXNORM, ConceptPrefix.SNOMED]
     assert 'does not grant a LOINC licence' in get_vocabulary_license(ConceptPrefix.LOINC)
 
 

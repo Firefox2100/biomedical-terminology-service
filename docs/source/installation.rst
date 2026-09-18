@@ -474,7 +474,7 @@ External API Keys (Optional)
    * - ``BTS_NIH_UMLS_API_KEY``
      - None
      - yes
-     - NIH UMLS API key. Needed for SNOMED-ORDO mappings.
+     - NIH UMLS API key. Needed for the full RxNorm release and SNOMED-ORDO mappings.
    * - ``BTS_LOINC_USERNAME``
      - None
      - yes

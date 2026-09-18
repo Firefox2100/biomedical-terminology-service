@@ -65,6 +65,7 @@ def prefix_to_concept_type(prefix: ConceptPrefix) -> str:
         ConceptPrefix.OMIM: 'OmimConcept',
         ConceptPrefix.ORDO: 'OrdoConcept',
         ConceptPrefix.REACTOME: 'ReactomeConcept',
+        ConceptPrefix.RXNORM: 'RxNormConcept',
         ConceptPrefix.SNOMED: 'SnomedConcept',
         ConceptPrefix.UBERON: 'UberonConcept',
         ConceptPrefix.UNIPROT: 'UniProtConcept',

@@ -41,3 +41,20 @@ def test_process_concepts_handles_missing_vocabulary_id(monkeypatch, tmp_path):
 
     assert concepts[3].source_vocabulary_id is None
     assert concepts[3].prefix == ConceptPrefix.OHDSI
+
+
+def test_process_annotations_projects_rxnorm_rows(monkeypatch, tmp_path):
+    data_dir = tmp_path / 'data'
+    _write_concept_csv(data_dir, [
+        '10\tRxNorm concept\tDrug\tRxNorm\tIngredient\tS\t1234\t20200101\t20991231\t',
+        '11\tSNOMED concept\tCondition\tSNOMED\tClinical Finding\tS\t5678\t20200101\t20991231\t',
+    ])
+    monkeypatch.setattr(CONFIG, 'data_dir', str(data_dir))
+
+    annotations = ohdsi._process_annotations(ConceptPrefix.RXNORM)
+
+    assert len(annotations) == 1
+    assert annotations[0].concept_id_from == '10'
+    assert annotations[0].prefix_to == ConceptPrefix.RXNORM
+    assert annotations[0].concept_id_to == '1234'
+    assert annotations[0].properties == {'source': 'OHDSI Athena'}

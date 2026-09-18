@@ -11,6 +11,7 @@ enum ConceptPrefix {
     omim
     ordo
     reactome
+    rxnorm
     snomed
     uberon
     uniprot
@@ -45,6 +46,7 @@ enum RelationshipType {
     has_input
     has_output
     ohdsi_relationship
+    rxnorm_relationship
 }
 
 interface SimilarConcept {

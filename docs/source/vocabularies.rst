@@ -32,6 +32,9 @@ Reactome                     Supported          Reactome only releases a Neo4j/S
                                                  to convert that dump into the CSV import format it expects. Pathways,
                                                  reactions, genes, complexes, entity sets, simple entities, drugs,
                                                  polymers, cells, and other stable physical entities are first-class.
+RxNorm                       Supported          Authenticated full monthly release from NLM UTS. RxNorm concepts and
+                                                 concept-level relationships are first-class; source-vocabulary atoms are
+                                                 used only by independently managed mappings. A UMLS licence is required.
 SNOMED CT                    Supported          Downloaded from the NHS TRUD API, including its historical Association
                                                  Reference Set files (SAME_AS/REPLACED_BY/WAS_A/etc, loaded as
                                                  ``snomed_association`` relationships).
@@ -101,6 +104,8 @@ HPO - ORDO            Both the HPO-published ``phenotype.hpoa`` mapping (HPO to 
                        are retained as separate relationships.
 LOINC - SNOMED        LOINC's official ``PartRelatedCodeMapping.csv`` links from constituent LOINC Parts to SNOMED CT.
                        It is included in the authenticated LOINC release and retains LOINC publisher direction.
+LOINC - RxNorm        LOINC's official ``PartRelatedCodeMapping.csv`` links from constituent LOINC Parts to RxNorm.
+                       It retains LOINC publisher direction and release provenance.
 Mondo - NCIT          Derived from cross-references in the Mondo release.
 Mondo - OMIM          Derived from cross-references in the Mondo release.
 Mondo - ORDO          Derived from cross-references in the Mondo release.
@@ -108,11 +113,14 @@ Mondo - SNOMED        Derived from cross-references in the Mondo release.
 NCIT - OHDSI          Derived from the OHDSI release.
 NCIT - Reactome       Reactome ReferenceEntity records for stable Reactome drug entities.
 NCIT - Uberon         Uberon's official NCIt cross-references.
+OHDSI - RxNorm        RxNorm vocabulary rows in the OHDSI Athena ``CONCEPT.csv`` release, projected
+                       from OHDSI concept IDs to NLM RxCUIs with OHDSI publisher provenance.
 OHDSI - SNOMED        Derived from the OHDSI release.
 ORDO - OMIM           Orphadata's ORDO-OMIM alignment dataset.
 ORDO - SNOMED         SNOMED CT Orphanet Map package, from NIH UMLS (requires an NIH UMLS API key).
 Reactome - OMIM       Reactome ReferenceEntity ``referenceGene`` records.
 Reactome - UniProt    UniProt accessions from Reactome ReferenceEntity records.
+RxNorm - SNOMED       SNOMED CT source-code atoms in NLM's full RxNorm release, retaining RxNorm/NLM publisher direction.
 SNOMED - Uberon       Uberon's official SCTID cross-references.
 ===================== =====================================================================================================================================================
 

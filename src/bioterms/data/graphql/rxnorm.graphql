@@ -1,0 +1,33 @@
+enum RxNormConceptType {
+    drug
+    ingredient
+    brand
+    dose_form
+    clinical_drug
+    branded_drug
+    pack
+}
+
+type RxNormConcept implements Concept & OntologyConcept {
+    prefix: ConceptPrefix!
+    conceptId: String!
+    label: String
+    synonyms: [String!]
+    conceptTypes: [RxNormConceptType!]!
+    status: ConceptStatus!
+    replaces: [RxNormConcept!]!
+    replacedBy: [RxNormConcept!]!
+    children: [RxNormConcept!]!
+    parents: [RxNormConcept!]!
+    similarConcepts(threshold: Float): [SimilarRxNormConcept!]!
+    pathsTo(targetPrefix: ConceptPrefix!, targetConceptId: String!, relationship: RelationshipType!, direction: PathDirection = forward, maxDepth: Int = 12): [ConceptPath!]!
+}
+type SimilarRxNormConcept implements SimilarConcept { from: RxNormConcept!, to: RxNormConcept!, score: Float! }
+type RxNormConceptResponse { error: QueryError, data: RxNormConcept }
+type RxNormConceptListResponse { error: QueryError, data: [RxNormConcept] }
+type RxNormQuery {
+    rxnormConcept(conceptId: String!): RxNormConceptResponse
+    autoComplete(query: String!, limit: Int): RxNormConceptListResponse
+    search(query: String!, limit: Int): RxNormConceptListResponse
+}
+extend type Query { rxnorm: RxNormQuery }

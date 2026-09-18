@@ -28,6 +28,7 @@ class OntologyPrefix(StrEnum):
     OMIM = 'omim'
     ORDO = 'ordo'
     REACTOME = 'reactome'
+    RXNORM = 'rxnorm'
     SNOMED = 'snomed'
     UBERON = 'uberon'
 
