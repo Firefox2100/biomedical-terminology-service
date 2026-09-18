@@ -21,6 +21,7 @@ class OntologyPrefix(StrEnum):
     CTV3 = 'ctv3'
     GO = 'go'
     HPO = 'hpo'
+    LOINC = 'loinc'
     MONDO = 'mondo'
     NCIT = 'ncit'
     OHDSI = 'ohdsi'

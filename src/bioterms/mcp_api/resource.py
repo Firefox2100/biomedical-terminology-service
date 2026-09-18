@@ -49,6 +49,12 @@ def get_hpo_license():
     return get_vocabulary_license(ConceptPrefix.HPO)
 
 
+@mcp.resource('license://loinc')
+def get_loinc_license():
+    """Get the bundled LOINC licence notice and operator guidance."""
+    return get_vocabulary_license(ConceptPrefix.LOINC)
+
+
 @mcp.resource('license://mondo')
 def get_mondo_license():
     """Get the release licence for the Mondo vocabulary."""

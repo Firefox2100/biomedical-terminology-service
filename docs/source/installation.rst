@@ -475,6 +475,14 @@ External API Keys (Optional)
      - None
      - yes
      - NIH UMLS API key. Needed for SNOMED-ORDO mappings.
+   * - ``BTS_LOINC_USERNAME``
+     - None
+     - yes
+     - Username for an account that has accepted the current LOINC licence.
+   * - ``BTS_LOINC_PASSWORD``
+     - None
+     - yes
+     - Password used with ``BTS_LOINC_USERNAME`` by the official LOINC download API.
 
 Embedding & Search Settings
 ---------------------------

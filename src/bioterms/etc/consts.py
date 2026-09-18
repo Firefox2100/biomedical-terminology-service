@@ -278,6 +278,14 @@ class Settings(BaseSettings):
         None,
         description='API key for accessing the NIH UMLS services',
     )
+    loinc_username: Optional[str] = Field(
+        None,
+        description='Username for the authenticated LOINC release API',
+    )
+    loinc_password: Optional[str] = Field(
+        None,
+        description='Password for the authenticated LOINC release API',
+    )
 
     transformer_model_name: str = Field(
         'FremyCompany/BioLORD-2023',

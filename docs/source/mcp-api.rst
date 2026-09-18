@@ -19,10 +19,10 @@ Supported Vocabularies
 
 The tool parameters accept vocabulary identifiers defined in two Enums:
 
-* **ConceptPrefix** (used by ``auto_complete``, ``search_vocabulary``, ``map_concepts``, ``get_similar_concepts`` and ``translate_concepts_to_constraints``): ``CTV3``, ``ENSEMBL``, ``GO``, ``HGNC``, ``HGNC_SYMBOL``, ``HPO``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``SNOMED``, ``UBERON``, ``UNIPROT`` — all fifteen supported vocabularies are available.
+* **ConceptPrefix** (used by ``auto_complete``, ``search_vocabulary``, ``map_concepts``, ``get_similar_concepts`` and ``translate_concepts_to_constraints``): ``CTV3``, ``ENSEMBL``, ``GO``, ``HGNC``, ``HGNC_SYMBOL``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``SNOMED``, ``UBERON``, ``UNIPROT`` — all sixteen supported vocabularies are available.
 
 * **OntologyPrefix** (used only by ``expand_ontology``):
-  ``CTV3``, ``GO``, ``HPO``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``SNOMED``, ``UBERON``. This is restricted to vocabularies with a traversable ontology or internal hierarchy; atomic identifier tables such as HGNC and UniProt are not included.
+  ``CTV3``, ``GO``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``SNOMED``, ``UBERON``. This is restricted to vocabularies with a traversable ontology or internal hierarchy; atomic identifier tables such as HGNC and UniProt are not included.
 
 Tools
 =====

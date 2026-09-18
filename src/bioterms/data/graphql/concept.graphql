@@ -5,6 +5,7 @@ enum ConceptPrefix {
     gene
     hgnc
     hpo
+    loinc
     ncit
     ohdsi
     omim

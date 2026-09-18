@@ -58,6 +58,7 @@ def prefix_to_concept_type(prefix: ConceptPrefix) -> str:
         ConceptPrefix.HGNC: 'HgncConcept',
         ConceptPrefix.HGNC_SYMBOL: 'HgncSymbolConcept',
         ConceptPrefix.HPO: 'HpoConcept',
+        ConceptPrefix.LOINC: 'LoincConcept',
         ConceptPrefix.MONDO: 'MondoConcept',
         ConceptPrefix.NCIT: 'NcitConcept',
         ConceptPrefix.OHDSI: 'OhdsiConcept',

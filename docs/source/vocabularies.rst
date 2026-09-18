@@ -19,6 +19,9 @@ HGNC                         Supported          Downloaded from HGNC's public Go
                                                  approved, alias, and previous gene symbols are part of the vocabulary model.
 HGNC Symbol (``gene``)       Supported          Derived from the HGNC release and required by HGNC.
 HPO                          Supported          Ontology and annotation products downloaded from the official GitHub release.
+LOINC                        Supported          Authenticated download from the official LOINC release API. Loads the core
+                                                 terms, constituent Parts, and Component Hierarchy by System. Operators must
+                                                 accept and comply with the current LOINC licence for their own deployment.
 Mondo                        Supported          Downloaded from a GitHub release.
 NCIT                         Supported          Downloaded via FTP from NIH.
 OHDSI                        Supported          No public download API. The release must be obtained manually from
@@ -96,6 +99,8 @@ HPO - OMIM            HPO's ``phenotype.hpoa`` disease-phenotype annotations.
 HPO - ORDO            Both the HPO-published ``phenotype.hpoa`` mapping (HPO to ORDO) and the Orphanet-authored
                        HPO-ORDO Ontological Module (ORDO to HPO; BioPortal API key required). Provenance and direction
                        are retained as separate relationships.
+LOINC - SNOMED        LOINC's official ``PartRelatedCodeMapping.csv`` links from constituent LOINC Parts to SNOMED CT.
+                       It is included in the authenticated LOINC release and retains LOINC publisher direction.
 Mondo - NCIT          Derived from cross-references in the Mondo release.
 Mondo - OMIM          Derived from cross-references in the Mondo release.
 Mondo - ORDO          Derived from cross-references in the Mondo release.
