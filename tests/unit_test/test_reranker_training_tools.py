@@ -20,6 +20,8 @@ from train_reranker import (
     _load_groups,
     _resolve_train_paths,
     _stratified_eval_sample,
+    _training_negatives,
+    _flatten_to_rows,
 )
 
 
@@ -174,3 +176,44 @@ def test_bounded_relationship_mapping_sample_is_order_independent():
 
     assert sample(mappings) == sample(reversed(mappings))
     assert len(sample(mappings)) == 5
+
+
+def test_model_stratified_sampling_keeps_hard_middle_and_tail():
+    group = _group('snomed', 'q1', 'gold', 'query')
+    group['candidate_pool'] = [
+        {
+            'concept_id': f'n{index}', 'role': 'negative',
+            'ranking_scores': {'student': float(10 - index)},
+        }
+        for index in range(10)
+    ]
+
+    selected = _training_negatives(group, 4, 'model_stratified', 'student', 42, 0)
+    selected_ids = {candidate['concept_id'] for candidate in selected}
+
+    assert {'n0', 'n1'} <= selected_ids
+    assert any(candidate_id in selected_ids for candidate_id in {'n5', 'n6', 'n7'})
+    assert any(candidate_id in selected_ids for candidate_id in {'n7', 'n8', 'n9'})
+
+
+def test_distillation_rows_reuse_stored_scores_without_remining():
+    group = _group('snomed', 'q1', 'gold', 'query')
+    group['candidate_pool'] = [
+        {'concept_id': 'gold', 'role': 'gold', 'ranking_scores': {'teacher': 9.0}},
+        {'concept_id': 'negative', 'role': 'negative', 'ranking_scores': {'teacher': 2.0}},
+    ]
+    store = {
+        ('snomed', 'gold'): {'label': 'Gold', 'synonyms': [], 'definition': None},
+        ('snomed', 'negative'): {'label': 'Negative', 'synonyms': [], 'definition': None},
+    }
+
+    rows, stats = _flatten_to_rows(
+        [group], store, negatives_per_query=1, seed=42, max_aliases=6,
+        preferred_label_keep_probability=1.0, negative_sampling='model_stratified',
+        ranking_score_key='teacher', training_objective='distillation',
+        distillation_temperature=2.0,
+    )
+
+    assert stats['skipped_insufficient_resolvable_negatives'] == 0
+    assert rows[0]['scores'] == [4.5, 1.0]
+    assert rows[0]['documents'][0].startswith('Gold')

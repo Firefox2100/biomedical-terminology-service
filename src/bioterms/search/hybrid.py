@@ -4,6 +4,7 @@ Exact ID, label, and synonym matches are pinned first. Vocabularies without embe
 back to lexical search without running the embedding model.
 """
 import asyncio
+import math
 from collections.abc import AsyncIterator
 
 from bioterms.etc.consts import CONFIG
@@ -14,6 +15,7 @@ from bioterms.database.vector_db import VectorDatabase
 from bioterms.embedding import TextTransformer
 from bioterms.model.concept import Concept
 from bioterms.vocabulary import get_vocabulary_status
+from bioterms.search.reranker import reranker_enabled, rerank_concepts
 
 
 # Probe beyond the requested limit so lexical exact matches remain available for pinning.
@@ -89,7 +91,12 @@ async def hybrid_search(query: str,
         return
 
     query_folded = normalized_query.casefold()
-    probe_limit = max(limit, _EXACT_MATCH_PROBE_LIMIT)
+    rerank_limit = max(limit, CONFIG.reranker_candidate_limit) if reranker_enabled() else limit
+    retrieval_limit = max(limit, rerank_limit, CONFIG.search_retrieval_candidate_limit)
+    vector_retrieval_limit = math.ceil(
+        retrieval_limit * CONFIG.search_vector_overretrieve_factor
+    )
+    probe_limit = max(retrieval_limit, _EXACT_MATCH_PROBE_LIMIT)
 
     # No embedding items loaded for this vocabulary (offline-only generation, restore not run
     # yet, or a vocabulary type with no embedding step at all) means the alias/definition recall
@@ -108,9 +115,13 @@ async def hybrid_search(query: str,
 
         lexical_results, alias_results, definition_results, exact_id_matches = await asyncio.gather(
             doc_db.lexical_search(prefix=prefix, query=normalized_query, limit=probe_limit),
-            vector_db.search_items(query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.ALIAS, limit=limit),
             vector_db.search_items(
-                query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.DEFINITION, limit=limit,
+                query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.ALIAS,
+                limit=vector_retrieval_limit,
+            ),
+            vector_db.search_items(
+                query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.DEFINITION,
+                limit=vector_retrieval_limit,
             ),
             doc_db.get_terms_by_ids(prefix=prefix, concept_ids=[normalized_query], model_class=model_class),
         )
@@ -143,30 +154,39 @@ async def hybrid_search(query: str,
                 exact_seen.add(concept_id)
 
     fused_ranked = _reciprocal_rank_fusion(
-        [lexical_ranked[:limit], alias_ranked, definition_ranked],
+        [lexical_ranked[:retrieval_limit], alias_ranked, definition_ranked],
         k=CONFIG.search_rrf_k,
     )
 
-    final_ids: list[str] = []
-    seen: set[str] = set()
-    for concept_id in exact_concept_ids + fused_ranked:
-        if concept_id in seen:
-            continue
-        seen.add(concept_id)
-        final_ids.append(concept_id)
-        if len(final_ids) >= limit:
-            break
-
-    if not final_ids:
+    non_exact_ids = [
+        concept_id for concept_id in fused_ranked
+        if concept_id not in exact_seen
+    ][:rerank_limit]
+    candidate_ids = exact_concept_ids + non_exact_ids
+    if not candidate_ids:
         return
 
     # Fetched by ID rather than streamed straight from the recall arms, and re-ordered here to
     # `final_ids` explicitly: document databases matching on an ID list (Mongo's `$in`, SQL's
     # `IN (...)`) are not guaranteed to preserve that list's order.
-    concepts = await doc_db.get_terms_by_ids(prefix=prefix, concept_ids=final_ids, model_class=model_class)
+    concepts = await doc_db.get_terms_by_ids(prefix=prefix, concept_ids=candidate_ids, model_class=model_class)
     concepts_by_id = {c.concept_id: c for c in concepts}
 
-    for concept_id in final_ids:
-        concept = concepts_by_id.get(concept_id)
-        if concept is not None:
-            yield concept
+    exact_concepts = [
+        concepts_by_id[concept_id] for concept_id in exact_concept_ids
+        if concept_id in concepts_by_id
+    ]
+    remaining_slots = max(0, limit - len(exact_concepts))
+    if remaining_slots:
+        non_exact_concepts = [
+            concepts_by_id[concept_id] for concept_id in non_exact_ids
+            if concept_id in concepts_by_id
+        ]
+        # Exact ID/label/synonym matches bypass both RRF and the reranker. Only the semantic
+        # remainder is scored, and no model is loaded when exact matches fill the response.
+        non_exact_concepts = await rerank_concepts(normalized_query, non_exact_concepts)
+    else:
+        non_exact_concepts = []
+
+    for concept in (exact_concepts + non_exact_concepts[:remaining_slots])[:limit]:
+        yield concept

@@ -274,12 +274,77 @@ def _render_negative(group: dict,
     )
 
 
+def _training_negatives(group: dict,
+                        count: int,
+                        sampling: str,
+                        score_key: str | None,
+                        seed: int,
+                        sample_index: int,
+                        ) -> list[dict]:
+    """Choose negatives from legacy selection or the immutable scored candidate pool.
+
+    Model-stratified sampling deliberately mixes the top, middle, and tail of the previous
+    model's score distribution.  This avoids spending every gradient on near-duplicate top
+    hits while retaining the model's most informative mistakes.
+    """
+    if sampling == 'retrieval':
+        return list(group.get('negatives') or [])[:count]
+    if not score_key:
+        raise ValueError('--ranking-score-key is required for model-stratified sampling')
+
+    candidates = [
+        candidate for candidate in (group.get('candidate_pool') or [])
+        if candidate.get('role') != 'gold'
+        and score_key in (candidate.get('ranking_scores') or {})
+    ]
+    candidates.sort(
+        key=lambda candidate: (-float(candidate['ranking_scores'][score_key]), candidate['concept_id'])
+    )
+    if len(candidates) <= count:
+        return candidates
+
+    # Half hard, one quarter around the decision boundary, and the rest from the tail.
+    hard_count = (count + 1) // 2
+    middle_count = max(1, count // 4) if count - hard_count > 1 else 0
+    selected = list(candidates[:hard_count])
+    remaining = candidates[hard_count:]
+    if middle_count:
+        centre = len(remaining) // 2
+        lo = max(0, centre - middle_count // 2)
+        selected.extend(remaining[lo:lo + middle_count])
+    selected_ids = {candidate['concept_id'] for candidate in selected}
+    tail_start = max(hard_count, (2 * len(candidates)) // 3)
+    tail = [
+        candidate for candidate in reversed(candidates[tail_start:])
+        if candidate['concept_id'] not in selected_ids
+    ]
+    # Rotate the easy tail deterministically so repeated vocabulary-balanced draws do not
+    # always use the identical easy concept.
+    if tail:
+        offset = int(_stable_unit_fraction(
+            f'{seed}:{sample_index}:{group["query_id"]}:tail'
+        ) * len(tail))
+        tail = tail[offset:] + tail[:offset]
+    selected.extend(tail[:count - len(selected)])
+    if len(selected) < count:
+        selected_ids = {candidate['concept_id'] for candidate in selected}
+        selected.extend(
+            candidate for candidate in candidates
+            if candidate['concept_id'] not in selected_ids
+        )
+    return selected[:count]
+
+
 def _flatten_to_rows(sampled_groups: list[dict],
                      concept_store: dict[tuple[str, str], dict],
                      negatives_per_query: int,
                      seed: int,
                      max_aliases: int | None,
                      preferred_label_keep_probability: float,
+                     negative_sampling: str = 'retrieval',
+                     ranking_score_key: str | None = None,
+                     training_objective: str = 'contrastive',
+                     distillation_temperature: float = 1.0,
                      ) -> tuple[list[dict], dict[str, int]]:
     """
     Resolve/render each sampled group into one row (query, positive, negative_1..K) with K
@@ -306,14 +371,18 @@ def _flatten_to_rows(sampled_groups: list[dict],
             continue
 
         negatives: list[str] = []
+        negative_records: list[dict] = []
         seen_negative_ids: set[str] = set()
-        for negative in group.get('negatives') or []:
+        for negative in _training_negatives(
+            group, negatives_per_query, negative_sampling, ranking_score_key, seed, sample_index,
+        ):
             concept_id = negative['concept_id']
             if concept_id in seen_negative_ids:
                 continue
             rendered = _render_negative(group, negative, concept_store, seed, sample_index, max_aliases)
             if rendered:
                 negatives.append(rendered)
+                negative_records.append(negative)
                 seen_negative_ids.add(concept_id)
             if len(negatives) >= negatives_per_query:
                 break
@@ -322,9 +391,30 @@ def _flatten_to_rows(sampled_groups: list[dict],
             stats['skipped_insufficient_resolvable_negatives'] += 1
             continue
 
-        row = {'query': group['query'], 'positive': positive}
-        for i, text in enumerate(negatives[:negatives_per_query], start=1):
-            row[f'negative_{i}'] = text
+        if training_objective == 'distillation':
+            pool_by_id = {
+                candidate['concept_id']: candidate for candidate in (group.get('candidate_pool') or [])
+            }
+            gold = pool_by_id.get(group['gold_concept_id'])
+            score_records = [gold] + negative_records
+            if any(
+                record is None or ranking_score_key not in (record.get('ranking_scores') or {})
+                for record in score_records
+            ):
+                stats['skipped_insufficient_resolvable_negatives'] += 1
+                continue
+            row = {
+                'query': group['query'],
+                'documents': [positive] + negatives[:negatives_per_query],
+                'scores': [
+                    float(record['ranking_scores'][ranking_score_key]) / distillation_temperature
+                    for record in score_records
+                ],
+            }
+        else:
+            row = {'query': group['query'], 'positive': positive}
+            for i, text in enumerate(negatives[:negatives_per_query], start=1):
+                row[f'negative_{i}'] = text
         rows.append(row)
 
     print(
@@ -368,8 +458,13 @@ def _build_candidate_sets(eval_groups: list[dict],
         )]
         seen_ids = {group['gold_concept_id']}
 
-        for negative in group.get('negatives') or []:
+        # Schema-v2 retains the full recall pool; evaluate against it instead of the smaller
+        # legacy training selection.  Legacy shards continue to use `negatives` unchanged.
+        evaluation_candidates = group.get('candidate_pool') or group.get('negatives') or []
+        for negative in evaluation_candidates:
             concept_id = negative['concept_id']
+            if concept_id == group['gold_concept_id']:
+                continue
             if concept_id in seen_ids:
                 continue
             neg_concept = concept_store.get((group['prefix'], concept_id))
@@ -623,6 +718,22 @@ def _parse_args() -> argparse.Namespace:
         help='Required number of DISTINCT resolvable negatives per row -- never cycled; short groups are dropped.',
     )
     parser.add_argument(
+        '--negative-sampling', choices=['retrieval', 'model_stratified'], default='retrieval',
+        help='Use legacy retrieval-selected negatives or a hard/mid/easy mixture from a scored candidate_pool.',
+    )
+    parser.add_argument(
+        '--ranking-score-key', default=None,
+        help='Key in candidate_pool[*].ranking_scores used by model-stratified sampling/distillation.',
+    )
+    parser.add_argument(
+        '--training-objective', choices=['contrastive', 'distillation'], default='contrastive',
+        help='Hard-label contrastive training or optional listwise KL distillation from stored ranking scores.',
+    )
+    parser.add_argument(
+        '--distillation-temperature', type=float, default=1.0,
+        help='Divide stored teacher logits by this value before listwise distillation.',
+    )
+    parser.add_argument(
         '--preferred-label-query-keep-probability', type=float, default=0.1,
         help='Fraction of preferred-label queries (query == gold label) to keep.',
     )
@@ -703,6 +814,16 @@ def _validate_args(args: argparse.Namespace) -> None:
         errors.append('--vocab-sampling-alpha must be >= 0.')
     if args.negatives_per_query < 1:
         errors.append('--negatives-per-query must be >= 1.')
+    if args.negative_sampling == 'model_stratified' and not args.ranking_score_key:
+        errors.append('--model-stratified sampling requires --ranking-score-key.')
+    if args.training_objective == 'distillation' and not args.ranking_score_key:
+        errors.append('--training-objective distillation requires --ranking-score-key.')
+    if args.distillation_temperature <= 0:
+        errors.append('--distillation-temperature must be > 0.')
+    if args.training_objective == 'distillation' and args.cached_loss:
+        errors.append('--cached-loss is only supported by the contrastive objective.')
+    if args.training_objective == 'distillation' and args.gather_across_devices:
+        errors.append('--gather-across-devices is only supported by the contrastive objective.')
     if not 0.0 <= args.preferred_label_query_keep_probability <= 1.0:
         errors.append('--preferred-label-query-keep-probability must be within [0, 1].')
     if args.bf16 and args.fp16:
@@ -796,6 +917,9 @@ def main() -> None:
     rows, _flatten_stats = _flatten_to_rows(
         sampled_groups, concept_store, args.negatives_per_query, seed=args.seed,
         max_aliases=max_aliases, preferred_label_keep_probability=args.preferred_label_query_keep_probability,
+        negative_sampling=args.negative_sampling, ranking_score_key=args.ranking_score_key,
+        training_objective=args.training_objective,
+        distillation_temperature=args.distillation_temperature,
     )
     if not rows:
         raise SystemExit(
@@ -829,7 +953,9 @@ def main() -> None:
         model, concept_store, eval_variant, max_aliases, document_length=args.document_length,
     )
 
-    if args.cached_loss:
+    if args.training_objective == 'distillation':
+        train_loss = losses.Distillation(model=model)
+    elif args.cached_loss:
         train_loss = losses.CachedContrastive(
             model=model,
             mini_batch_size=args.cached_mini_batch_size,

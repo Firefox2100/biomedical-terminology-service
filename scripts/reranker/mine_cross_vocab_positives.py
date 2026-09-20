@@ -295,7 +295,7 @@ async def _run(args: argparse.Namespace) -> None:
                                   query_vector: list[float],
                                   ) -> tuple[dict | None, int, int, str | None]:
                 async with semaphore:
-                    negatives, duplicate_merges, rejected, gold_evidence = await _mine_negatives(
+                    negatives, candidate_pool, duplicate_merges, rejected, gold_evidence = await _mine_negatives(
                         doc_db, vector_db, transformer, unit,
                         negatives_per_query=args.negatives_per_query,
                         candidate_pool=args.candidate_pool,
@@ -311,6 +311,7 @@ async def _run(args: argparse.Namespace) -> None:
                 if len(negatives) < args.min_negatives_per_query:
                     return None, duplicate_merges, rejected, 'below_min_negatives'
                 record = {
+                    'schema_version': 2,
                     'query_id': (
                         f'{source_prefix_value}:{unit.item.item_id}->{unit.prefix.value}:'
                         f'{unit.concept_id}'
@@ -321,6 +322,7 @@ async def _run(args: argparse.Namespace) -> None:
                     'query_kind': 'cross_vocab_exact',
                     'source_prefix': source_prefix_value,
                     'gold_retrieval': gold_evidence,
+                    'candidate_pool': candidate_pool,
                     'negatives': negatives,
                 }
                 return record, duplicate_merges, rejected, None

@@ -250,8 +250,35 @@ async def test_search_terms_v1_fuses_alias_embedding_recall(monkeypatch):
         'query_vector': [0.1, 0.2, 0.3],
         'prefix': ConceptPrefix.HPO,
         'kind': EmbeddingKind.ALIAS,
-        'limit': 2,
+        'limit': 10,
     }]
+
+
+@pytest.mark.asyncio
+async def test_vector_recall_can_overretrieve_without_changing_return_limit(monkeypatch):
+    concepts = {
+        '0000001': make_concept('0000001', 'First Concept'),
+        '0000002': make_concept('0000002', 'Second Concept'),
+    }
+    doc_db = FakeDocumentDatabase(concepts)
+    vector_db = FakeVectorDatabase(alias_hits=[
+        ('0000001', 'First Concept', 0.9), ('0000002', 'Second Concept', 0.8),
+    ])
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_retrieval_candidate_limit', 12)
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_vector_overretrieve_factor', 2.5)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
+    )
+
+    results = [concept async for concept in hybrid_module.hybrid_search(
+        query='phenotype', prefix=ConceptPrefix.HPO, doc_db=doc_db, vector_db=vector_db,
+        limit=1,
+    )]
+
+    assert len(results) == 1
+    assert all(call['limit'] == 30 for call in vector_db.calls)
 
 
 @pytest.mark.asyncio
@@ -284,6 +311,69 @@ async def test_search_terms_v1_pins_exact_match_ahead_of_fusion(monkeypatch):
     body = await collect_streaming_json(response)
 
     assert [item['conceptId'] for item in body][0] == '0000001'
+
+
+@pytest.mark.asyncio
+async def test_search_reranks_only_non_exact_semantic_candidates(monkeypatch):
+    concepts = {
+        'exact': make_concept('exact', 'phenotype'),
+        'a': make_concept('a', 'First semantic candidate'),
+        'b': make_concept('b', 'Second semantic candidate'),
+    }
+    doc_db = FakeDocumentDatabase(
+        concepts, lexical_results=[('exact', 1.0), ('a', 0.8), ('b', 0.7)],
+    )
+    vector_db = FakeVectorDatabase(alias_hits=[
+        ('a', 'First semantic candidate', 0.9),
+        ('b', 'Second semantic candidate', 0.8),
+    ])
+    reranker_calls = []
+
+    async def fake_rerank(query, candidates):
+        reranker_calls.append((query, [candidate.concept_id for candidate in candidates]))
+        return list(reversed(candidates))
+
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(hybrid_module, 'reranker_enabled', lambda: True)
+    monkeypatch.setattr(hybrid_module, 'rerank_concepts', fake_rerank)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
+    )
+
+    results = [concept async for concept in hybrid_module.hybrid_search(
+        query='phenotype', prefix=ConceptPrefix.HPO, doc_db=doc_db, vector_db=vector_db,
+        limit=3,
+    )]
+
+    assert [concept.concept_id for concept in results] == ['exact', 'b', 'a']
+    assert reranker_calls == [('phenotype', ['a', 'b'])]
+    assert all(call['limit'] == 50 for call in vector_db.calls)
+
+
+@pytest.mark.asyncio
+async def test_exact_match_filling_limit_bypasses_reranker(monkeypatch):
+    concepts = {'exact': make_concept('exact', 'phenotype')}
+    doc_db = FakeDocumentDatabase(concepts, lexical_results=[('exact', 1.0)])
+    vector_db = FakeVectorDatabase(alias_hits=[])
+
+    async def fail_rerank(*_args, **_kwargs):
+        raise AssertionError('exact-only response must bypass reranking')
+
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(hybrid_module, 'reranker_enabled', lambda: True)
+    monkeypatch.setattr(hybrid_module, 'rerank_concepts', fail_rerank)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
+    )
+
+    results = [concept async for concept in hybrid_module.hybrid_search(
+        query='phenotype', prefix=ConceptPrefix.HPO, doc_db=doc_db, vector_db=vector_db,
+        limit=1,
+    )]
+
+    assert [concept.concept_id for concept in results] == ['exact']
 
 
 @pytest.mark.asyncio

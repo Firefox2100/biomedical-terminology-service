@@ -333,6 +333,50 @@ class Settings(BaseSettings):
                     'GET /search/v1 (and the equivalent GraphQL/MCP search paths). Higher '
                     'values flatten the influence of rank position across the three lists.',
     )
+    reranker_model: Optional[str] = Field(
+        None,
+        description='Optional ColBERT reranker bundle. May be a local checkpoint directory '
+                    'or a Hugging Face repository ID. When unset, search returns RRF order.',
+    )
+    search_retrieval_candidate_limit: int = Field(
+        10,
+        ge=1,
+        description='Minimum candidates requested from each lexical/semantic recall path '
+                    'before fusion. This is independent of the API result limit and the '
+                    'number of fused candidates passed to the reranker.',
+    )
+    search_vector_overretrieve_factor: float = Field(
+        1.0,
+        ge=1.0,
+        description='Multiplier applied to alias/definition vector recall depth before '
+                    'fusion. Increase this when quantized vector storage trades precision '
+                    'for space and may otherwise omit useful candidates.',
+    )
+    reranker_candidate_limit: int = Field(
+        50,
+        ge=1,
+        description='Maximum non-exact RRF candidates scored by the configured reranker.',
+    )
+    reranker_batch_size: int = Field(
+        32,
+        ge=1,
+        description='Encoding batch size used by the ColBERT search reranker.',
+    )
+    reranker_query_length: int = Field(
+        32,
+        ge=1,
+        description='Maximum query token length expected by the reranker bundle.',
+    )
+    reranker_document_length: int = Field(
+        64,
+        ge=1,
+        description='Maximum rendered-candidate token length expected by the reranker bundle.',
+    )
+    reranker_max_aliases: int = Field(
+        6,
+        ge=0,
+        description='Maximum synonyms rendered per reranker candidate; zero disables the cap.',
+    )
     vector_database_driver: VectorDatabaseDriverType = Field(
         VectorDatabaseDriverType.QDRANT,
         description='Vector database driver to use for the service',

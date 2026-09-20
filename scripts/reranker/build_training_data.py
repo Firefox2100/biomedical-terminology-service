@@ -298,14 +298,15 @@ async def _mine_negatives(doc_db: DocumentDatabase,
                           candidate_pool: int,
                           equivalence_index: dict[str, set[str]] | None = None,
                           query_vector: list[float] | None = None,
-                          ) -> tuple[list[dict], int, int, dict | None]:
+                          ) -> tuple[list[dict], list[dict], int, int, dict | None]:
     """
     Run the query through the lexical/alias-embedding/definition-embedding recall arms,
     aggregate hits by concept_id (a concept hit by several arms becomes one candidate with all
     evidence attached), reject invalid candidates, and select negatives.
-    :return: (negatives, duplicate_cross_source_merges, rejected_by_equivalence_filter,
-        gold_retrieval_evidence). The last value records the gold's ranks/scores before it is
-        removed from the negative pool, or None if no recall arm retrieved it.
+    :return: (selected_negatives, full_candidate_pool, duplicate_cross_source_merges,
+        rejected_by_equivalence_filter, gold_retrieval_evidence).  The full pool is retained
+        so later model-in-the-loop scoring and alternative sampling policies never require
+        repeating database retrieval.
     """
     if query_vector is None:
         # Keep this fallback for direct callers. Production mining supplies one vector from a
@@ -370,8 +371,25 @@ async def _mine_negatives(doc_db: DocumentDatabase,
             rejected += 1
 
     negatives = _select_negatives(merged, negatives_per_query)
+    candidate_pool = []
+    for concept_id, evidence in sorted(
+        merged.items(), key=lambda item: (min(item[1]['ranks'].values()), item[0])
+    ):
+        best_rank = min(evidence['ranks'].values())
+        candidate_pool.append({
+            'concept_id': concept_id,
+            'role': 'negative',
+            'sources': sorted(set(evidence['sources'])),
+            'ranks': dict(evidence['ranks']),
+            'scores': dict(evidence['scores']),
+            'rank_band': _band_label(best_rank),
+            # Additional scorers append values here under a caller-selected key.  Keeping
+            # retrieval scores separate makes the schema safe for future LLM/cross-encoder
+            # teachers without remapping the source evidence.
+            'ranking_scores': {},
+        })
 
-    return negatives, duplicate_merges, rejected, gold_evidence
+    return negatives, candidate_pool, duplicate_merges, rejected, gold_evidence
 
 
 def _write_concept_store(concept_store_dir: Path,
@@ -523,7 +541,7 @@ async def _run(args: argparse.Namespace) -> None:
                                   query_vector: list[float],
                                   ) -> tuple[dict | None, int, int, bool]:
                 async with semaphore:
-                    negatives, duplicate_merges, rejected, _gold_evidence = await _mine_negatives(
+                    negatives, candidate_pool, duplicate_merges, rejected, gold_evidence = await _mine_negatives(
                         doc_db, vector_db, transformer, unit,
                         negatives_per_query=args.negatives_per_query,
                         candidate_pool=args.candidate_pool,
@@ -533,11 +551,14 @@ async def _run(args: argparse.Namespace) -> None:
                 if len(negatives) < args.min_negatives_per_query:
                     return None, duplicate_merges, rejected, True
                 record = {
+                    'schema_version': 2,
                     'query_id': unit.item.item_id,
                     'prefix': unit.prefix.value,
                     'gold_concept_id': unit.concept_id,
                     'query': unit.item.text,
                     'query_kind': 'alias',
+                    'gold_retrieval_evidence': gold_evidence,
+                    'candidate_pool': candidate_pool,
                     'negatives': negatives,
                 }
                 return record, duplicate_merges, rejected, False

@@ -6,7 +6,36 @@ project's research notes on why late-interaction rather than a plain cross-encod
 fine-tune it, using data auto-mined from this service's own database -- no manual pair
 labelling required.
 
-Three scripts, two machines:
+## Service deployment
+
+Enable the trained reranker with either a local exported bundle or a Hugging Face repository
+ID; PyLate/SentenceTransformers use the same setting for both forms:
+
+```dotenv
+# Local bundle
+BTS_RERANKER_MODEL=/models/bioterms-sapbert-colbert
+
+# Or, after publishing
+# BTS_RERANKER_MODEL=your-org/bioterms-sapbert-colbert
+
+BTS_SEARCH_RETRIEVAL_CANDIDATE_LIMIT=10
+BTS_SEARCH_VECTOR_OVERRETRIEVE_FACTOR=1.0
+BTS_RERANKER_CANDIDATE_LIMIT=50
+BTS_RERANKER_BATCH_SIZE=32
+BTS_RERANKER_QUERY_LENGTH=32
+BTS_RERANKER_DOCUMENT_LENGTH=64
+BTS_RERANKER_MAX_ALIASES=6
+```
+
+When the model setting is absent, service search retains its RRF-only behaviour. Retrieval
+depth, vector over-retrieval, candidates passed to the reranker, and API results returned are
+independent controls. For quantized vector storage, increase
+`BTS_SEARCH_VECTOR_OVERRETRIEVE_FACTOR` (for example, `2.0`) to retrieve more vector hits
+before fusion without increasing the reranker or response sizes. Exact identifier,
+preferred-label, and synonym matches remain pinned and never enter the reranker; if exact
+results fill the response limit, the model is not loaded or invoked.
+
+Four scripts, two machines:
 
 - **`build_training_data.py`** -- runs against a fully built and embedded bioterms database
   (needs `BTS_*` config pointing at it, same as the rest of the service). CPU is fine; a GPU
@@ -15,6 +44,9 @@ Three scripts, two machines:
 - **`mine_cross_vocab_positives.py`** -- mines aliases across trusted `EXACT` relationship
   edges, using target-vocabulary recall candidates and the same negative-selection path. It
   rejects an alias/mapping pair when no recall arm retrieves its gold concept.
+- **`score_candidate_pools.py`** -- runs the trained ColBERT checkpoint over every retained
+  candidate, writing a new resumable set of JSONL shards with a named ranking-score channel.
+  It never mutates or re-queries the source database data.
 - **`train_reranker.py`** -- standalone, no bioterms/database dependency at all, only the ML
   stack (`pylate`, `sentence-transformers`, `datasets`, `torch`) plus the small
   `concept_rendering.py` helper in this folder. Copy the JSONL files the mining script
@@ -64,11 +96,23 @@ Each query-group line looks like:
 
 ```json
 {
+  "schema_version": 2,
   "query_id": "snomed:73211009:alias:1",
   "prefix": "snomed",
   "gold_concept_id": "73211009",
   "query": "sugar diabetes",
   "query_kind": "alias",
+  "candidate_pool": [
+    {
+      "concept_id": "X",
+      "role": "negative",
+      "sources": ["alias_embedding", "lexical"],
+      "ranks": {"alias_embedding": 4, "lexical": 2},
+      "scores": {"alias_embedding": 0.84, "lexical": 7.31},
+      "rank_band": "very_hard",
+      "ranking_scores": {}
+    }
+  ],
   "negatives": [
     {
       "concept_id": "X",
@@ -81,9 +125,61 @@ Each query-group line looks like:
 }
 ```
 
-No candidate text is stored -- only concept identifiers and retrieval evidence. A negative
+`candidate_pool` is the immutable, fully merged and equivalence-filtered recall pool;
+`negatives` remains the small legacy selection for backward compatibility. No candidate text
+is stored -- only concept identifiers and retrieval evidence. A negative
 concept hit by several recall arms is merged into one candidate with all of that evidence
 attached (not several separate candidates, and not "first arm wins").
+
+### Model-in-the-loop re-mining
+
+After mining schema-v2 pools, attach scores from the selected SapBERT-ColBERT checkpoint:
+
+```bash
+python score_candidate_pools.py \
+  --input-dir data/v4/raw \
+  --output-dir data/v4/scored \
+  --concept-store-dir data/v4/raw/concepts \
+  --model runs/sapbert-colbert-v3-full/final \
+  --score-key sapbert_colbert_v3
+```
+
+The scorer resumes an interrupted shard from its `.partial` file and skips completed output
+shards. It adds the gold concept to the pool, scores every candidate, and stores scores under
+`candidate_pool[*].ranking_scores.<score-key>`. New score channels (including a future
+cross-encoder or LLM-derived teacher) can be produced as separate immutable output datasets;
+retrieval/mining does not need to run again.
+
+Train with model-aware hard/mid/easy sampling while keeping the existing contrastive loss:
+
+```bash
+python train_reranker.py \
+  --train-data-dir data/v4/scored \
+  --concept-store-dir data/v4/raw/concepts \
+  --base-model runs/sapbert-colbert-v3-full/final \
+  --negative-sampling model_stratified \
+  --ranking-score-key sapbert_colbert_v3 \
+  --training-objective contrastive \
+  --output-dir runs/sapbert-colbert-v4-remine
+```
+
+Or use the identical scored files for listwise ranking distillation:
+
+```bash
+python train_reranker.py \
+  --train-data-dir data/v4/scored \
+  --concept-store-dir data/v4/raw/concepts \
+  --base-model runs/sapbert-colbert-v3-full/final \
+  --negative-sampling model_stratified \
+  --ranking-score-key sapbert_colbert_v3 \
+  --training-objective distillation \
+  --distillation-temperature 1.0 \
+  --output-dir runs/sapbert-colbert-v4-distilled
+```
+
+Omit these three new training flags to reproduce legacy retrieval sampling and hard-label
+contrastive training. Thus finding that stored ranking supervision hurts does not require
+re-mining.
 
 ### `--skip`/`--limit` control quantity only, not vocabulary balance
 
