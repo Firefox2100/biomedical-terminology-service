@@ -19,8 +19,7 @@ from bioterms.vocabulary import get_vocabulary_config
 from bioterms.vocabulary.utils import ALL_VOCABULARIES
 
 
-# Best-rank bands used to diversify negative selection by retrieval difficulty (see
-# _select_negatives).
+# Best-rank bands diversify negatives by retrieval difficulty.
 RANK_BANDS: list[tuple[int, int]] = [(1, 5), (6, 20), (21, 50)]
 RANK_BAND_LABELS: list[str] = ['very_hard', 'hard', 'medium']
 OVERFLOW_BAND_LABEL = 'long_tail'
@@ -85,30 +84,7 @@ def is_valid_negative(prefix: ConceptPrefix,
                       candidate_concept_id: str,
                       equivalence_index: dict[str, set[str]] | None = None,
                       ) -> bool:
-    """
-    Single hook for rejecting a negative candidate equivalent to the gold concept (trusted
-    same-as/replacement, not just a different id).
-
-    `equivalence_index` (see `_build_equivalence_index`) maps a concept_id to every other
-    concept_id in the *same* vocabulary it is `REPLACED_BY`-linked to, in either direction.
-    `REPLACED_BY` is the only `ConceptRelationshipType` used for this -- it is the one
-    relationship that unambiguously means "this is the same real-world thing under a
-    different code" rather than a hierarchical or approximate relation (IS_A/PART_OF are
-    not equivalence; treating them as such here would reject perfectly valid negatives).
-
-    Cross-vocabulary annotations (e.g. `AnnotationType.EXACT`) are deliberately NOT
-    consulted here: negative mining is same-vocabulary only (see `_mine_negatives`), so a
-    cross-vocabulary equivalence could never produce a same-vocabulary negative candidate in
-    the first place -- there is nothing for it to filter.
-    :param prefix: The vocabulary prefix (kept in the signature for callers that key
-        `equivalence_index` externally by prefix; unused directly here since
-        `equivalence_index` is already scoped to one vocabulary by the caller).
-    :param gold_concept_id: The query's gold concept ID.
-    :param candidate_concept_id: The candidate negative's concept ID.
-    :param equivalence_index: This vocabulary's REPLACED_BY equivalence index, or None to
-        skip equivalence checking (only the gold-concept-itself check still applies).
-    :return: True if `candidate_concept_id` is a valid negative for `gold_concept_id`.
-    """
+    """Reject the gold concept and same-vocabulary replacement equivalents."""
     del prefix
     if candidate_concept_id == gold_concept_id:
         return False
@@ -148,19 +124,7 @@ def _build_query_units(prefix: ConceptPrefix,
                        concepts: dict[str, Concept],
                        max_queries_per_concept: int,
                        ) -> list[QueryUnit]:
-    """
-    Enumerate query units for one vocabulary's concepts, ordered by a stable hash of
-    (prefix, concept_id) rather than plain concept_id sort order -- a `--skip`/`--limit` or
-    `--per-vocabulary-limit` window is still fully deterministic/reproducible run to run (same
-    inputs always hash to the same order), but no longer silently biased toward whichever
-    concepts happen to sort first alphabetically. This matters most when the window covers a
-    small fraction of a large vocabulary's concepts (e.g. capping SNOMED at a few thousand out
-    of over a million), where "first by concept_id" would otherwise select a narrow, arbitrary
-    slice rather than a representative one. Each concept contributes at most
-    `max_queries_per_concept` alias items, chosen by sorting aliases on a stable hash rather
-    than taking the first N (see README) -- deterministic, but not biased toward the same
-    "front of the list" aliases every time.
-    """
+    """Build a deterministic, order-unbiased set of alias queries."""
     units: list[QueryUnit] = []
 
     ordered_concept_ids = sorted(concepts.keys(), key=lambda cid: _stable_hash_int(prefix.value, cid))

@@ -6,7 +6,7 @@ from uuid import UUID
 from elasticsearch import AsyncElasticsearch
 from elasticsearch.helpers import async_bulk
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.errors import IndexCreationError
 from bioterms.model.concept import Concept, ConceptUnion
@@ -26,6 +26,7 @@ class ElasticsearchUserRepository(UserRepository):
 
     async def _ensure_index(self) -> None:
         if not await self.client.indices.exists(index=self.index_name):
+            LOGGER.info('Creating Elasticsearch user index: %s', self.index_name)
             await self.client.indices.create(index=self.index_name, mappings={
                 'properties': {
                     'username': {'type': 'keyword'},
@@ -146,6 +147,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
     async def _ensure_index(self, prefix: ConceptPrefix) -> str:
         name = self._index_name(prefix)
         if not await self.client.indices.exists(index=name):
+            LOGGER.info('Creating Elasticsearch concept index: %s', name)
             autocomplete = {
                 'type': 'text', 'analyzer': 'bts_ngram', 'search_analyzer': 'standard',
             }
@@ -162,11 +164,11 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
                     }}},
                 },
                 mappings={'properties': {
-                'conceptId': {'type': 'keyword', 'fields': {'search': autocomplete}},
-                'prefix': {'type': 'keyword'},
-                'label': {**autocomplete, 'fields': {'exact': {'type': 'keyword'}}},
-                'synonyms': autocomplete,
-            }})
+                    'conceptId': {'type': 'keyword', 'fields': {'search': autocomplete}},
+                    'prefix': {'type': 'keyword'},
+                    'label': {**autocomplete, 'fields': {'exact': {'type': 'keyword'}}},
+                    'synonyms': autocomplete,
+                }})
         return name
 
     async def create_index(self, prefix, field, unique=False, overwrite=False):
@@ -194,6 +196,10 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
         if not terms:
             return
         name = await self._ensure_index(terms[0].prefix)
+        LOGGER.info(
+            'Writing %s concepts to Elasticsearch index %s (create_only=%s)',
+            len(terms), name, no_upsert,
+        )
 
         async def actions():
             for term in terms:
@@ -208,6 +214,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
             self.client, actions(), chunk_size=CONFIG.elasticsearch_batch_size,
             refresh='wait_for',
         )
+        LOGGER.info('Elasticsearch concept write complete: %s (%s concepts)', name, len(terms))
 
     async def count_terms(self, prefix):
         name = self._index_name(prefix)
@@ -253,6 +260,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
     async def delete_all_for_label(self, prefix):
         name = self._index_name(prefix)
         if await self.client.indices.exists(index=name):
+            LOGGER.info('Deleting Elasticsearch concept index: %s', name)
             await self.client.indices.delete(index=name)
         await self._ensure_index(prefix)
 
@@ -261,7 +269,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
         return ['conceptId.search', 'label', 'synonyms']
 
     async def lexical_search_iter(self, prefix, query, limit=10):
-        search_query = normalise_search_query(query, fallback_to_clean=True)
+        search_query = normalise_search_query(query)
         if not search_query.words:
             return
         name = self._index_name(prefix)

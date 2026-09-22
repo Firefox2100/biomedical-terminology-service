@@ -1,9 +1,4 @@
-"""Compact write-side graph representation.
-
-Vocabulary loaders only need to collect normalized edges before handing them to a database or
-offline writer.  A NetworkX graph is substantially more expensive because it maintains nested
-node/adjacency dictionaries and graph-algorithm metadata that ingestion never reads.
-"""
+"""Compact edge storage for vocabulary ingestion."""
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -15,7 +10,7 @@ EdgeTuple = tuple[str, str, str | None, str | None]
 
 
 class _EdgeView:
-    """Small read-only compatibility view used by loader unit tests and diagnostics."""
+    """Read-only edge lookup compatible with loader diagnostics."""
 
     def __init__(self, edges: list[EdgeTuple]):
         self._edges = edges
@@ -40,10 +35,10 @@ class EdgeBuffer:
     _edges: list[EdgeTuple] = field(default_factory=list)
 
     def add_node(self, _node_id: str) -> None:
-        """Nodes are persisted from concept objects, so write-side node registration is free."""
+        """Ignore nodes because database writers receive concepts separately."""
 
     def add_nodes_from(self, _node_ids) -> None:
-        """Nodes are persisted from concept objects, so write-side node registration is free."""
+        """Ignore nodes because database writers receive concepts separately."""
 
     def add_edge(self,
                  source: str,

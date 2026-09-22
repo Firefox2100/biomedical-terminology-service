@@ -131,14 +131,8 @@ _XREF_MATCH_ATTRIBUTES = (
     ('relatedMatch', AnnotationType.RELATED),
 )
 
-# MONDO reifies most hasDbXref statements as an owl:Axiom carrying an oboInOwl:source
-# annotation -- a curator ORCID, a GitHub issue URL, or a generic marker like
-# 'MONDO:equivalentTo' (bulk import) or 'MONDO:exact-label-match' (algorithmic, weaker
-# than a curated match). Confirmed live against data/mondo/mondo.owl: covers ~147k of the
-# ontology's ~416k hasDbXref statements (the rest carry no axiom annotation at all).
-# exactMatch/broadMatch/narrowMatch/relatedMatch carry essentially none of their own --
-# provenance is looked up by (concept_id, xref target curie) so a match-attribute-derived
-# annotation picks up the tag from the corresponding raw hasDbXref triple when one exists.
+# Mondo stores per-xref provenance on reified hasDbXref axioms. Match attributes reuse
+# provenance from the corresponding (concept, xref) pair when available.
 _XREF_SOURCE_QUERY = """
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 PREFIX oboInOwl: <http://www.geneontology.org/formats/oboInOwl#>
@@ -153,20 +147,11 @@ SELECT ?src ?target ?source WHERE {
 
 
 def _build_xref_source_lookup(ontology_world=None) -> dict[tuple[str, str], str]:
-    """
-    Build a (concept_id, xref target curie) -> oboInOwl:source tag lookup from Mondo's
-    reified owl:Axiom blocks on hasDbXref triples. Pairs with no axiom annotation are
-    simply absent from the returned dict -- callers must treat a missing key as
-    "no per-xref provenance available", not as an error.
-    :param ontology_world: The owlready2 World to query (defaults to owlready2's default_world).
-    :return: A dict mapping (concept_id, xref_target_curie) to the source tag string.
-    """
+    """Map Mondo concept/xref pairs to their optional provenance tags."""
     world = ontology_world if ontology_world is not None else default_world
     lookup: dict[tuple[str, str], str] = {}
 
-    # error_on_undefined_entities=False: owlready2 otherwise raises if the world's triple
-    # store never references one of the queried IRIs at all (e.g. a small/synthetic
-    # ontology in tests) -- that case must behave like "no matches", not an error.
+    # Undefined query entities are expected in small or synthetic ontologies.
     for src, target, source in world.sparql(_XREF_SOURCE_QUERY, error_on_undefined_entities=False):
         if not hasattr(src, 'name') or not src.name.startswith('MONDO_'):
             continue

@@ -75,7 +75,7 @@ async def test_lexical_search_ranks_more_overlap_first(doc_db):
 
 
 @pytest.mark.asyncio
-async def test_lexical_search_accepts_short_query_like_mongo(doc_db):
+async def test_lexical_search_rejects_query_shorter_than_three_characters(doc_db):
     await doc_db.save_terms([
         make_concept('HP:1', 'ab syndrome'),
         make_concept('HP:2', 'unrelated condition'),
@@ -83,7 +83,7 @@ async def test_lexical_search_accepts_short_query_like_mongo(doc_db):
 
     results = await doc_db.lexical_search(ConceptPrefix.HPO, query='ab', limit=10)
 
-    assert [concept_id for concept_id, _score in results] == ['HP:1']
+    assert results == []
 
 
 @pytest.mark.asyncio

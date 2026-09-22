@@ -638,8 +638,11 @@ class MongoDocumentDatabase(DocumentDatabase):
         :param limit: The top number of concepts to return.
         :return: An async iterator of (concept_id, score) tuples, best match first.
         """
-        search_query = normalise_search_query(query, fallback_to_clean=True)
+        search_query = normalise_search_query(query)
         words = search_query.words
+
+        if not words:
+            return
 
         collection = self.db[str(prefix.value)]
         native = await self._supports_native_text_search(collection)

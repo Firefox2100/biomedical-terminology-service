@@ -7,6 +7,7 @@ from collections.abc import Iterable
 import numpy as np
 from pyroaring import BitMap
 
+from bioterms.etc.consts import LOGGER
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType
 
 
@@ -82,10 +83,15 @@ class OntologyIndex:
 
         successor_ptr, successor_ids = to_csr(successors)
         predecessor_ptr, predecessor_ids = to_csr(predecessors)
-        return cls(
+        result = cls(
             tuple(nodes), index, successor_ptr, successor_ids,
             predecessor_ptr, predecessor_ids, np.asarray(topo, np.int32),
         )
+        LOGGER.debug(
+            'Built compact ontology index with %s nodes and %s edges',
+            len(nodes), len(successor_ids),
+        )
+        return result
 
     def successors(self, node: int):
         return self.successor_ids[self.successor_ptr[node]:self.successor_ptr[node + 1]]
@@ -175,4 +181,8 @@ def build_similarity_context(target_prefix: ConceptPrefix,
         else OntologyIndex.build(corpus_ids, ())
     )
     annotations = AnnotationIndex.build(target, corpus, pairs)
+    LOGGER.debug(
+        'Built similarity context for %s -> %s with %s annotation pairs',
+        target_prefix.value, corpus_prefix.value, len(pairs),
+    )
     return SimilarityContext(target_prefix, target, corpus_prefix, corpus, annotations)

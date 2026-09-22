@@ -4,7 +4,7 @@ from elasticsearch import AsyncElasticsearch
 from elasticsearch.helpers import async_bulk
 
 from bioterms.database.doc_db.elasticsearch_doc_db import _index_part
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.embedding import TextTransformer
 from .vector_db import VectorDatabase
@@ -39,6 +39,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
     async def _ensure_index(self, prefix: ConceptPrefix) -> str:
         name = self._index_name(prefix)
         if not await self.client.indices.exists(index=name):
+            LOGGER.info('Creating Elasticsearch vector index: %s', name)
             await self.client.indices.create(index=name, mappings={'properties': {
                 'itemId': {'type': 'keyword'},
                 'conceptId': {'type': 'keyword'},
@@ -56,6 +57,10 @@ class ElasticsearchVectorDatabase(VectorDatabase):
     async def load_embedding_items(self, prefix, items, total_items=None) -> int:
         name = await self._ensure_index(prefix)
         written = 0
+        LOGGER.info(
+            'Writing embeddings to Elasticsearch index %s (expected=%s)',
+            name, total_items if total_items is not None else 'unknown',
+        )
 
         async def actions():
             nonlocal written
@@ -73,6 +78,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
             self.client, actions(), chunk_size=CONFIG.elasticsearch_batch_size,
             refresh='wait_for',
         )
+        LOGGER.info('Elasticsearch embedding write complete: %s (%s items)', name, written)
         return written
 
     async def get_embedded_concept_ids(self, prefix) -> set[str]:
@@ -126,4 +132,5 @@ class ElasticsearchVectorDatabase(VectorDatabase):
     async def delete_vectors_for_prefix(self, prefix) -> None:
         name = self._index_name(prefix)
         if await self.client.indices.exists(index=name):
+            LOGGER.info('Deleting Elasticsearch vector index: %s', name)
             await self.client.indices.delete(index=name)

@@ -80,6 +80,15 @@ async def test_document_missing_index_reads_as_empty():
 
 
 @pytest.mark.asyncio
+async def test_document_lexical_search_rejects_query_shorter_than_three_characters():
+    client = FakeClient()
+    database = ElasticsearchDocumentDatabase(client)
+
+    assert await database.lexical_search(ConceptPrefix.HPO, 'ab') == []
+    assert client.search_calls == []
+
+
+@pytest.mark.asyncio
 async def test_vector_index_and_filtered_knn_query(monkeypatch):
     client = FakeClient()
     client.search_response = {'hits': {'hits': [{

@@ -1473,10 +1473,7 @@ class SqlDocumentDatabase(DocumentDatabase):
         :param limit: The top number of concepts to return.
         :return: An async iterator of (concept_id, score) tuples, best match first.
         """
-        # Lexical recall accepts short identifiers/words too.  Mongo already falls back to
-        # the cleaned query when the three-character n-gram filter removes every word; do
-        # the same here so switching document backend does not silently drop that recall arm.
-        search_query = normalise_search_query(query, fallback_to_clean=True)
+        search_query = normalise_search_query(query)
         n_gram_query = search_query.words
 
         if not n_gram_query:

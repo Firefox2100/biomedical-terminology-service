@@ -19,12 +19,10 @@ class SearchQuery:
     compact: str
 
 
-def normalise_search_query(query: str, fallback_to_clean: bool = False) -> SearchQuery:
+def normalise_search_query(query: str) -> SearchQuery:
     """Normalise user text consistently across document database backends."""
     clean = re.sub(r'[()"\']', '', query.lower())
     words = [word for word in clean.split() if len(word) > 2]
-    if fallback_to_clean and not words and clean:
-        words = [clean]
     return SearchQuery(clean=clean, words=words, compact=re.sub(r'\s', '', clean))
 
 
