@@ -913,6 +913,35 @@ class Neo4jGraphDatabase(GraphDatabase):
                     AnnotationType(record['rel_label']),
                 )
 
+    async def get_exact_mappings(self,
+                                 source_prefix: ConceptPrefix,
+                                 source_ids: list[str],
+                                 target_prefix: ConceptPrefix,
+                                 ) -> dict[str, list[str]]:
+        """Resolve selected source concepts through indexed EXACT annotation edges."""
+        mapped: dict[str, list[str]] = {concept_id: [] for concept_id in source_ids}
+        if not source_ids:
+            return mapped
+        async with self._client.session() as session:
+            result = await _execute_query_with_retry(
+                query="""
+                MATCH (source:Concept {prefix: $source_prefix})-[r]-
+                      (target:Concept {prefix: $target_prefix})
+                WHERE source.id IN $source_ids AND type(r) = $rel_type
+                RETURN source.id AS source_id, collect(DISTINCT target.id) AS target_ids
+                """,
+                session=session,
+                parameters={
+                    'source_prefix': source_prefix.value,
+                    'source_ids': source_ids,
+                    'target_prefix': target_prefix.value,
+                    'rel_type': AnnotationType.EXACT.value,
+                },
+            )
+            async for record in result:
+                mapped[record['source_id']] = list(record['target_ids'])
+        return mapped
+
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,
                                  prefix_2: ConceptPrefix,

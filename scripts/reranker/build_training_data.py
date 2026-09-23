@@ -24,7 +24,9 @@ RANK_BANDS: list[tuple[int, int]] = [(1, 5), (6, 20), (21, 50)]
 RANK_BAND_LABELS: list[str] = ['very_hard', 'hard', 'medium']
 OVERFLOW_BAND_LABEL = 'long_tail'
 
-RECALL_SOURCES: list[str] = ['lexical', 'alias_embedding', 'definition_embedding']
+RECALL_SOURCES: list[str] = [
+    'lexical', 'alias_embedding', 'definition_embedding', 'exact_mapping',
+]
 
 
 def _stable_hash_int(*parts: str) -> int:
@@ -262,6 +264,7 @@ async def _mine_negatives(doc_db: DocumentDatabase,
                           candidate_pool: int,
                           equivalence_index: dict[str, set[str]] | None = None,
                           query_vector: list[float] | None = None,
+                          additional_ranked_hits: dict[str, list[str]] | None = None,
                           ) -> tuple[list[dict], list[dict], int, int, dict | None]:
     """
     Run the query through the lexical/alias-embedding/definition-embedding recall arms,
@@ -319,6 +322,11 @@ async def _mine_negatives(doc_db: DocumentDatabase,
     add_hits(lexical_hits, 'lexical')
     add_hits(alias_hits, 'alias_embedding')
     add_hits(definition_hits, 'definition_embedding')
+    for source, concept_ids in (additional_ranked_hits or {}).items():
+        add_hits(
+            [(concept_id, 1.0 / rank) for rank, concept_id in enumerate(concept_ids, start=1)],
+            source,
+        )
 
     gold_evidence = merged.get(unit.concept_id)
     if gold_evidence is not None:

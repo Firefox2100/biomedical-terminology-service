@@ -12,12 +12,13 @@ from bioterms.model.vocabulary_status import VocabularyStatus
 from bioterms.router import search as search_module
 from bioterms.router.expand import ExpandRequestV1, expand_terms_v1, expand_terms_v2
 from bioterms.router.map import MapRequestV1, map_terms_v1, map_terms_v2
-from bioterms.router.search import search_terms_v1
+from bioterms.router.search import search_terms_v1, search_terms_v2, search_terms_v2_scoped
 from bioterms.router import similarity as similarity_router_module
 from bioterms.router.similarity import SimilarityRequestV1, TranslateRequestV1, get_similar_terms_v1, \
     get_similar_terms_v2, translate_terms_v1, translate_terms_v2
 from bioterms.router.trace import trace_terms_v1
 from bioterms.search import hybrid as hybrid_module
+from bioterms.search.hybrid import SearchExecution, SearchHit
 
 
 async def collect_streaming_json(response):
@@ -255,6 +256,114 @@ async def test_search_terms_v1_fuses_alias_embedding_recall(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_terms_v2_returns_envelope_and_uses_shared_query_path(monkeypatch):
+    concept = make_concept('0000001', 'Short stature')
+    calls = []
+
+    async def fake_search(query, prefixes, limit, doc_db, vector_db):
+        calls.append((query, prefixes, limit, doc_db, vector_db))
+        return SearchExecution(
+            hits=[SearchHit(
+                concept=concept, exact=True, match_field='label', matched_text='Short stature',
+            )],
+            vector_used=True,
+            reranker_used=False,
+        )
+
+    monkeypatch.setattr(search_module, '_search', fake_search)
+    response = await search_terms_v2(
+        query='Short stature',
+        vocabulary=[ConceptPrefix.HPO, ConceptPrefix.MONDO],
+        limit=10,
+        include_match_details=True,
+        doc_db='doc-db',
+        vector_db='vector-db',
+    )
+    body = response.model_dump()
+
+    assert calls == [(
+        'Short stature', [ConceptPrefix.HPO, ConceptPrefix.MONDO], 10, 'doc-db', 'vector-db',
+    )]
+    assert body['results'][0]['rank'] == 1
+    assert body['results'][0]['concept']['conceptId'] == '0000001'
+    assert body['results'][0]['match'] == {
+        'type': 'exact', 'exact': True, 'field': 'label', 'text': 'Short stature',
+    }
+    assert body['meta']['vocabularies'] == ['hpo', 'mondo']
+    assert body['meta']['pipeline'] == {
+        'lexical': True, 'vector': True, 'mapped': False, 'reranker': False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_terms_v2_scoped_uses_same_shared_query_path(monkeypatch):
+    calls = []
+
+    async def fake_search_v2(query, vocabularies, limit, include_match_details, doc_db, vector_db):
+        calls.append((query, vocabularies, limit, include_match_details, doc_db, vector_db))
+        return 'shared-response'
+
+    monkeypatch.setattr(search_module, '_search_terms_v2', fake_search_v2)
+    response = await search_terms_v2_scoped(
+        prefix=ConceptPrefix.HPO,
+        query='phenotype',
+        limit=5,
+        include_match_details=False,
+        doc_db='doc-db',
+        vector_db='vector-db',
+    )
+
+    assert response == 'shared-response'
+    assert calls == [('phenotype', [ConceptPrefix.HPO], 5, False, 'doc-db', 'vector-db')]
+
+
+@pytest.mark.asyncio
+async def test_multi_vocabulary_search_embeds_once_and_reranks_globally(monkeypatch):
+    hpo = make_concept('hpo-1', 'HPO candidate')
+    mondo = Concept(
+        conceptTypes=[], prefix=ConceptPrefix.MONDO, conceptId='mondo-1',
+        label='MONDO candidate', status=ConceptStatus.ACTIVE,
+    )
+    embedding_calls = []
+    reranker_calls = []
+
+    class CountingTransformer:
+        def embed_strings(self, texts):
+            embedding_calls.append(texts)
+            return [[0.1, 0.2, 0.3]]
+
+    async def fake_retrieve(query, query_folded, prefix, doc_db, vector_db, model_class,
+                            retrieval_limit, vector_retrieval_limit, vectors_loaded, query_vector):
+        concept = hpo if prefix == ConceptPrefix.HPO else mondo
+        return hybrid_module._PrefixCandidates([], [(concept, 0.5)], vectors_loaded)
+
+    async def fake_rerank(query, candidates):
+        reranker_calls.append((query, [concept.concept_id for concept in candidates]))
+        return list(reversed(candidates))
+
+    monkeypatch.setattr(hybrid_module, 'TextTransformer', CountingTransformer)
+    monkeypatch.setattr(hybrid_module, '_retrieve_prefix', fake_retrieve)
+    monkeypatch.setattr(hybrid_module, 'reranker_enabled', lambda: True)
+    monkeypatch.setattr(hybrid_module, 'rerank_concepts', fake_rerank)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(1),
+    )
+
+    execution = await hybrid_module.execute_hybrid_search(
+        query='disease',
+        prefixes=[ConceptPrefix.HPO, ConceptPrefix.MONDO],
+        doc_db='doc-db',
+        vector_db='vector-db',
+        limit=2,
+    )
+
+    assert embedding_calls == [['disease']]
+    assert reranker_calls == [('disease', ['hpo-1', 'mondo-1'])]
+    assert [hit.concept.concept_id for hit in execution.hits] == ['mondo-1', 'hpo-1']
+
+
+@pytest.mark.asyncio
 async def test_vector_recall_can_overretrieve_without_changing_return_limit(monkeypatch):
     concepts = {
         '0000001': make_concept('0000001', 'First Concept'),
@@ -279,6 +388,78 @@ async def test_vector_recall_can_overretrieve_without_changing_return_limit(monk
 
     assert len(results) == 1
     assert all(call['limit'] == 30 for call in vector_db.calls)
+
+
+@pytest.mark.asyncio
+async def test_mapped_recall_is_bounded_interleaved_and_unpinned(monkeypatch):
+    target_a = make_concept('target-a', 'Mapped A')
+    target_b = make_concept('target-b', 'Mapped B')
+    source_a = make_concept('source-a', 'shared term')
+    source_b = make_concept('source-b', 'shared term')
+    source_c = make_concept('source-c', 'shared term')
+    doc_db = FakeDocumentDatabase({
+        'target-a': target_a, 'target-b': target_b,
+        'source-a': source_a, 'source-b': source_b, 'source-c': source_c,
+    })
+
+    async def lexical_search(prefix, query, limit):
+        assert query == 'shared term'
+        return {
+            ConceptPrefix.HGNC: [('source-a', 1.0), ('source-b', 0.9)],
+            ConceptPrefix.MONDO: [('source-c', 1.0)],
+        }[prefix][:limit]
+
+    doc_db.lexical_search = lexical_search
+
+    class MappingGraph:
+        async def get_exact_mappings(self, source_prefix, source_ids, target_prefix):
+            assert target_prefix == ConceptPrefix.HPO
+            return {
+                'source-a': ['target-a', 'target-b'],
+                'source-b': ['target-b'],
+                'source-c': ['target-b'],
+            } | {source_id: [] for source_id in source_ids
+                 if source_id not in {'source-a', 'source-b', 'source-c'}}
+
+    monkeypatch.setattr(
+        hybrid_module, '_annotation_partners',
+        lambda _prefix: [ConceptPrefix.HGNC, ConceptPrefix.MONDO],
+    )
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_mapped_recall_limit', 2)
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_mapped_candidate_limit', 2)
+
+    ranked = await hybrid_module._mapped_recall(
+        'shared term', ConceptPrefix.HPO, doc_db, MappingGraph(),
+    )
+    augmented = await hybrid_module._add_mapped_recall(
+        hybrid_module._PrefixCandidates([], [], False),
+        'shared term', ConceptPrefix.HPO, doc_db, MappingGraph(), Concept,
+    )
+
+    assert ranked == ['target-a', 'target-b']
+    assert [concept.concept_id for concept, _score in augmented.semantic] == [
+        'target-a', 'target-b',
+    ]
+    assert augmented.exact == []
+
+
+@pytest.mark.asyncio
+async def test_mapped_recall_adds_evidence_without_duplicating_candidate(monkeypatch):
+    concept = make_concept('mapped', 'Mapped concept')
+    doc_db = FakeDocumentDatabase({'mapped': concept})
+
+    async def fake_mapped_recall(*_args, **_kwargs):
+        return ['mapped']
+
+    monkeypatch.setattr(hybrid_module, '_mapped_recall', fake_mapped_recall)
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_rrf_k', 60)
+    augmented = await hybrid_module._add_mapped_recall(
+        hybrid_module._PrefixCandidates([], [(concept, 0.25)], True),
+        'query', ConceptPrefix.HPO, doc_db, object(), Concept,
+    )
+
+    assert len(augmented.semantic) == 1
+    assert augmented.semantic[0][1] == pytest.approx(0.25 + 1 / 61)
 
 
 @pytest.mark.asyncio

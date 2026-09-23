@@ -50,6 +50,18 @@ class FakeGraphDatabase:
         return [RelatedTerm(conceptId=concept_ids[0], relatedConcepts=['0000003'])]
 
 
+class FakeCache:
+    def __init__(self):
+        self.purges = 0
+        self.rotations = 0
+
+    async def purge(self):
+        self.purges += 1
+
+    async def rotate_dataset_version(self):
+        self.rotations += 1
+
+
 class FakeVocabularyDocumentDatabase:
     async def count_terms(self, prefix):
         return 1 if prefix == ConceptPrefix.MONDO else 0
@@ -84,17 +96,20 @@ async def test_ingest_documents_accepts_chunked_newline_delimited_json():
     payload = as_json_line(first) + as_json_line(second)
     request = FakeRequest([payload[:17], payload[17:42], payload[42:]])
     doc_db = FakeDocumentDatabase()
+    cache = FakeCache()
 
     response = await ingest_documents(
         prefix=ConceptPrefix.HPO,
         request=request,
         doc_db=doc_db,
+        cache=cache,
         _='tester',
     )
 
     assert response.concept_count == 2
     assert len(doc_db.saved_batches) == 1
     assert [term.concept_id for term in doc_db.saved_batches[0]] == ['0000001', '0000002']
+    assert (cache.purges, cache.rotations) == (1, 1)
 
 
 @pytest.mark.asyncio
@@ -106,11 +121,13 @@ async def test_ingest_documents_accepts_gzip_encoded_body():
         headers={'Content-Encoding': 'gzip'},
     )
     doc_db = FakeDocumentDatabase()
+    cache = FakeCache()
 
     response = await ingest_documents(
         prefix=ConceptPrefix.HPO,
         request=request,
         doc_db=doc_db,
+        cache=cache,
         _='tester',
     )
 

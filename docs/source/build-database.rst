@@ -330,7 +330,12 @@ Vocabulary, annotation, and similarity status are cached to keep repeated status
     bioterms-cli cache purge
     bioterms-cli cache rebuild
 
-``purge`` clears all cached status entries so they are recomputed the next time they are requested. ``rebuild`` walks every vocabulary, annotation, and similarity combination and recomputes their cached status immediately; this is the same operation the Celery worker performs when triggered from the web UI's "Rebuild Cache" action.
+``purge`` clears all cached status entries so they are recomputed the next time they are requested,
+without changing the dataset generation used by HTTP validators. ``rebuild`` walks every
+vocabulary, annotation, and similarity combination, recomputes their cached status immediately,
+and rotates the dataset generation used by ``ETag`` and ``Last-Modified``. This is the same
+operation the Celery worker performs when triggered manually from the web UI's "Rebuild Cache"
+action. Automatic refresh after normal cache expiry does not rotate the dataset generation.
 
 Loading offline files
 ^^^^^^^^^^^^^^^^^^^^^

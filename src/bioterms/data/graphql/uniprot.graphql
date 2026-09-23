@@ -44,7 +44,6 @@ type UniProtConceptListResponse {
 type UniProtQuery {
     uniprotConcept(conceptId: String!): UniProtConceptResponse
     autoComplete(query: String!, limit: Int): UniProtConceptListResponse
-    search(query: String!, limit: Int): UniProtConceptListResponse
 }
 
 extend type Query {

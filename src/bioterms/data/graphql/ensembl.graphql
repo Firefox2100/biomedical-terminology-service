@@ -91,7 +91,6 @@ type EnsemblConceptListResponse { error: QueryError, data: [EnsemblConcept] }
 type EnsemblQuery {
     ensemblConcept(conceptId: String!): EnsemblConceptResponse
     autoComplete(query: String!, limit: Int): EnsemblConceptListResponse
-    search(query: String!, limit: Int): EnsemblConceptListResponse
 }
 
 extend type Query { ensembl: EnsemblQuery }

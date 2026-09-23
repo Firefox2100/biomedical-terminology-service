@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
         LOGGER.info('Application shutdown complete.')
 
 
-async def rebuild_cache():
+async def rebuild_cache(rotate_dataset_version: bool = True):
     """
     Rebuild the cache by clearing existing entries and repopulating them.
     """
@@ -110,6 +110,9 @@ async def rebuild_cache():
             graph_db=graph_db,
             use_cache=False,
         )
+
+    if rotate_dataset_version:
+        await cache.rotate_dataset_version()
 
 
 async def metrics_endpoint():

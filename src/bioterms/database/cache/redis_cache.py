@@ -166,7 +166,8 @@ class RedisCache(Cache):
         try:
             from bioterms.task.cache import rebuild_cache_task
 
-            await asyncio.to_thread(rebuild_cache_task.delay)
+            # Soft/hard expiry refreshes cached metadata but does not represent a dataset change.
+            await asyncio.to_thread(rebuild_cache_task.delay, False)
             LOGGER.info('Scheduled stale cache rebuild task.')
         except Exception as e:  # pylint: disable=broad-exception-caught
             await self.db.delete(REFRESH_LOCK_KEY)
@@ -303,9 +304,12 @@ class RedisCache(Cache):
 
     async def purge(self):
         """
-        Purge all cached data.
+        Purge cached data without changing the dataset generation validator.
         """
+        dataset_version = await self.db.get('version:dataset')
         await self.db.flushdb()
+        if dataset_version is not None:
+            await self.db.set('version:dataset', dataset_version)
 
     async def close(self) -> None:
         """

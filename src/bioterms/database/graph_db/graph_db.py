@@ -290,6 +290,32 @@ class GraphDatabase(ABC):
                                    ) -> AsyncIterator[tuple[str, str, str, str, AnnotationType]]:
         """Stream annotation edges, optionally filtered by type at the database."""
 
+    async def get_exact_mappings(self,
+                                 source_prefix: ConceptPrefix,
+                                 source_ids: list[str],
+                                 target_prefix: ConceptPrefix,
+                                 ) -> dict[str, list[str]]:
+        """Return bounded source-to-target EXACT mappings, preserving input ID order.
+
+        Backends should override this with an indexed query. The streaming fallback keeps the
+        interface usable for third-party graph implementations without making it a new abstract
+        requirement.
+        """
+        requested = set(source_ids)
+        mapped: dict[str, list[str]] = {concept_id: [] for concept_id in source_ids}
+        if not requested:
+            return mapped
+        async for prefix_from, concept_from, prefix_to, concept_to, _annotation_type in (
+            self.get_annotation_edges(source_prefix, target_prefix, AnnotationType.EXACT)
+        ):
+            if prefix_from == source_prefix.value:
+                source_id, target_id = concept_from, concept_to
+            else:
+                source_id, target_id = concept_to, concept_from
+            if source_id in requested and target_id not in mapped[source_id]:
+                mapped[source_id].append(target_id)
+        return mapped
+
     @abstractmethod
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,

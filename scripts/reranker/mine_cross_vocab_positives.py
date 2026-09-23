@@ -37,6 +37,7 @@ import asyncio
 import heapq
 import json
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from bioterms.database import get_active_doc_db, get_active_graph_db, get_active_vector_db
@@ -44,6 +45,7 @@ from bioterms.embedding import TextTransformer
 from bioterms.etc.enums import AnnotationType, ConceptPrefix, EmbeddingKind
 from bioterms.vocabulary import get_vocabulary_config
 from bioterms.vocabulary.utils import get_vocabulary_module
+from bioterms.search.hybrid import _mapped_recall
 
 from build_training_data import (
     MiningStats,
@@ -116,6 +118,20 @@ def _offer_bounded_mapping(heap: list[tuple],
 
 def _direction_key(target_prefix: ConceptPrefix, source_prefix: ConceptPrefix) -> str:
     return f'{source_prefix.value}->{target_prefix.value}'
+
+
+def _retrieval_miss_record(unit: QueryUnit, source_prefix: ConceptPrefix,
+                           candidate_pool_depth: int) -> dict:
+    """Preserve a gold-absent query for retrieval evaluation, not reranker training."""
+    return {
+        'source_prefix': source_prefix.value,
+        'prefix': unit.prefix.value,
+        'query_id': f'{source_prefix.value}:{unit.item.item_id}->{unit.prefix.value}:{unit.concept_id}',
+        'query': unit.item.text,
+        'gold_concept_id': unit.concept_id,
+        'reason': 'gold_not_retrieved',
+        'per_arm_depth': candidate_pool_depth,
+    }
 
 
 def _order_and_cap_units(units: list[tuple[QueryUnit, str]],
@@ -219,7 +235,10 @@ async def _run(args: argparse.Namespace) -> None:
     # its own redundant REPLACED_BY fetch for the same target prefix.
     equivalence_by_target: dict[ConceptPrefix, dict[str, set[str]]] = {}
 
-    with output_router:
+    miss_path = Path(args.retrieval_miss_output) if args.retrieval_miss_output else None
+    if miss_path is not None:
+        miss_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_router, (miss_path.open('w', encoding='utf-8') if miss_path else nullcontext()) as miss_file:
         for target_prefix, source_prefix in sorted(
                 mapping_by_direction, key=lambda pair: (pair[1].value, pair[0].value)):
             if args.limit is not None and global_index >= args.skip + args.limit:
@@ -295,12 +314,23 @@ async def _run(args: argparse.Namespace) -> None:
                                   query_vector: list[float],
                                   ) -> tuple[dict | None, int, int, str | None]:
                 async with semaphore:
+                    mapped_ranked = (
+                        await _mapped_recall(
+                            unit.item.text, unit.prefix, doc_db, graph_db,
+                            source_depth=args.mapped_recall_limit,
+                            candidate_limit=args.mapped_candidate_limit,
+                        )
+                        if args.mapped_recall_limit > 0 else []
+                    )
                     negatives, candidate_pool, duplicate_merges, rejected, gold_evidence = await _mine_negatives(
                         doc_db, vector_db, transformer, unit,
                         negatives_per_query=args.negatives_per_query,
                         candidate_pool=args.candidate_pool,
                         equivalence_index=equivalence_index,
                         query_vector=query_vector,
+                        additional_ranked_hits=(
+                            {'exact_mapping': mapped_ranked} if mapped_ranked else None
+                        ),
                     )
                 # A reranker cannot learn/use an alias->gold pair that the production recall
                 # stage never retrieves. This also removes semantically incompatible aliases
@@ -338,9 +368,13 @@ async def _run(args: argparse.Namespace) -> None:
                     for (unit, source_prefix_value), query_vector in zip(batch, query_vectors)
                 ))
 
-                for record, duplicate_merges, rejected, skip_reason in results:
+                for (unit, _source_prefix), (record, duplicate_merges, rejected, skip_reason) in zip(batch, results):
                     if skip_reason == 'gold_not_retrieved':
                         stats.skipped_gold_not_retrieved += 1
+                        if miss_file is not None:
+                            miss_file.write(json.dumps(_retrieval_miss_record(
+                                unit, source_prefix, args.candidate_pool,
+                            ), ensure_ascii=False) + '\n')
                         continue
                     if skip_reason == 'below_min_negatives':
                         stats.skipped_below_min_negatives += 1
@@ -366,6 +400,8 @@ async def _run(args: argparse.Namespace) -> None:
             'skip': args.skip,
             'limit': args.limit,
             'require_gold_retrieved': args.require_gold_retrieved,
+            'mapped_recall_limit': args.mapped_recall_limit,
+            'mapped_candidate_limit': args.mapped_candidate_limit,
             'elapsed_seconds': time.perf_counter() - start_time,
             **stats.as_dict(),
         }, stats_file, indent=2)
@@ -428,6 +464,21 @@ def main() -> None:
     parser.add_argument('--min-negatives-per-query', type=int, default=2)
     parser.add_argument('--candidate-pool', type=int, default=50)
     parser.add_argument(
+        '--mapped-recall-limit', type=int, default=0,
+        help='Optional lexical depth inspected in EXACT-annotated source vocabularies; '
+             'mapped target concepts are stored as an exact_mapping recall arm. Zero '
+             'preserves legacy three-arm mining.',
+    )
+    parser.add_argument(
+        '--mapped-candidate-limit', type=int, default=20,
+        help='Maximum distinct target concepts contributed by optional mapped recall.',
+    )
+    parser.add_argument(
+        '--retrieval-miss-output', default=None,
+        help='Optional JSONL of gold-absent cross-vocabulary queries for retrieval evaluation; '
+             'these rows remain excluded from reranker training output.',
+    )
+    parser.add_argument(
         '--require-gold-retrieved', action=argparse.BooleanOptionalAction, default=True,
         help='Keep only mappings whose gold is found by at least one target-vocabulary recall arm.',
     )
@@ -449,6 +500,8 @@ def main() -> None:
         parser.error('--min-negatives-per-query must be between 0 and --negatives-per-query')
     if args.candidate_pool < 1:
         parser.error('--candidate-pool must be >= 1')
+    if args.mapped_recall_limit < 0 or args.mapped_candidate_limit < 1:
+        parser.error('--mapped-recall-limit must be >= 0 and --mapped-candidate-limit >= 1')
     if args.batch_size < 1 or args.concurrency < 1:
         parser.error('--batch-size and --concurrency must be >= 1')
     asyncio.run(_run(args))

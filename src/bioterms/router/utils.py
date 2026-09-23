@@ -8,7 +8,8 @@ import hashlib
 import hmac
 import base64
 import importlib.resources as pkg_resources
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import format_datetime, parsedate_to_datetime
 from typing import Annotated, AsyncIterator, Optional
 from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
@@ -18,7 +19,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
-from bioterms.etc.consts import CONFIG
+from bioterms.etc.consts import CONFIG, LOGGER
 from bioterms.database import DocumentDatabase, get_active_doc_db, get_active_cache
 
 
@@ -36,7 +37,6 @@ _allowed_redirect_regex = [
 ]
 BEARER_SECURITY = HTTPBearer()
 
-HTTP_DATE_FORMAT = '%a, %d %b %Y %H:%M:%S GMT'
 VOCABULARY_CACHE_CONTROL = 'public, max-age=86400, stale-while-revalidate=172800'
 
 
@@ -48,7 +48,28 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _is_cacheable_vocabulary_path(path: str) -> bool:
-        return path.startswith('/api/vocabularies') and not path.endswith('/random')
+        return (
+            path == '/api/search/v2'
+            or path.startswith('/fhir/CodeSystem')
+            or path == '/api/vocabularies'
+            or (path.startswith('/api/vocabularies/') and not path.endswith('/random'))
+        )
+
+    @staticmethod
+    def _http_date(value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return format_datetime(value.astimezone(timezone.utc).replace(microsecond=0), usegmt=True)
+
+    @staticmethod
+    def _make_etag(request: Request, dataset_version: datetime) -> str:
+        """Build a weak validator for this dataset generation and request representation."""
+        query = getattr(request.url, 'query', '')
+        representation = f'{request.url.path}?{query}' if query else request.url.path
+        digest = hashlib.sha256(
+            f'{dataset_version.isoformat()}\n{representation}'.encode()
+        ).hexdigest()
+        return f'W/"{digest}"'
 
     @staticmethod
     def _not_modified_response(etag: str,
@@ -58,7 +79,7 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
             status_code=status.HTTP_304_NOT_MODIFIED,
             headers={
                 'ETag': etag,
-                'Last-Modified': last_modified.strftime(HTTP_DATE_FORMAT),
+                'Last-Modified': CacheControlMiddleware._http_date(last_modified),
                 'Cache-Control': VOCABULARY_CACHE_CONTROL,
             }
         )
@@ -75,16 +96,30 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
         if_not_match = request.headers.get('If-None-Match')
         if if_not_match is not None:
             etag_values = [v.strip() for v in if_not_match.split(',')]
-            if etag in etag_values or '*' in etag_values:
+            weak_etag = etag.removeprefix('W/')
+            if '*' in etag_values or any(
+                value.removeprefix('W/') == weak_etag for value in etag_values
+            ):
                 return self._not_modified_response(etag, last_modified)
+
+            # If-None-Match takes precedence over If-Modified-Since.
+            return None
 
         if_modified_since = request.headers.get('If-Modified-Since')
         if if_modified_since is not None:
             try:
-                ims_date = datetime.strptime(if_modified_since, HTTP_DATE_FORMAT)
-                if last_modified <= ims_date:
+                ims_date = parsedate_to_datetime(if_modified_since)
+                if ims_date.tzinfo is None:
+                    ims_date = ims_date.replace(tzinfo=timezone.utc)
+                comparable_last_modified = last_modified
+                if comparable_last_modified.tzinfo is None:
+                    comparable_last_modified = comparable_last_modified.replace(tzinfo=timezone.utc)
+                comparable_last_modified = comparable_last_modified.astimezone(timezone.utc).replace(
+                    microsecond=0
+                )
+                if comparable_last_modified <= ims_date.astimezone(timezone.utc):
                     return self._not_modified_response(etag, last_modified)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 pass
 
         return None
@@ -97,18 +132,18 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             return response
 
-        cache = get_active_cache()
         last_modified = None
         etag = None
         cacheable = self._is_cacheable_vocabulary_path(request.url.path)
 
         if cacheable:
-            last_modified = await cache.get_dataset_last_modified()
-            etag = hashlib.sha1(last_modified.isoformat().encode()).hexdigest()
-
-            not_modified = self._check_not_modified(request, last_modified, etag)
-            if not_modified is not None:
-                return not_modified
+            try:
+                cache = get_active_cache()
+                last_modified = await cache.get_dataset_last_modified()
+                etag = self._make_etag(request, last_modified)
+            except Exception as e:  # Cache metadata must not make the read API unavailable.
+                LOGGER.warning('Unable to load HTTP cache validator: %s', str(e))
+                cacheable = False
 
         response = await call_next(request)
 
@@ -116,7 +151,11 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
             return response
 
         response.headers['Cache-Control'] = VOCABULARY_CACHE_CONTROL
-        response.headers['Last-Modified'] = last_modified.strftime(HTTP_DATE_FORMAT)
+        not_modified = self._check_not_modified(request, last_modified, etag)
+        if not_modified is not None:
+            return not_modified
+
+        response.headers['Last-Modified'] = self._http_date(last_modified)
         response.headers['ETag'] = etag
 
         return response

@@ -8,8 +8,15 @@ labelling required.
 
 ## Service deployment
 
-Enable the trained reranker with either a local exported bundle or a Hugging Face repository
-ID; PyLate/SentenceTransformers use the same setting for both forms:
+By default, `train_reranker.py` writes training checkpoints to
+`scripts/reranker/runs/production/checkpoint-*` and exports the selected final model to
+`scripts/reranker/runs/production/final`. The local service discovers that `final` bundle at
+startup when it exists. Use `--output-dir runs/<experiment>` during tests or ablations to keep
+their checkpoints and model bundles separate; the service does not auto-load those runs.
+The service must be restarted to load a newly trained bundle.
+
+For a different deployment path or a published Hugging Face repository, set the model source
+explicitly; PyLate/SentenceTransformers use the same setting for both forms:
 
 ```dotenv
 # Local bundle
@@ -131,6 +138,45 @@ is stored -- only concept identifiers and retrieval evidence. A negative
 concept hit by several recall arms is merged into one candidate with all of that evidence
 attached (not several separate candidates, and not "first arm wins").
 
+### Audit retrieval before re-mining
+
+The saved schema-v2 pools retain the gold concept's per-arm retrieval ranks. Replay recall
+and production-style RRF on CPU without using an embedding model or querying the database:
+
+```bash
+python audit_retrieval.py data/v4/raw/cross-vocab.full.jsonl \
+  --sample-modulus 20 --output runs/retrieval-audit.json \
+  --review-output runs/retrieval-review.jsonl
+```
+
+This is conditional on rows the miner kept, and RRF ties are scored optimistically. The
+cross-vocabulary miner historically discarded rows whose gold was absent from every arm;
+include `skipped_gold_not_retrieved` from its shard statistics when reporting the true
+top-50 recall denominator. On a future cross-vocabulary mining run, add
+`--retrieval-miss-output data/retrieval-misses.jsonl` to preserve those gold-absent queries
+as a separate evaluation manifest; they still do not become reranker training examples.
+The document backends now require at least one three-character token for lexical search,
+so short-query audits must also check whether vector retrieval alone finds the gold.
+
+For a small live check against the currently configured indexes, including a future
+retrieval-miss manifest, use CPU embeddings while GPUs are occupied:
+
+```bash
+CUDA_VISIBLE_DEVICES='' python probe_live_retrieval.py \
+  --input data/retrieval-misses.jsonl --limit 50 --depths 50 100 \
+  --output runs/live-retrieval-probe.json
+```
+
+The probe compares item-level arm depths before concept deduplication, as production does.
+It is read-only and leaves the service's configured embedding device unchanged.
+
+To mirror the service's optional exact-mapped recall during a new cross-vocabulary mining
+run, add `--mapped-recall-limit 5 --mapped-candidate-limit 20`. Mapped concepts are retained
+as a separate `exact_mapping` evidence arm, so queries recovered only by mappings become
+eligible training examples. Both options are disabled by default to keep older runs exactly
+reproducible. Enabling this changes candidate pools and therefore requires re-mining before a
+mapped-recall-specific continuation run.
+
 ### Model-in-the-loop re-mining
 
 After mining schema-v2 pools, attach scores from the selected SapBERT-ColBERT checkpoint:
@@ -180,6 +226,33 @@ python train_reranker.py \
 Omit these three new training flags to reproduce legacy retrieval sampling and hard-label
 contrastive training. Thus finding that stored ranking supervision hurts does not require
 re-mining.
+
+### Quality-filtered continuation (no re-mining)
+
+The scored candidate pools are immutable. To test the error-analysis-driven cleanup, add
+`--drop-ambiguous-training-queries --drop-contextless-training-queries` to a new training
+run. The first option removes train queries whose normalised text points to multiple gold
+concepts within one target vocabulary; the second removes generic context-dependent answers
+(such as "Yes"/"No") and aliases with fewer than three letters/digits. Neither option changes
+the held-out split or production vocabulary data. Use `--quality-review-output` to write a
+bounded JSONL queue of exclusions for manual inspection; `run_config.json` records the exact
+arguments used. These filters are optional so the original v4 experiment remains reproducible.
+
+For error analysis without retraining, `--evaluate-only` loads `--output-dir/final` and scores
+the original full held-out candidate sets. `--evaluation-model` can point to another bundle,
+and `--evaluation-result` selects a separate metrics file for a same-set comparison. Add
+`--prediction-output` to atomically export one JSONL record per query with the gold rank,
+top-five IDs/scores, candidate count, exact-match IDs, and query kind. The primary global
+metrics remain strict single-gold scores; the additional `by_exactness` breakdown is
+diagnostic and does not silently treat unrelated concepts sharing an alias as equivalent.
+
+To prepare a manual cross-vocabulary mapping review from already-scored data (without
+re-mining or changing supervision), run `audit_mapping_conflicts.py --input-dir data/v4/scored
+--concept-store-dir data/v4/raw/concepts --output runs/mapping_audit.json --review-output
+runs/mapping_review.jsonl`. It flags context-dependent aliases, multiple exact candidates,
+and a non-exact mapped gold competing with another exact concept. It intentionally does not
+auto-drop these rows: an exact alias on an unrelated gene can be the misleading candidate,
+not the mapped disease gold.
 
 ### `--skip`/`--limit` control quantity only, not vocabulary balance
 

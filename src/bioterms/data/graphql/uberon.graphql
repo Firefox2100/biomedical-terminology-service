@@ -40,7 +40,6 @@ type UberonConceptListResponse {
 type UberonQuery {
     uberonConcept(conceptId: String!): UberonConceptResponse
     autoComplete(query: String!, limit: Int): UberonConceptListResponse
-    search(query: String!, limit: Int): UberonConceptListResponse
 }
 
 extend type Query {

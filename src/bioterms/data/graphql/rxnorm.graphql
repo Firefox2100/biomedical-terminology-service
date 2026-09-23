@@ -28,6 +28,5 @@ type RxNormConceptListResponse { error: QueryError, data: [RxNormConcept] }
 type RxNormQuery {
     rxnormConcept(conceptId: String!): RxNormConceptResponse
     autoComplete(query: String!, limit: Int): RxNormConceptListResponse
-    search(query: String!, limit: Int): RxNormConceptListResponse
 }
 extend type Query { rxnorm: RxNormQuery }

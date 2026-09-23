@@ -184,6 +184,7 @@ async def get_license(prefix: ConceptPrefix):
 
 @data_router.get('/{prefix}/random', response_model=list[str])
 async def get_random_concept_ids(prefix: ConceptPrefix,
+                                 response: Response,
                                  doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                                  count: Annotated[
                                      int,
@@ -202,6 +203,7 @@ async def get_random_concept_ids(prefix: ConceptPrefix,
     :param doc_db: The document database instance.
     :return: A list of random concept IDs.
     """
+    response.headers['Cache-Control'] = 'no-store'
     random_ids = await doc_db.get_random_term_ids(
         prefix=prefix,
         count=count,
@@ -283,6 +285,7 @@ async def _iter_request_lines(request: Request,
 async def ingest_documents(prefix: ConceptPrefix,
                            request: Request,
                            doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                           cache: Annotated[Cache, Depends(get_active_cache)],
                            _: Annotated[str, Depends(api_key_required)],
                            ):
     """
@@ -295,6 +298,7 @@ async def ingest_documents(prefix: ConceptPrefix,
     :param prefix: The vocabulary prefix.
     :param request: The FastAPI request object.
     :param doc_db: The document database instance.
+    :param cache: The cache used to invalidate dataset-derived responses.
     :param _: API key authentication dependency.
     :return: An IngestResponse containing the total number of concepts after ingestion.
     """
@@ -302,14 +306,17 @@ async def ingest_documents(prefix: ConceptPrefix,
 
     batch: list[ConceptUnion] = []
     batch_size = 1000
+    wrote_documents = False
     vocabulary_config = get_vocabulary_config(prefix)
     concept_class: ConceptUnion = vocabulary_config['conceptClass']
 
     async def flush_batch():
+        nonlocal wrote_documents
         if not batch:
             return
 
         await doc_db.save_terms(batch)
+        wrote_documents = True
         batch.clear()
 
     try:
@@ -322,11 +329,17 @@ async def ingest_documents(prefix: ConceptPrefix,
 
         await flush_batch()
     except Exception as e:
+        if wrote_documents:
+            await cache.purge()
+            await cache.rotate_dataset_version()
         raise HTTPException(
             status_code=400,
             detail=f'Failed to ingest documents: {e}'
         ) from e
 
+    if wrote_documents:
+        await cache.purge()
+        await cache.rotate_dataset_version()
     concept_count = await doc_db.count_terms(prefix)
 
     return IngestResponse(

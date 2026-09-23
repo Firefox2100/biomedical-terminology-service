@@ -6,21 +6,60 @@ This standalone script depends on the ML stack but not the service or its databa
 import argparse
 import hashlib
 import json
+import os
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from concept_rendering import ALL_VARIANTS, RenderVariant, render_concept
+from query_quality import normalise_query, training_quality_reasons
 
 
 # Below this fraction of loaded groups resolving a gold concept, --concept-store-dir almost
 # certainly doesn't match --train-data -- fail fast rather than train on a near-empty dataset.
 MIN_CONCEPT_RESOLUTION_FRACTION = 0.5
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / 'runs' / 'production'
 
 
 def _normalise_query(text: str) -> str:
     """Normalise query text for ambiguity/deduplication checks (not model input)."""
-    return ' '.join(text.casefold().split())
+    return normalise_query(text)
+
+
+def _filter_training_quality(groups: list[dict],
+                             ambiguous_keys: set[tuple[str, str]],
+                             drop_ambiguous: bool,
+                             drop_contextless: bool,
+                             review_output: Path | None = None,
+                             review_limit: int = 1000,
+                             ) -> tuple[list[dict], dict[str, int]]:
+    """Apply optional quality policy after the concept split, leaving evaluation unchanged."""
+    kept = []
+    reasons_count: Counter[str] = Counter()
+    review = []
+    for group in groups:
+        reasons = training_quality_reasons(
+            group, ambiguous_keys, drop_ambiguous, drop_contextless,
+        )
+        if not reasons:
+            kept.append(group)
+            continue
+        reasons_count.update(reasons)
+        reasons_count['total_excluded'] += 1
+        reasons_count[f'excluded_{group["prefix"]}'] += 1
+        if review_output is not None and len(review) < review_limit:
+            review.append({
+                'prefix': group['prefix'], 'query': group['query'],
+                'query_kind': group.get('query_kind'),
+                'gold_concept_id': group['gold_concept_id'],
+                'reasons': reasons,
+            })
+    if review_output is not None and os.environ.get('RANK', '0') == '0':
+        review_output.parent.mkdir(parents=True, exist_ok=True)
+        with review_output.open('w', encoding='utf-8') as handle:
+            for item in review:
+                handle.write(json.dumps(item, ensure_ascii=False) + '\n')
+    return kept, dict(reasons_count)
 
 
 def _deduplicate_groups(groups: list[dict]) -> tuple[list[dict], int]:
@@ -67,8 +106,19 @@ def _resolve_train_paths(explicit_paths: list[str] | None,
 def _load_groups(paths: list[Path],
                  include_vocabularies: set[str] | None = None,
                  exclude_vocabularies: set[str] | None = None,
+                 ranking_score_key: str | None = None,
+                 compact_model_candidates: int | None = None,
+                 eval_fraction: float = 0.02,
+                 split_seed: int = 13,
+                 sampling_seed: int = 42,
                  ) -> list[dict]:
-    """Load query groups from the selected shard pool, applying vocabulary masks on read."""
+    """Load the training projection of query groups, applying vocabulary masks on read.
+
+    Scored pools can contain tens of gigabytes of retrieval provenance.  None of that evidence
+    is consumed by splitting, sampling, rendering, or evaluation, so retaining the original
+    dictionaries multiplies peak RAM for no semantic benefit.  Keep only the stable training
+    contract and, when requested, the selected score channel.
+    """
     groups: list[dict] = []
     for path in paths:
         with path.open('r', encoding='utf-8') as f:
@@ -81,7 +131,111 @@ def _load_groups(paths: list[Path],
                         continue
                     if exclude_vocabularies is not None and prefix in exclude_vocabularies:
                         continue
-                    groups.append(group)
+                    projected = {
+                        'prefix': prefix,
+                        'query_id': group['query_id'],
+                        'query': group['query'],
+                        'gold_concept_id': group['gold_concept_id'],
+                        'negatives': [
+                            {'concept_id': negative['concept_id']}
+                            for negative in (group.get('negatives') or [])
+                        ],
+                    }
+                    if group.get('query_kind') is not None:
+                        projected['query_kind'] = group['query_kind']
+                    candidate_pool = []
+                    for candidate in group.get('candidate_pool') or []:
+                        record = {
+                            'concept_id': candidate['concept_id'],
+                            'role': candidate.get('role'),
+                        }
+                        if ranking_score_key is not None:
+                            score = (candidate.get('ranking_scores') or {}).get(ranking_score_key)
+                            if score is not None:
+                                record['ranking_scores'] = {ranking_score_key: score}
+                        candidate_pool.append(record)
+                    if compact_model_candidates and ranking_score_key is not None:
+                        split_key = f'{split_seed}:{prefix}:{group["gold_concept_id"]}'
+                        is_eval = _stable_unit_fraction(split_key) < eval_fraction
+                        if not is_eval:
+                            gold = [candidate for candidate in candidate_pool
+                                    if candidate.get('role') == 'gold']
+                            negatives = [candidate for candidate in candidate_pool
+                                         if candidate.get('role') != 'gold'
+                                         and ranking_score_key in candidate.get('ranking_scores', {})]
+                            negatives.sort(key=lambda candidate: (
+                                -float(candidate['ranking_scores'][ranking_score_key]),
+                                candidate['concept_id'],
+                            ))
+                            # Materialise the same hard/mid/easy mixture used by
+                            # _training_negatives while the source row is in hand. This avoids
+                            # retaining ~100 retrieval candidates for every training group in
+                            # every DDP worker. Repeated balanced draws intentionally reuse the
+                            # selected tail item; rendering augmentation remains draw-specific.
+                            count = compact_model_candidates
+                            hard_count = (count + 1) // 2
+                            middle_count = max(1, count // 4) if count - hard_count > 1 else 0
+                            selected = list(negatives[:hard_count])
+                            remaining = negatives[hard_count:]
+                            if middle_count:
+                                centre = len(remaining) // 2
+                                lo = max(0, centre - middle_count // 2)
+                                selected.extend(remaining[lo:lo + middle_count])
+                            selected_ids = {candidate['concept_id'] for candidate in selected}
+                            tail_start = max(hard_count, (2 * len(negatives)) // 3)
+                            tail = [candidate for candidate in reversed(negatives[tail_start:])
+                                    if candidate['concept_id'] not in selected_ids]
+                            if tail:
+                                offset = int(_stable_unit_fraction(
+                                    f'{sampling_seed}:0:{group["query_id"]}:tail'
+                                ) * len(tail))
+                                tail = tail[offset:] + tail[:offset]
+                            selected.extend(tail[:count - len(selected)])
+                            if len(selected) < count:
+                                selected_ids = {candidate['concept_id'] for candidate in selected}
+                                selected.extend(candidate for candidate in negatives
+                                                if candidate['concept_id'] not in selected_ids)
+                            candidate_pool = gold + selected[:count]
+                    projected['candidate_pool'] = candidate_pool
+                    groups.append(projected)
+    return groups
+
+
+def _load_eval_groups(paths: list[Path], eval_fraction: float, split_seed: int,
+                      include_vocabularies: set[str] | None = None,
+                      exclude_vocabularies: set[str] | None = None) -> list[dict]:
+    """Stream only the held-out projection for a restartable evaluation-only run."""
+    groups = []
+    seen = set()
+    for path in paths:
+        with path.open('r', encoding='utf-8') as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                group = json.loads(line)
+                prefix = group['prefix']
+                if include_vocabularies is not None and prefix not in include_vocabularies:
+                    continue
+                if exclude_vocabularies is not None and prefix in exclude_vocabularies:
+                    continue
+                split_key = f'{split_seed}:{prefix}:{group["gold_concept_id"]}'
+                if _stable_unit_fraction(split_key) >= eval_fraction:
+                    continue
+                key = (prefix, group['query_id'], group['gold_concept_id'],
+                       _normalise_query(group['query']))
+                if key in seen:
+                    continue
+                seen.add(key)
+                groups.append({
+                    'prefix': prefix,
+                    'query': group['query'],
+                    'query_kind': group.get('query_kind'),
+                    'gold_concept_id': group['gold_concept_id'],
+                    'candidate_pool': [{'concept_id': c['concept_id']}
+                                       for c in group.get('candidate_pool') or []],
+                    'negatives': [{'concept_id': c['concept_id']}
+                                  for c in group.get('negatives') or []],
+                })
     return groups
 
 
@@ -488,6 +642,7 @@ def _build_candidate_sets(eval_groups: list[dict],
             'prefix': group['prefix'],
             'gold_concept_id': group['gold_concept_id'],
             'query': group['query'],
+            'query_kind': group.get('query_kind'),
             'candidate_ids': candidate_ids,
             'candidate_texts': candidate_texts,
             'exact_alias_ids': exact_alias_ids,
@@ -510,46 +665,83 @@ def _candidate_set_metrics(ranks: list[int | None]) -> dict:
     }
 
 
-def _run_candidate_set_evaluation(model, examples: list[dict], batch_size: int) -> dict:
+def _run_candidate_set_evaluation(model, examples: list[dict], batch_size: int,
+                                  prediction_output: Path | None = None) -> dict:
     """Score every example's full candidate set with the trained model via pylate.rank.rerank; return metrics global + per vocabulary."""
     from pylate import rank
 
     if not examples:
         return {}
 
-    queries = [ex['query'] for ex in examples]
-    documents = [ex['candidate_texts'] for ex in examples]
-    documents_ids = [ex['candidate_ids'] for ex in examples]
-
-    query_embeddings = model.encode(queries, is_query=True, batch_size=batch_size, show_progress_bar=False)
-    document_embeddings = model.encode(documents, is_query=False, batch_size=batch_size, show_progress_bar=False)
-
-    reranked = rank.rerank(
-        documents_ids=documents_ids, queries_embeddings=query_embeddings, documents_embeddings=document_embeddings,
-    )
-
     ranks_by_vocab: dict[str, list[int | None]] = defaultdict(list)
     hybrid_ranks_by_vocab: dict[str, list[int | None]] = defaultdict(list)
-    for example, results in zip(examples, reranked):
-        ranked_ids = [r['id'] for r in results]
-        try:
-            gold_rank = ranked_ids.index(example['gold_concept_id']) + 1
-        except ValueError:
-            gold_rank = None
-        ranks_by_vocab[example['prefix']].append(gold_rank)
+    ranks_by_exactness: dict[str, list[int | None]] = defaultdict(list)
+    prediction_partial = None
+    prediction_handle = None
+    if prediction_output is not None:
+        prediction_output.parent.mkdir(parents=True, exist_ok=True)
+        prediction_partial = prediction_output.with_name(prediction_output.name + '.partial')
+        prediction_handle = prediction_partial.open('w', encoding='utf-8')
+    # A full evaluation can contain millions of rendered candidate documents.  Encode and
+    # rank bounded query-group chunks so embeddings are released after each chunk; the rank
+    # metrics are exactly the same as evaluating the concatenated lists at once.
+    for start in range(0, len(examples), batch_size):
+        chunk = examples[start:start + batch_size]
+        query_embeddings = model.encode(
+            [ex['query'] for ex in chunk], is_query=True,
+            batch_size=batch_size, show_progress_bar=False,
+        )
+        document_embeddings = model.encode(
+            [ex['candidate_texts'] for ex in chunk], is_query=False,
+            batch_size=batch_size, show_progress_bar=False,
+        )
+        reranked = rank.rerank(
+            documents_ids=[ex['candidate_ids'] for ex in chunk],
+            queries_embeddings=query_embeddings,
+            documents_embeddings=document_embeddings,
+        )
+        for example, results in zip(chunk, reranked):
+            ranked_ids = [r['id'] for r in results]
+            try:
+                gold_rank = ranked_ids.index(example['gold_concept_id']) + 1
+            except ValueError:
+                gold_rank = None
+            ranks_by_vocab[example['prefix']].append(gold_rank)
+            exact_alias_ids = example.get('exact_alias_ids') or []
+            exactness = ('no_exact_match' if not exact_alias_ids else
+                         'unique_exact_match' if len(exact_alias_ids) == 1 else
+                         'ambiguous_exact_match')
+            ranks_by_exactness[exactness].append(gold_rank)
+            if prediction_handle is not None:
+                prediction_handle.write(json.dumps({
+                    'prefix': example['prefix'],
+                    'query': example['query'],
+                    'query_kind': example.get('query_kind'),
+                    'gold_concept_id': example['gold_concept_id'],
+                    'gold_rank': gold_rank,
+                    'candidate_count': len(example['candidate_ids']),
+                    'exact_alias_ids': exact_alias_ids,
+                    'top_candidates': [
+                        {'concept_id': str(item['id']), 'score': float(item['score'])}
+                        for item in results[:5]
+                    ],
+                }, ensure_ascii=False) + '\n')
 
-        # A unique exact label/synonym match is stronger evidence than semantic similarity.
-        # Multiple exact matches remain ambiguous and are deliberately left to the model.
-        hybrid_ids = ranked_ids
-        exact_alias_ids = example.get('exact_alias_ids') or []
-        if len(exact_alias_ids) == 1 and exact_alias_ids[0] in ranked_ids:
-            exact_id = exact_alias_ids[0]
-            hybrid_ids = [exact_id] + [candidate_id for candidate_id in ranked_ids if candidate_id != exact_id]
-        try:
-            hybrid_rank = hybrid_ids.index(example['gold_concept_id']) + 1
-        except ValueError:
-            hybrid_rank = None
-        hybrid_ranks_by_vocab[example['prefix']].append(hybrid_rank)
+            # A unique exact label/synonym match is stronger evidence than semantic similarity.
+            # Multiple exact matches remain ambiguous and are deliberately left to the model.
+            hybrid_ids = ranked_ids
+            if len(exact_alias_ids) == 1 and exact_alias_ids[0] in ranked_ids:
+                exact_id = exact_alias_ids[0]
+                hybrid_ids = [exact_id] + [candidate_id for candidate_id in ranked_ids if candidate_id != exact_id]
+            try:
+                hybrid_rank = hybrid_ids.index(example['gold_concept_id']) + 1
+            except ValueError:
+                hybrid_rank = None
+            hybrid_ranks_by_vocab[example['prefix']].append(hybrid_rank)
+
+    if prediction_handle is not None:
+        prediction_handle.close()
+        prediction_partial.replace(prediction_output)
 
     metrics = {'global': _candidate_set_metrics([r for ranks in ranks_by_vocab.values() for r in ranks])}
     for prefix, ranks in ranks_by_vocab.items():
@@ -562,6 +754,10 @@ def _run_candidate_set_evaluation(model, examples: list[dict], batch_size: int) 
             prefix: _candidate_set_metrics(ranks)
             for prefix, ranks in hybrid_ranks_by_vocab.items()
         },
+    }
+    metrics['by_exactness'] = {
+        category: _candidate_set_metrics(ranks)
+        for category, ranks in ranks_by_exactness.items()
     }
     return metrics
 
@@ -755,7 +951,19 @@ def _parse_args() -> argparse.Namespace:
         '--document-length', type=int, default=64,
         help='Max token length for rendered candidates -- check the printed length distribution before assuming this is enough.',
     )
-    parser.add_argument('--output-dir', required=True, help='Directory to write checkpoints and the final model to.')
+    parser.add_argument(
+        '--output-dir', default=str(DEFAULT_OUTPUT_DIR),
+        help='Run directory for checkpoints and final/ model bundle. Override for experiments; '
+             'the default final/ bundle is discovered by the local service.',
+    )
+    parser.add_argument('--evaluate-only', action='store_true',
+                        help='Evaluate an existing --output-dir/final on the full held-out split without retraining.')
+    parser.add_argument('--evaluation-model', default=None,
+                        help='Optional checkpoint to load in --evaluate-only mode (defaults to --output-dir/final).')
+    parser.add_argument('--evaluation-result', default=None,
+                        help='Optional result JSON path in --evaluate-only mode (defaults to --output-dir/final_eval_result.json).')
+    parser.add_argument('--prediction-output', default=None,
+                        help='Optional per-query JSONL ranking output in --evaluate-only mode for error analysis.')
     parser.add_argument('--epochs', type=float, default=1.0)
     parser.add_argument('--batch-size', type=int, default=32, help='Per-device train batch size.')
     parser.add_argument('--eval-batch-size', type=int, default=32, help='Per-device eval batch size.')
@@ -796,6 +1004,13 @@ def _parse_args() -> argparse.Namespace:
         '--drop-ambiguous-training-queries', action='store_true',
         help='Exclude train groups whose normalised query maps to multiple gold IDs in the loaded pool; evaluation remains unchanged.',
     )
+    parser.add_argument(
+        '--drop-contextless-training-queries', action='store_true',
+        help='Exclude one/two-character aliases and generic context-dependent responses (e.g. Yes/No) from training only.',
+    )
+    parser.add_argument('--quality-review-output', default=None,
+                        help='Optional JSONL review queue for excluded training groups; mined/scored input remains immutable.')
+    parser.add_argument('--quality-review-limit', type=int, default=1000)
     parser.add_argument('--resume-from-checkpoint', default=None, help='Path to a checkpoint directory to resume from.')
     parser.add_argument(
         '--trainer-args-json', default=None,
@@ -836,6 +1051,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         )
     if args.eval_steps < 0:
         errors.append('--eval-steps must be >= 0.')
+    if args.quality_review_limit < 0:
+        errors.append('--quality-review-limit must be >= 0.')
     if args.eval_steps > 0 and args.save_steps % args.eval_steps != 0:
         errors.append('--save-steps must be a multiple of --eval-steps for best-checkpoint selection.')
     if args.include_vocabularies and args.exclude_vocabularies:
@@ -861,7 +1078,42 @@ def main() -> None:
     include_vocabularies = set(args.include_vocabularies) if args.include_vocabularies else None
     exclude_vocabularies = set(args.exclude_vocabularies) if args.exclude_vocabularies else None
 
-    all_groups = _load_groups(train_paths, include_vocabularies, exclude_vocabularies)
+    if args.evaluate_only:
+        eval_groups = _load_eval_groups(
+            train_paths, args.eval_fraction, args.split_seed,
+            include_vocabularies, exclude_vocabularies,
+        )
+        concept_store = _load_concept_store(
+            concept_store_dirs, include_vocabularies, exclude_vocabularies,
+        )
+        eval_examples = _build_candidate_sets(
+            eval_groups, concept_store, eval_variant, max_aliases,
+        )
+        print(f'Full held-out candidate-set evaluation examples: {len(eval_examples)}', flush=True)
+        if not eval_examples:
+            raise SystemExit('No held-out candidate sets could be built.')
+        from pylate import models
+        model_path = args.evaluation_model or str(Path(args.output_dir) / 'final')
+        model = models.ColBERT(model_name_or_path=model_path)
+        result = _run_candidate_set_evaluation(
+            model, eval_examples, args.eval_batch_size,
+            prediction_output=Path(args.prediction_output) if args.prediction_output else None,
+        )
+        result_path = Path(args.evaluation_result) if args.evaluation_result else Path(args.output_dir) / 'final_eval_result.json'
+        with result_path.open('w', encoding='utf-8') as handle:
+            json.dump(result, handle, indent=2)
+        print(f'Primary candidate-set evaluation (global): {result.get("global")}', flush=True)
+        print(f'Saved full per-vocabulary results to {result_path}', flush=True)
+        return
+
+    all_groups = _load_groups(
+        train_paths, include_vocabularies, exclude_vocabularies, args.ranking_score_key,
+        compact_model_candidates=(args.negatives_per_query
+                                  if args.negative_sampling == 'model_stratified' else None),
+        eval_fraction=args.eval_fraction,
+        split_seed=args.split_seed,
+        sampling_seed=args.seed,
+    )
     all_groups, duplicate_count = _deduplicate_groups(all_groups)
     if duplicate_count:
         print(f'Deduplication: removed {duplicate_count} repeated query groups.')
@@ -893,12 +1145,22 @@ def main() -> None:
         f'Ambiguity audit: {len(ambiguous_keys)} normalised query keys map to multiple gold '
         f'concepts ({ambiguous_train_count} train groups).'
     )
-    if args.drop_ambiguous_training_queries:
-        train_groups = [
-            g for g in train_groups
-            if (g['prefix'], _normalise_query(g['query'])) not in ambiguous_keys
-        ]
-        print(f'After --drop-ambiguous-training-queries: {len(train_groups)} train groups.')
+    if args.drop_ambiguous_training_queries or args.drop_contextless_training_queries:
+        train_groups, quality_counts = _filter_training_quality(
+            train_groups, ambiguous_keys,
+            args.drop_ambiguous_training_queries,
+            args.drop_contextless_training_queries,
+            Path(args.quality_review_output) if args.quality_review_output else None,
+            args.quality_review_limit,
+        )
+        print(f'Quality filtering: {len(train_groups)} train groups retained; '
+              f'exclusions by reason/vocabulary: {json.dumps(quality_counts, sort_keys=True)}')
+
+    if os.environ.get('RANK', '0') == '0':
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with (output_dir / 'run_config.json').open('w', encoding='utf-8') as handle:
+            json.dump(vars(args), handle, indent=2, sort_keys=True)
 
     eval_examples = _build_candidate_sets(eval_groups, concept_store, eval_variant, max_aliases)
     if not eval_examples:

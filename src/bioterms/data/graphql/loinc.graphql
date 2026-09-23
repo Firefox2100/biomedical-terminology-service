@@ -26,7 +26,6 @@ type LoincConceptListResponse { error: QueryError, data: [LoincConcept] }
 type LoincQuery {
     loincConcept(conceptId: String!): LoincConceptResponse
     autoComplete(query: String!, limit: Int): LoincConceptListResponse
-    search(query: String!, limit: Int): LoincConceptListResponse
 }
 
 extend type Query { loinc: LoincQuery }

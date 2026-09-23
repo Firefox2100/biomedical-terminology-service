@@ -39,7 +39,6 @@ type MondoConceptListResponse {
 type MondoQuery {
     mondoConcept(conceptId: String!): MondoConceptResponse
     autoComplete(query: String!, limit: Int): MondoConceptListResponse
-    search(query: String!, limit: Int): MondoConceptListResponse
 }
 
 extend type Query {

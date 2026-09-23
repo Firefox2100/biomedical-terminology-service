@@ -40,7 +40,6 @@ type OmimConceptListResponse {
 type OmimQuery {
     omimConcept(conceptId: String!): OmimConceptResponse
     autoComplete(query: String!, limit: Int): OmimConceptListResponse
-    search(query: String!, limit: Int): OmimConceptListResponse
 }
 
 extend type Query {

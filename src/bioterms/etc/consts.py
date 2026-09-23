@@ -6,6 +6,7 @@ import os
 import logging
 import secrets
 import importlib.resources as pkg_resources
+from pathlib import Path
 from typing import Optional, Literal
 from argon2 import PasswordHasher
 from httpx import AsyncClient, Timeout
@@ -18,6 +19,9 @@ from bioterms.etc.enums import DocDatabaseDriverType, GraphDatabaseDriverType, C
 
 SECRETS_DIR = '/run/secrets' if os.path.isdir('/run/secrets') else None
 STATIC_FILE_PATH = pkg_resources.files('bioterms.data') / 'static'
+DEFAULT_RERANKER_MODEL = (
+    Path(__file__).resolve().parents[3] / 'scripts' / 'reranker' / 'runs' / 'production' / 'final'
+)
 
 
 class Settings(BaseSettings):
@@ -330,13 +334,14 @@ class Settings(BaseSettings):
         60,
         description='The "k" constant used when fusing the lexical, alias-embedding, and '
                     'definition-embedding recall lists with Reciprocal Rank Fusion in '
-                    'GET /search/v1 (and the equivalent GraphQL/MCP search paths). Higher '
+                    'GET search V1/V2 (and the equivalent GraphQL/MCP search paths). Higher '
                     'values flatten the influence of rank position across the three lists.',
     )
     reranker_model: Optional[str] = Field(
-        None,
+        str(DEFAULT_RERANKER_MODEL) if (DEFAULT_RERANKER_MODEL / 'modules.json').is_file() else None,
         description='Optional ColBERT reranker bundle. May be a local checkpoint directory '
-                    'or a Hugging Face repository ID. When unset, search returns RRF order.',
+                    'or a Hugging Face repository ID. Defaults to the local production/final '
+                    'bundle when it exists; when unset, search returns RRF order.',
     )
     search_retrieval_candidate_limit: int = Field(
         10,
@@ -351,6 +356,21 @@ class Settings(BaseSettings):
         description='Multiplier applied to alias/definition vector recall depth before '
                     'fusion. Increase this when quantized vector storage trades precision '
                     'for space and may otherwise omit useful candidates.',
+    )
+    search_mapped_recall_limit: int = Field(
+        0,
+        ge=0,
+        description='Optional cross-vocabulary recall depth. When positive, inspect the top '
+                    'N lexical hits in vocabularies connected to the requested vocabulary by '
+                    'EXACT annotations, retain exact source ID/label/synonym matches, map them '
+                    'into the requested vocabulary, and add the mapped concepts as an '
+                    'unpinned RRF arm. Zero disables mapped recall.',
+    )
+    search_mapped_candidate_limit: int = Field(
+        20,
+        ge=1,
+        description='Maximum distinct EXACT-mapped concepts contributed per requested '
+                    'vocabulary when cross-vocabulary mapped recall is enabled.',
     )
     reranker_candidate_limit: int = Field(
         50,

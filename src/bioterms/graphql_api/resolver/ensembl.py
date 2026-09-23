@@ -4,7 +4,7 @@ from ariadne import InterfaceType, ObjectType
 
 from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_auto_complete, resolve_concept_info_fields, \
-    resolve_concept_paths_to, resolve_concept_similar_concepts, resolve_get_concept, resolve_search
+    resolve_concept_paths_to, resolve_concept_similar_concepts, resolve_get_concept
 
 
 ENSEMBL_CONCEPT = InterfaceType('EnsemblConcept')
@@ -77,11 +77,6 @@ async def resolve_get_ensembl_concept(_, info, concept_id: str) -> dict:
 @ENSEMBL_QUERY.field('autoComplete')
 async def resolve_ensembl_autocomplete(_, info, query: str, limit: int = None) -> dict:
     return await resolve_auto_complete(info=info, query=query, prefix=ConceptPrefix.ENSEMBL, limit=limit)
-
-
-@ENSEMBL_QUERY.field('search')
-async def resolve_ensembl_search(_, info, query: str, limit: int = None) -> dict:
-    return await resolve_search(info=info, query=query, prefix=ConceptPrefix.ENSEMBL, limit=limit)
 
 
 @GRAPHQL_QUERY_TYPE.field('ensembl')

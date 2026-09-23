@@ -6,7 +6,7 @@ from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_auto_complete, resolve_concept_children, \
     resolve_concept_info_fields, resolve_concept_parents, resolve_concept_paths_to, \
     resolve_concept_replaced_by, resolve_concept_replaces, resolve_concept_similar_concepts, \
-    resolve_get_concept, resolve_search
+    resolve_get_concept
 
 
 GO_CONCEPT = ObjectType('GoConcept')
@@ -70,11 +70,6 @@ async def resolve_go_autocomplete(_, info, query: str, limit: int = None) -> dic
     return await resolve_auto_complete(
         info=info, query=query, prefix=ConceptPrefix.GO, limit=limit,
     )
-
-
-@GO_QUERY.field('search')
-async def resolve_go_search(_, info, query: str, limit: int = None) -> dict:
-    return await resolve_search(info=info, query=query, prefix=ConceptPrefix.GO, limit=limit)
 
 
 @GRAPHQL_QUERY_TYPE.field('go')

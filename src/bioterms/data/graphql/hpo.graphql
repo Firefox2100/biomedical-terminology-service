@@ -41,7 +41,6 @@ type HpoConceptListResponse {
 type HpoQuery {
     hpoConcept(conceptId: String!): HpoConceptResponse
     autoComplete(query: String!, limit: Int): HpoConceptListResponse
-    search(query: String!, limit: Int): HpoConceptListResponse
 }
 
 extend type Query {

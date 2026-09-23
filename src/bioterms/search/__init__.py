@@ -1,1 +1,1 @@
-from .hybrid import hybrid_search
+from .hybrid import SearchExecution, SearchHit, execute_hybrid_search, hybrid_search

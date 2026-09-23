@@ -516,6 +516,15 @@ Embedding & Search Settings
      - no
      - Reciprocal Rank Fusion "k" constant used to combine ``/search``'s lexical, alias-embedding,
        and definition-embedding recall lists
+   * - ``BTS_SEARCH_MAPPED_RECALL_LIMIT``
+     - ``0``
+     - no
+     - Optional number of lexical hits inspected in each EXACT-annotated partner vocabulary.
+       Exact source matches are mapped into an additional, unpinned RRF arm. Zero disables it.
+   * - ``BTS_SEARCH_MAPPED_CANDIDATE_LIMIT``
+     - ``20``
+     - no
+     - Maximum number of distinct mapped candidates contributed per searched vocabulary
 
 CLI Output Settings
 -------------------

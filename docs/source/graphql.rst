@@ -23,6 +23,8 @@ The root ``Query`` type always exposes:
 
     type Query {
         loadedPrefixes: [ConceptPrefix!]!
+        search(query: String!, vocabularies: [ConceptPrefix!]!, limit: Int = 10,
+               includeMatchDetails: Boolean = true): SearchResponse!
     }
 
 and gains one additional field per loaded vocabulary, named after its prefix, e.g. ``hpo``, ``mondo``, ``snomed``. Each of these resolves to a per-vocabulary query type with three operations:
@@ -36,6 +38,32 @@ and gains one additional field per loaded vocabulary, named after its prefix, e.
     }
 
 ``autoComplete`` and ``search`` correspond to the same features described in :doc:`usage/auto-complete` and :doc:`usage/search` respectively. All three operations return an envelope with ``data`` and ``error`` fields, e.g. ``HpoConceptResponse { data: HpoConcept, error: QueryError }``, rather than raising a transport-level error, so a client should always check ``error`` before using ``data``.
+
+The root ``search`` field is the more capable, multi-vocabulary search path. It uses the
+same lexical, vector, reciprocal-rank-fusion, and reranking pipeline as REST search V2 and
+returns rank, optional match details, and pipeline metadata. Concepts are exposed through
+the shared ``Concept`` interface; use inline fragments when requesting vocabulary-specific
+fields:
+
+.. code-block:: graphql
+
+    query {
+      search(query: "short stature", vocabularies: [hpo, mondo], limit: 10) {
+        results {
+          rank
+          match { type exact field text }
+          concept {
+            prefix conceptId label status
+            ... on HpoConcept { definition }
+            ... on MondoConcept { definition }
+          }
+        }
+        meta {
+          returned limit durationMs vocabularies
+          pipeline { lexical vector mapped reranker }
+        }
+      }
+    }
 
 Every vocabulary's concept type (``HpoConcept``, ``MondoConcept``, and so on) implements a shared ``Concept`` interface (``prefix``, ``conceptId``, ``label``, ``status``) plus, for hierarchical vocabularies, an ``OntologyConcept`` interface (``children``, ``parents``). Every concept type also exposes two fields that cut across the REST API's endpoint groups:
 

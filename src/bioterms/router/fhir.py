@@ -150,7 +150,7 @@ async def _lookup_fhir_code(base_url: str,
                         diagnostics=f'Invalid code system: {system}'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(mode='json', exclude_none=True),
         )
 
     try:
@@ -166,7 +166,7 @@ async def _lookup_fhir_code(base_url: str,
                         diagnostics=f'Code system not found: {system}'
                     )
                 ]
-            ).model_dump(),
+            ).model_dump(mode='json', exclude_none=True),
         )
 
     vocab_config = get_vocabulary_config(prefix)
@@ -450,11 +450,11 @@ async def lookup_fhir_code_post(search_params: Parameters,
     code = next((
         p for p in (search_params.parameter or [])
         if p.name == 'code' and p.valueCode is not None
-    ))
+    ), None)
     system = next((
         p for p in (search_params.parameter or [])
-        if p.name == 'system' and p.valueCode is not None
-    ))
+        if p.name == 'system' and p.valueUri is not None
+    ), None)
 
     if coding and (code or system):
         return JSONResponse(
@@ -481,7 +481,7 @@ async def lookup_fhir_code_post(search_params: Parameters,
                         diagnostics='Must provide coding or code and system'
                     )
                 ]
-            )
+            ).model_dump(mode='json', exclude_none=True)
         )
 
     if coding:
@@ -568,11 +568,11 @@ async def validate_fhir_code_post(search_params: Parameters,
     code = next((
         p for p in (search_params.parameter or [])
         if p.name == 'code' and p.valueCode is not None
-    ))
+    ), None)
     system = next((
         p for p in (search_params.parameter or [])
-        if p.name == 'system' and p.valueCode is not None
-    ))
+        if p.name == 'system' and p.valueUri is not None
+    ), None)
 
     if coding and (code or system):
         return JSONResponse(
@@ -599,7 +599,7 @@ async def validate_fhir_code_post(search_params: Parameters,
                         diagnostics='Must provide coding or code and system'
                     )
                 ]
-            )
+            ).model_dump(mode='json', exclude_none=True)
         )
 
     if coding:

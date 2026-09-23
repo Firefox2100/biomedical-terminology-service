@@ -27,7 +27,6 @@ type GoConceptListResponse { error: QueryError, data: [GoConcept] }
 type GoQuery {
     goConcept(conceptId: String!): GoConceptResponse
     autoComplete(query: String!, limit: Int): GoConceptListResponse
-    search(query: String!, limit: Int): GoConceptListResponse
 }
 
 extend type Query { go: GoQuery }

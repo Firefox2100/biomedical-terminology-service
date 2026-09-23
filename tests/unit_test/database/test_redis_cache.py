@@ -39,6 +39,10 @@ class FakeRedis:
         self.deleted.append(key)
         self.values.pop(key, None)
 
+    async def flushdb(self):
+        self.values.clear()
+        self.expirations.clear()
+
 
 def make_status() -> VocabularyStatus:
     return VocabularyStatus(
@@ -82,8 +86,8 @@ async def test_stale_value_is_served_and_rebuild_is_single_flight():
 
     class FakeTask:
         @staticmethod
-        def delay():
-            calls.append('delay')
+        def delay(rotate_dataset_version):
+            calls.append(rotate_dataset_version)
 
     fake_cache_module.rebuild_cache_task = FakeTask()
     original_cache_module = sys.modules.get('bioterms.task.cache')
@@ -111,5 +115,19 @@ async def test_stale_value_is_served_and_rebuild_is_single_flight():
 
     assert first_result == status
     assert second_result == status
-    assert calls == ['delay']
+    assert calls == [False]
     assert 'lock:cache_rebuild' in redis.values
+
+
+@pytest.mark.asyncio
+async def test_purge_preserves_dataset_version():
+    redis = FakeRedis()
+    cache = RedisCache(redis)
+    redis.values.update({
+        'version:dataset': '2026-01-02T03:04:05+00:00',
+        'vocab_status:hpo': 'cached',
+    })
+
+    await cache.purge()
+
+    assert redis.values == {'version:dataset': '2026-01-02T03:04:05+00:00'}

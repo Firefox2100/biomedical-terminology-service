@@ -3,16 +3,75 @@ Utility functions for GraphQL resolvers.
 """
 
 import asyncio
+from time import perf_counter
 from ariadne import QueryType
 
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.database import DocumentDatabase
 from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_config
-from bioterms.search import hybrid_search
+from bioterms.search import execute_hybrid_search
 from ..data_loader import DataLoader
 
 
 GRAPHQL_QUERY_TYPE = QueryType()
+
+
+@GRAPHQL_QUERY_TYPE.field('search')
+async def resolve_global_search(_, info, query: str,
+                                vocabularies: list[str], limit: int = 10,
+                                include_match_details: bool = True) -> dict:
+    """Resolve the multi-vocabulary V2 search at the GraphQL root."""
+    if not query.strip():
+        raise ValueError('query must not be empty')
+    if not 1 <= limit <= 100:
+        raise ValueError('limit must be between 1 and 100')
+    if not vocabularies:
+        raise ValueError('at least one vocabulary is required')
+
+    prefixes = list(dict.fromkeys(ConceptPrefix(prefix) for prefix in vocabularies))
+    model_classes = {
+        prefix: get_vocabulary_config(prefix)['conceptClass'] for prefix in prefixes
+    }
+    started = perf_counter()
+    execution = await execute_hybrid_search(
+        query=query,
+        prefixes=prefixes,
+        doc_db=info.context['doc_db'],
+        vector_db=info.context['vector_db'],
+        model_classes=model_classes,
+        limit=limit,
+    )
+
+    results = []
+    for rank, hit in enumerate(execution.hits, start=1):
+        concept = hit.concept.model_dump(exclude_none=True)
+        concept['__typename'] = prefix_to_concept_type(hit.concept.prefix)
+        match = None
+        if include_match_details:
+            match = {
+                'type': 'exact' if hit.exact else 'hybrid',
+                'exact': hit.exact,
+                'field': hit.match_field,
+                'text': hit.matched_text,
+            }
+        results.append({'rank': rank, 'concept': concept, 'match': match})
+
+    return {
+        'query': query.strip(),
+        'results': results,
+        'meta': {
+            'returned': len(results),
+            'limit': limit,
+            'durationMs': (perf_counter() - started) * 1000,
+            'vocabularies': prefixes,
+            'pipeline': {
+                'lexical': True,
+                'vector': execution.vector_used,
+                'mapped': execution.mapped_used,
+                'reranker': execution.reranker_used,
+            },
+        },
+    }
 
 
 def assemble_response(data: dict | list[dict] = None,
@@ -436,39 +495,6 @@ async def resolve_auto_complete(info,
 
     results = [
         concept.model_dump(exclude_none=True) for concept in concepts
-    ]
-
-    return assemble_response(results)
-
-
-async def resolve_search(info,
-                         query: str,
-                         prefix: ConceptPrefix,
-                         limit: int = None,
-                         ) -> dict:
-    """
-    Resolve concept search, fusing lexical and embedding-based recall (see
-    `bioterms.search.hybrid`).
-    :param info: The GraphQL resolver info.
-    :param query: The search query string.
-    :param prefix: The vocabulary prefix.
-    :param limit: Maximum number of concepts to return.
-    :return: A dictionary containing the search results.
-    """
-    doc_db = info.context['doc_db']
-    vector_db = info.context['vector_db']
-
-    concepts_iter = hybrid_search(
-        query=query,
-        prefix=prefix,
-        doc_db=doc_db,
-        vector_db=vector_db,
-        model_class=get_vocabulary_config(prefix)['conceptClass'],
-        limit=limit or 10,
-    )
-
-    results = [
-        concept.model_dump(exclude_none=True) async for concept in concepts_iter
     ]
 
     return assemble_response(results)

@@ -975,6 +975,38 @@ class PostgresGraphDatabase(GraphDatabase):
                     AnnotationType(row.rel_type),
                 )
 
+    async def get_exact_mappings(self,
+                                 source_prefix: ConceptPrefix,
+                                 source_ids: list[str],
+                                 target_prefix: ConceptPrefix,
+                                 ) -> dict[str, list[str]]:
+        """Resolve selected source concepts through indexed EXACT annotation edges."""
+        mapped: dict[str, list[str]] = {concept_id: [] for concept_id in source_ids}
+        if not source_ids:
+            return mapped
+        async with self.engine.connect() as conn:
+            if not await self._table_exists(conn, 'graph_annotation'):
+                return mapped
+            result = await conn.execute(text("""
+                SELECT concept_from AS source_id, concept_to AS target_id
+                FROM graph_annotation
+                WHERE prefix_from = :source_prefix AND prefix_to = :target_prefix
+                    AND rel_type = :rel_type AND concept_from = ANY(:source_ids)
+                UNION
+                SELECT concept_to AS source_id, concept_from AS target_id
+                FROM graph_annotation
+                WHERE prefix_to = :source_prefix AND prefix_from = :target_prefix
+                    AND rel_type = :rel_type AND concept_to = ANY(:source_ids)
+            """), {
+                'source_prefix': source_prefix.value,
+                'source_ids': source_ids,
+                'target_prefix': target_prefix.value,
+                'rel_type': AnnotationType.EXACT.value,
+            })
+            for row in result:
+                mapped[row.source_id].append(row.target_id)
+        return mapped
+
     async def delete_annotations(self,
                                  prefix_1: ConceptPrefix,
                                  prefix_2: ConceptPrefix,

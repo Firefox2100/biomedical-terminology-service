@@ -13,10 +13,10 @@ def purge_cache_task() -> None:
 
 
 @celery_app.task(name='cache.rebuild')
-def rebuild_cache_task() -> None:
+def rebuild_cache_task(rotate_dataset_version: bool = True) -> None:
     """
     Celery task to rebuild the cache.
     """
     from bioterms.app import rebuild_cache
 
-    run_async(rebuild_cache())
+    run_async(rebuild_cache(rotate_dataset_version=rotate_dataset_version))

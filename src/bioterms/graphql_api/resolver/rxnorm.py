@@ -5,7 +5,7 @@ from bioterms.etc.enums import ConceptPrefix
 from .utils import GRAPHQL_QUERY_TYPE, resolve_auto_complete, resolve_concept_children, \
     resolve_concept_info_fields, resolve_concept_parents, resolve_concept_paths_to, \
     resolve_concept_replaced_by, resolve_concept_replaces, resolve_concept_similar_concepts, \
-    resolve_get_concept, resolve_search
+    resolve_get_concept
 
 RXNORM_CONCEPT = ObjectType('RxNormConcept')
 RXNORM_QUERY = ObjectType('RxNormQuery')
@@ -65,11 +65,6 @@ async def resolve_get(_, info, concept_id: str):
 @RXNORM_QUERY.field('autoComplete')
 async def resolve_autocomplete(_, info, query: str, limit: int = None):
     return await resolve_auto_complete(info=info, query=query, prefix=ConceptPrefix.RXNORM, limit=limit)
-
-
-@RXNORM_QUERY.field('search')
-async def resolve_rxnorm_search(_, info, query: str, limit: int = None):
-    return await resolve_search(info=info, query=query, prefix=ConceptPrefix.RXNORM, limit=limit)
 
 
 @GRAPHQL_QUERY_TYPE.field('rxnorm')

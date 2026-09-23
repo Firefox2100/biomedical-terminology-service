@@ -41,7 +41,6 @@ type OrdoConceptListResponse {
 type OrdoQuery {
     ordoConcept(conceptId: String!): OrdoConceptResponse
     autoComplete(query: String!, limit: Int): OrdoConceptListResponse
-    search(query: String!, limit: Int): OrdoConceptListResponse
 }
 
 extend type Query {

@@ -86,6 +86,57 @@ type QueryError {
   message: String!
 }
 
+enum SearchMatchType {
+    exact
+    hybrid
+}
+
+enum SearchMatchField {
+    conceptId
+    label
+    synonym
+}
+
+type SearchMatch {
+    type: SearchMatchType!
+    exact: Boolean!
+    field: SearchMatchField
+    text: String
+}
+
+type SearchResult {
+    rank: Int!
+    concept: Concept!
+    match: SearchMatch
+}
+
+type SearchPipeline {
+    lexical: Boolean!
+    vector: Boolean!
+    mapped: Boolean!
+    reranker: Boolean!
+}
+
+type SearchMetadata {
+    returned: Int!
+    limit: Int!
+    durationMs: Float!
+    vocabularies: [ConceptPrefix!]!
+    pipeline: SearchPipeline!
+}
+
+type SearchResponse {
+    query: String!
+    results: [SearchResult!]!
+    meta: SearchMetadata!
+}
+
 type Query {
     loadedPrefixes: [ConceptPrefix!]!
+    search(
+        query: String!
+        vocabularies: [ConceptPrefix!]!
+        limit: Int = 10
+        includeMatchDetails: Boolean = true
+    ): SearchResponse!
 }
