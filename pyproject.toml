@@ -42,7 +42,6 @@ dependencies = [
     "pyyaml~=6.0.3",
     "pydantic~=2.13.5",
     "pydantic-settings~=2.15.0",
-    "pylate~=1.2.0",
     "pyroaring~=1.1.0",
     "pytheus~=0.6.1",
     "rich~=15.0.0",
@@ -57,6 +56,16 @@ dynamic = [
 ]
 
 [project.optional-dependencies]
+# `pylate` is deliberately not declared here, in core dependencies or in any extra.
+# Every PyLate release hard-pins an exact `sentence-transformers` version (1.6.0 pins
+# ==5.3.0) and none allow the 6.x line this project runs, so declaring it makes the
+# install unresolvable. Reranking is opt-in at runtime (`reranker_model`, unset by
+# default) and `pylate` is imported lazily, so the dependency only matters to
+# deployments that enable it. Those install it out of band:
+#     pip install --no-deps "pylate~=1.6.0"
+#     pip install datasets accelerate ujson ninja fastkmeans fast-plaid
+# `bioterms.search.reranker` carries local shims for the resulting
+# PyLate 1.6 / SentenceTransformers 6 combination.
 cuda = [
     "cupy-cuda12x[ctk]~=14.1.1",
 ]
