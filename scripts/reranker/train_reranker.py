@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import random
+import types
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -21,9 +22,81 @@ MIN_CONCEPT_RESOLUTION_FRACTION = 0.5
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / 'runs' / 'production'
 
 
+def _load_local_colbert_bundle(path: str, models, query_length: int,
+                               document_length: int):
+    """Load a trusted local PyLate bundle across the PyLate 1.6/ST5/ST6 formats."""
+    from pylate.models import Dense as PyLateDense
+    from safetensors.torch import load_model as load_safetensors_model
+    from sentence_transformers.util import import_from_string
+
+    original_dense_load = PyLateDense.load
+
+    def load_dense(input_path):
+        dense_path = Path(input_path)
+        with (dense_path / 'config.json').open(encoding='utf-8') as handle:
+            config = json.load(handle)
+        config.pop('module_input_name', None)
+        config.pop('module_output_name', None)
+        config['activation_function'] = import_from_string(config['activation_function'])()
+        dense = PyLateDense(**config)
+        load_safetensors_model(dense, str(dense_path / 'model.safetensors'))
+        return dense
+
+    PyLateDense.load = staticmethod(load_dense)
+    try:
+        try:
+            model = models.ColBERT(model_name_or_path=path, trust_remote_code=True)
+        except KeyError as error:
+            if error.args != ('activation_function',):
+                raise
+            from sentence_transformers import SentenceTransformer
+            sentence_model = SentenceTransformer(path, trust_remote_code=True)
+            model = models.ColBERT(
+                modules=list(sentence_model), query_length=query_length,
+                document_length=document_length,
+            )
+    finally:
+        PyLateDense.load = original_dense_load
+    if not hasattr(model, '_text_length') and hasattr(model, '_input_length'):
+        model._text_length = model._input_length
+    if not hasattr(model, '_model_config') and hasattr(model, '_get_model_config'):
+        model._model_config = model._get_model_config()
+    return model
+
+
 def _normalise_query(text: str) -> str:
     """Normalise query text for ambiguity/deduplication checks (not model input)."""
     return normalise_query(text)
+
+
+def _fixed_padding_tokenize(self, texts, is_query=True, pad=False, task=None):
+    """Pad every training field to its configured ColBERT length.
+
+    SentenceTransformers 6 no longer asks PyLate's tokenizer to pad document
+    columns. Contrastive stacks the separately-tokenized positive/negative
+    fields, so all of them must retain the fixed ColBERT document length.
+    Padding tokens are masked by ColBERT and do not alter the score.
+    """
+    max_length = self.query_length if is_query else self.document_length
+    prefix_id = self.query_prefix_id if is_query else self.document_prefix_id
+    use_prefix = prefix_id is not None
+    encoder_length = max_length - 1 if use_prefix else max_length
+    first_module = self._first_module()
+    first_module.max_seq_length = encoder_length
+    tokenized = first_module.preprocess(
+        texts,
+        processing_kwargs={
+            'text': {'padding': 'max_length', 'max_length': encoder_length},
+        },
+    )
+    if use_prefix:
+        tokenized['input_ids'] = self.insert_prefix_token(tokenized['input_ids'], prefix_id)
+        tokenized['attention_mask'] = self.insert_prefix_token(tokenized['attention_mask'], 1)
+        if 'token_type_ids' in tokenized:
+            tokenized['token_type_ids'] = self.insert_prefix_token(tokenized['token_type_ids'], 0)
+    if is_query and self.attend_to_expansion_tokens:
+        tokenized['attention_mask'].fill_(1)
+    return tokenized
 
 
 def _filter_training_quality(groups: list[dict],
@@ -313,6 +386,64 @@ def _vocab_balanced_sample(groups: list[dict],
     return sampled
 
 
+def _teacher_gold_margin(group: dict, ranking_score_key: str) -> float | None:
+    """Return gold score minus the strongest negative teacher score, when available."""
+    gold_score = None
+    negative_scores = []
+    for candidate in group.get('candidate_pool') or []:
+        score = (candidate.get('ranking_scores') or {}).get(ranking_score_key)
+        if score is None:
+            continue
+        if candidate['concept_id'] == group['gold_concept_id'] or candidate.get('role') == 'gold':
+            gold_score = float(score)
+        else:
+            negative_scores.append(float(score))
+    if gold_score is None or not negative_scores:
+        return None
+    return gold_score - max(negative_scores)
+
+
+def _sample_with_teacher_replay(groups: list[dict],
+                                alpha: float,
+                                target_size: int | None,
+                                seed: int,
+                                ranking_score_key: str,
+                                replay_fraction: float,
+                                minimum_margin: float,
+                                ) -> tuple[list[dict], dict]:
+    """Vocabulary-balance the base draw and reserve a fraction for trusted teacher wins.
+
+    Replay is deliberately limited to ordinary alias rows. Cross-vocabulary mappings can
+    encode granularity or mapping-policy choices and must not become trusted merely because
+    an older model memorised them. Ambiguous/contextless rows have already been removed by
+    the quality policy before this function is called.
+    """
+    size = target_size if target_size is not None else len(groups)
+    replay_size = round(size * replay_fraction)
+    base_size = size - replay_size
+    trusted = [
+        group for group in groups
+        if group.get('query_kind') == 'alias'
+        and (_teacher_gold_margin(group, ranking_score_key) or float('-inf')) >= minimum_margin
+    ]
+    if replay_size and not trusted:
+        raise SystemExit(
+            'Teacher replay requested but no trusted teacher-top1 alias rows met '
+            f'--teacher-replay-min-margin={minimum_margin}.'
+        )
+    sampled = _vocab_balanced_sample(groups, alpha, base_size, seed)
+    if replay_size:
+        sampled.extend(_vocab_balanced_sample(trusted, alpha, replay_size, seed + 1))
+        random.Random(seed + 2).shuffle(sampled)
+    return sampled, {
+        'target_size': size,
+        'base_draws': base_size,
+        'replay_draws': replay_size,
+        'trusted_teacher_groups': len(trusted),
+        'minimum_margin': minimum_margin,
+    }
+
+
 def _stratified_eval_sample(groups: list[dict],
                             target_size: int | None,
                             seed: int,
@@ -545,7 +676,7 @@ def _flatten_to_rows(sampled_groups: list[dict],
             stats['skipped_insufficient_resolvable_negatives'] += 1
             continue
 
-        if training_objective == 'distillation':
+        if training_objective in {'distillation', 'hybrid'}:
             pool_by_id = {
                 candidate['concept_id']: candidate for candidate in (group.get('candidate_pool') or [])
             }
@@ -580,6 +711,53 @@ def _flatten_to_rows(sampled_groups: list[dict],
     )
 
     return rows, stats
+
+
+def _hybrid_listwise_loss(model, distillation_weight: float,
+                          hard_temperature: float,
+                          teacher_temperature: float):
+    """Combine per-query hard-gold CE with soft teacher ranking preservation.
+
+    Unlike PyLate's in-batch Contrastive objective this operates on each query's explicitly
+    mined candidate list. That is intentional for continuation training: the hard term may
+    improve V5, while the small KL term constrains destructive movement away from trusted V4
+    ordering without making V4 the final target.
+    """
+    import torch
+    import torch.nn.functional as F
+    from pylate.losses.distillation import colbert_kd_scores, extract_skiplist_mask
+
+    class HybridListwiseLoss(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = model
+
+        def forward(self, sentence_features, labels):
+            queries = F.normalize(
+                self.model(sentence_features[0])['token_embeddings'], p=2, dim=-1,
+            )
+            documents = F.normalize(
+                self.model(sentence_features[1])['token_embeddings'], p=2, dim=-1,
+            )
+            documents = documents.view(queries.size(0), -1, *documents.shape[1:])
+            wrapped = self.model.module if hasattr(self.model, 'module') else self.model
+            masks = extract_skiplist_mask(sentence_features, skiplist=wrapped.skiplist)
+            document_masks = masks[1].view(queries.size(0), -1, *masks[1].shape[1:])
+            query_masks = None if wrapped.do_query_expansion else masks[0]
+            scores = colbert_kd_scores(
+                queries, documents, queries_mask=query_masks,
+                documents_mask=document_masks,
+            )
+            hard_targets = torch.zeros(scores.size(0), dtype=torch.long, device=scores.device)
+            hard_loss = F.cross_entropy(scores / hard_temperature, hard_targets)
+            student_log_probs = F.log_softmax(scores / teacher_temperature, dim=-1)
+            teacher_probs = F.softmax(labels / teacher_temperature, dim=-1)
+            teacher_loss = F.kl_div(
+                student_log_probs, teacher_probs, reduction='batchmean',
+            ) * (teacher_temperature ** 2)
+            return (1.0 - distillation_weight) * hard_loss + distillation_weight * teacher_loss
+
+    return HybridListwiseLoss()
 
 
 def _build_candidate_sets(eval_groups: list[dict],
@@ -922,12 +1100,24 @@ def _parse_args() -> argparse.Namespace:
         help='Key in candidate_pool[*].ranking_scores used by model-stratified sampling/distillation.',
     )
     parser.add_argument(
-        '--training-objective', choices=['contrastive', 'distillation'], default='contrastive',
-        help='Hard-label contrastive training or optional listwise KL distillation from stored ranking scores.',
+        '--training-objective', choices=['contrastive', 'distillation', 'hybrid'], default='contrastive',
+        help='Hard-label contrastive, soft listwise distillation, or hard+soft hybrid continuation training.',
     )
     parser.add_argument(
         '--distillation-temperature', type=float, default=1.0,
         help='Divide stored teacher logits by this value before listwise distillation.',
+    )
+    parser.add_argument(
+        '--distillation-weight', type=float, default=0.15,
+        help='Hybrid objective weight assigned to teacher KL; the remainder is hard-gold CE.',
+    )
+    parser.add_argument(
+        '--teacher-replay-fraction', type=float, default=0.0,
+        help='Fraction of sampled rows reserved for vocabulary-balanced replay of trusted teacher-top1 aliases.',
+    )
+    parser.add_argument(
+        '--teacher-replay-min-margin', type=float, default=0.02,
+        help='Minimum teacher gold-minus-best-negative score for a row to enter trusted replay.',
     )
     parser.add_argument(
         '--preferred-label-query-keep-probability', type=float, default=0.1,
@@ -1031,14 +1221,20 @@ def _validate_args(args: argparse.Namespace) -> None:
         errors.append('--negatives-per-query must be >= 1.')
     if args.negative_sampling == 'model_stratified' and not args.ranking_score_key:
         errors.append('--model-stratified sampling requires --ranking-score-key.')
-    if args.training_objective == 'distillation' and not args.ranking_score_key:
-        errors.append('--training-objective distillation requires --ranking-score-key.')
+    if args.training_objective in {'distillation', 'hybrid'} and not args.ranking_score_key:
+        errors.append('--training-objective distillation/hybrid requires --ranking-score-key.')
     if args.distillation_temperature <= 0:
         errors.append('--distillation-temperature must be > 0.')
-    if args.training_objective == 'distillation' and args.cached_loss:
+    if args.training_objective in {'distillation', 'hybrid'} and args.cached_loss:
         errors.append('--cached-loss is only supported by the contrastive objective.')
-    if args.training_objective == 'distillation' and args.gather_across_devices:
+    if args.training_objective in {'distillation', 'hybrid'} and args.gather_across_devices:
         errors.append('--gather-across-devices is only supported by the contrastive objective.')
+    if not 0.0 <= args.distillation_weight <= 1.0:
+        errors.append('--distillation-weight must be within [0, 1].')
+    if not 0.0 <= args.teacher_replay_fraction < 1.0:
+        errors.append('--teacher-replay-fraction must be within [0, 1).')
+    if args.teacher_replay_fraction and not args.ranking_score_key:
+        errors.append('--teacher-replay-fraction requires --ranking-score-key.')
     if not 0.0 <= args.preferred_label_query_keep_probability <= 1.0:
         errors.append('--preferred-label-query-keep-probability must be within [0, 1].')
     if args.bf16 and args.fp16:
@@ -1093,8 +1289,62 @@ def main() -> None:
         if not eval_examples:
             raise SystemExit('No held-out candidate sets could be built.')
         from pylate import models
+        from pylate.models import Dense as PyLateDense
+        from safetensors.torch import load_model as load_safetensors_model
+        from sentence_transformers.util import import_from_string
         model_path = args.evaluation_model or str(Path(args.output_dir) / 'final')
-        model = models.ColBERT(model_name_or_path=model_path)
+        original_dense_load = PyLateDense.load
+
+        def _load_dense_compat(input_path):
+            """Load PyLate Dense configs written by either ST5 or ST6."""
+            dense_path = Path(input_path)
+            with (dense_path / 'config.json').open(encoding='utf-8') as handle:
+                config = json.load(handle)
+            # These ST6 routing fields describe the same default that PyLate's
+            # Dense already implements, but PyLate 1.6 does not accept them.
+            config.pop('module_input_name', None)
+            config.pop('module_output_name', None)
+            config['activation_function'] = import_from_string(
+                config['activation_function']
+            )()
+            dense = PyLateDense(**config)
+            load_safetensors_model(dense, str(dense_path / 'model.safetensors'))
+            return dense
+
+        PyLateDense.load = staticmethod(_load_dense_compat)
+        try:
+            try:
+                # Local bundles legitimately contain PyLate's custom Dense
+                # module; ST6 requires explicit consent to import it.
+                model = models.ColBERT(
+                    model_name_or_path=model_path,
+                    trust_remote_code=True,
+                )
+            except KeyError as error:
+                if error.args != ('activation_function',):
+                    raise
+                # PyLate 1.6 first opens older PyLate bundles as a generic
+                # SentenceTransformer, then attempts to convert their already-
+                # PyLate Dense projection as though it were an ST Dense module.
+                from sentence_transformers import SentenceTransformer
+                print(
+                    f'Checkpoint {model_path!r} uses legacy PyLate module metadata; '
+                    'loading its serialized modules through the compatibility path.',
+                    flush=True,
+                )
+                sentence_model = SentenceTransformer(model_path, trust_remote_code=True)
+                model = models.ColBERT(
+                    modules=list(sentence_model),
+                    query_length=args.query_length,
+                    document_length=args.document_length,
+                )
+        finally:
+            PyLateDense.load = original_dense_load
+        # PyLate 1.6 still calls the SentenceTransformers 5-era private name
+        # while SentenceTransformers 6 exposes the same function as
+        # `_input_length`. This affects inference as well as training.
+        if not hasattr(model, '_text_length') and hasattr(model, '_input_length'):
+            model._text_length = model._input_length
         result = _run_candidate_set_evaluation(
             model, eval_examples, args.eval_batch_size,
             prediction_output=Path(args.prediction_output) if args.prediction_output else None,
@@ -1171,9 +1421,19 @@ def main() -> None:
         )
     print(f'Held-out candidate-set evaluation examples: {len(eval_examples)}')
 
-    sampled_groups = _vocab_balanced_sample(
-        train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups, seed=args.seed,
-    )
+    if args.teacher_replay_fraction:
+        sampled_groups, replay_stats = _sample_with_teacher_replay(
+            train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups,
+            seed=args.seed, ranking_score_key=args.ranking_score_key,
+            replay_fraction=args.teacher_replay_fraction,
+            minimum_margin=args.teacher_replay_min_margin,
+        )
+        print(f'Teacher replay: {json.dumps(replay_stats, sort_keys=True)}')
+    else:
+        sampled_groups = _vocab_balanced_sample(
+            train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups,
+            seed=args.seed,
+        )
     _report_sampling_diagnostics(sampled_groups)
 
     rows, _flatten_stats = _flatten_to_rows(
@@ -1203,11 +1463,52 @@ def main() -> None:
     # SentenceTransformerTrainingArguments seeds training later, but the ColBERT projection is
     # created before Trainer construction. Seed explicitly so the step-zero model is reproducible.
     set_seed(args.seed)
-    model = models.ColBERT(
-        model_name_or_path=args.base_model,
-        query_length=args.query_length,
-        document_length=args.document_length,
-    )
+    if Path(args.base_model).is_dir() and (Path(args.base_model) / 'modules.json').exists():
+        print(f'Loading local ColBERT continuation bundle {args.base_model!r}.', flush=True)
+        model = _load_local_colbert_bundle(
+            args.base_model, models, args.query_length, args.document_length,
+        )
+    else:
+        try:
+            model = models.ColBERT(
+                model_name_or_path=args.base_model,
+                query_length=args.query_length,
+                document_length=args.document_length,
+            )
+        except KeyError as error:
+            if error.args != ('activation_function',):
+                raise
+        # PyLate 1.6 assumes that every SentenceTransformers Dense module has the
+        # ST6 activation field.  Encoder-only checkpoints such as SapBERT do not,
+        # because PyLate itself creates their ColBERT projection.  Loading the
+        # encoder module first avoids PyLate treating SapBERT's sentence-level
+        # Pooling module as a serialized Dense layer; PyLate then appends the same
+        # 768 -> 128 identity projection used by the earlier candidate runs.
+            from sentence_transformers import SentenceTransformer
+            print(
+                f'Base model {args.base_model!r} lacks the optional Dense activation field; '
+                'using the encoder-module compatibility initializer.',
+                flush=True,
+            )
+            sentence_model = SentenceTransformer(args.base_model, trust_remote_code=True)
+            model = models.ColBERT(
+                modules=[sentence_model[0]],
+                query_length=args.query_length,
+                document_length=args.document_length,
+            )
+            # PyLate 1.6 still calls the SentenceTransformers 5-era private name;
+            # ST6 renamed it to _input_length.  Without the alias, each negative is
+            # padded only to its own batch maximum and Contrastive cannot stack them.
+            if not hasattr(model, '_text_length') and hasattr(model, '_input_length'):
+                model._text_length = model._input_length
+            # PyLate 1.6's save override still reads the ST5 private cache, while ST6
+            # exposes the generated configuration through _get_model_config().
+            if not hasattr(model, '_model_config') and hasattr(model, '_get_model_config'):
+                model._model_config = model._get_model_config()
+    # ST6's collator tokenizes positive/negative columns independently without
+    # requesting document padding. Keep all fields at the configured length so
+    # PyLate Contrastive can stack them.
+    model.tokenize = types.MethodType(_fixed_padding_tokenize, model)
     # Not wrapped in torch.compile: SentenceTransformerTrainer iterates over the model's
     # submodules directly, which breaks once torch.compile wraps it in an OptimizedModule.
 
@@ -1217,6 +1518,13 @@ def main() -> None:
 
     if args.training_objective == 'distillation':
         train_loss = losses.Distillation(model=model)
+    elif args.training_objective == 'hybrid':
+        train_loss = _hybrid_listwise_loss(
+            model=model,
+            distillation_weight=args.distillation_weight,
+            hard_temperature=args.temperature,
+            teacher_temperature=args.distillation_temperature,
+        )
     elif args.cached_loss:
         train_loss = losses.CachedContrastive(
             model=model,
@@ -1305,7 +1613,10 @@ def main() -> None:
         with (Path(args.output_dir) / 'final_eval_triplet_result.json').open('w', encoding='utf-8') as f:
             json.dump(triplet_result, f, indent=2)
 
-    candidate_set_result = _run_candidate_set_evaluation(model, eval_examples, batch_size=args.eval_batch_size)
+    candidate_set_result = _run_candidate_set_evaluation(
+        model, eval_examples, batch_size=args.eval_batch_size,
+        prediction_output=Path(args.prediction_output) if args.prediction_output else None,
+    )
     result_path = Path(args.output_dir) / 'final_eval_result.json'
     with result_path.open('w', encoding='utf-8') as f:
         json.dump(candidate_set_result, f, indent=2)

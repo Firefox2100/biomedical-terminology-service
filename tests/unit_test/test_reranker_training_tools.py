@@ -31,7 +31,9 @@ from train_reranker import (
     _load_groups,
     _resolve_train_paths,
     _run_candidate_set_evaluation,
+    _sample_with_teacher_replay,
     _stratified_eval_sample,
+    _teacher_gold_margin,
     _training_negatives,
     _flatten_to_rows,
 )
@@ -143,6 +145,35 @@ async def test_mining_can_retain_mapped_recall_as_separate_evidence():
     assert gold['ranks'] == {'exact_mapping': 1}
     assert negatives[0]['concept_id'] == 'negative'
     assert pool[0]['sources'] == ['exact_mapping']
+
+
+@pytest.mark.asyncio
+async def test_mining_retains_fuzzy_recall_as_separate_evidence():
+    class FuzzyDocDB:
+        async def lexical_search(self, *_args, **_kwargs):
+            return []
+
+        async def fuzzy_search(self, *_args, **_kwargs):
+            return [('gold', 3.0), ('negative', 2.0)]
+
+    class EmptyVectorDB:
+        async def search_items(self, *_args, **_kwargs):
+            return []
+
+    unit = QueryUnit(
+        prefix=ConceptPrefix.MONDO,
+        concept_id='gold',
+        item=types.SimpleNamespace(text='misspeled disease'),
+    )
+    negatives, pool, _merges, _rejected, gold = await _mine_negatives(
+        FuzzyDocDB(), EmptyVectorDB(), object(), unit,
+        negatives_per_query=1, candidate_pool=50, query_vector=[0.0],
+    )
+
+    assert gold['sources'] == ['fuzzy_lexical']
+    assert gold['ranks'] == {'fuzzy_lexical': 1}
+    assert negatives[0]['sources'] == ['fuzzy_lexical']
+    assert pool[0]['sources'] == ['fuzzy_lexical']
 
 
 def test_live_probe_truncates_items_before_concept_deduplication():
@@ -268,6 +299,29 @@ def test_stratified_eval_sample_is_deterministic_and_balanced():
     assert {prefix: sum(group['prefix'] == prefix for group in first) for prefix in ('a', 'b', 'c')} == {
         'a': 4, 'b': 4, 'c': 4,
     }
+
+
+def test_teacher_replay_requires_alias_gold_top1_with_margin():
+    trusted = _group('hpo', 'q1', 'gold', 'trusted alias')
+    trusted['candidate_pool'] = [
+        {'concept_id': 'gold', 'role': 'gold', 'ranking_scores': {'teacher': 2.0}},
+        {'concept_id': 'negative', 'role': 'negative', 'ranking_scores': {'teacher': 1.5}},
+    ]
+    mapping = {**trusted, 'query_id': 'q2', 'query_kind': 'cross_vocab_exact'}
+    teacher_wrong = {**trusted, 'query_id': 'q3', 'candidate_pool': [
+        {'concept_id': 'gold', 'role': 'gold', 'ranking_scores': {'teacher': 1.0}},
+        {'concept_id': 'negative', 'role': 'negative', 'ranking_scores': {'teacher': 1.5}},
+    ]}
+
+    assert _teacher_gold_margin(trusted, 'teacher') == pytest.approx(0.5)
+    sampled, stats = _sample_with_teacher_replay(
+        [trusted, mapping, teacher_wrong], alpha=0.5, target_size=10, seed=7,
+        ranking_score_key='teacher', replay_fraction=0.4, minimum_margin=0.2,
+    )
+
+    assert stats['trusted_teacher_groups'] == 1
+    assert stats['replay_draws'] == 4
+    assert sum(group['query_id'] == 'q1' for group in sampled) >= 4
 
 
 def test_audit_reports_duplicates_and_ambiguous_queries(tmp_path):

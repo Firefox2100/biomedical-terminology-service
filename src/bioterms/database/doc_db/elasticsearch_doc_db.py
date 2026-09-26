@@ -151,6 +151,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
             autocomplete = {
                 'type': 'text', 'analyzer': 'bts_ngram', 'search_analyzer': 'standard',
             }
+            fuzzy_text = {'type': 'text', 'analyzer': 'standard'}
             await self.client.indices.create(
                 index=name,
                 settings={
@@ -164,10 +165,14 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
                     }}},
                 },
                 mappings={'properties': {
-                    'conceptId': {'type': 'keyword', 'fields': {'search': autocomplete}},
+                    'conceptId': {'type': 'keyword', 'fields': {'search': {
+                        **autocomplete, 'fields': {'fuzzy': fuzzy_text},
+                    }}},
                     'prefix': {'type': 'keyword'},
-                    'label': {**autocomplete, 'fields': {'exact': {'type': 'keyword'}}},
-                    'synonyms': autocomplete,
+                    'label': {**autocomplete, 'fields': {
+                        'exact': {'type': 'keyword'}, 'fuzzy': fuzzy_text,
+                    }},
+                    'synonyms': {**autocomplete, 'fields': {'fuzzy': fuzzy_text}},
                 }})
         return name
 
@@ -281,6 +286,50 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
                 'query': search_query.clean, 'fields': self._text_fields(), 'type': 'best_fields',
             }},
             source=False,
+        )
+        for hit in response['hits']['hits']:
+            yield hit['_id'], float(hit['_score'] or 0.0)
+
+    async def fuzzy_search_iter(self, prefix, query, limit=10):
+        """Use bounded Damerau-Levenshtein term expansion as a separate recall arm.
+
+        The standard-analyzed multi-fields are populated by new/rebuilt indexes.  The base
+        n-gram fields remain in the second clause so existing indexes gain typo recall without
+        an immediate rebuild; Elasticsearch silently ignores unmapped multi-fields.
+        ``AUTO:4,7`` avoids fuzzy expansion for three-character biomedical symbols, permits
+        one edit for lengths 4-6, and two edits from length 7 onward.
+        """
+        search_query = normalise_search_query(query)
+        fuzzy_words = [word for word in search_query.words
+                       if len(word) >= CONFIG.search_fuzzy_min_token_length]
+        if not fuzzy_words:
+            return
+        name = self._index_name(prefix)
+        if not await self.client.indices.exists(index=name):
+            return
+        fuzzy_query = ' '.join(fuzzy_words)
+        response = await self.client.search(
+            index=name, size=limit, source=False,
+            query={'dis_max': {'queries': [
+                {'multi_match': {
+                    'query': fuzzy_query,
+                    'fields': ['label.fuzzy^3', 'synonyms.fuzzy^2',
+                               'conceptId.search.fuzzy'],
+                    'type': 'best_fields', 'operator': 'or',
+                    'minimum_should_match': CONFIG.search_fuzzy_minimum_should_match,
+                    'fuzziness': 'AUTO:4,7', 'prefix_length': 1,
+                    'max_expansions': CONFIG.search_fuzzy_max_expansions,
+                    'fuzzy_transpositions': True,
+                }},
+                {'multi_match': {
+                    'query': fuzzy_query, 'fields': self._text_fields(),
+                    'type': 'best_fields', 'operator': 'or',
+                    'minimum_should_match': CONFIG.search_fuzzy_minimum_should_match,
+                    'fuzziness': 'AUTO:4,7', 'prefix_length': 1,
+                    'max_expansions': CONFIG.search_fuzzy_max_expansions,
+                    'fuzzy_transpositions': True,
+                }},
+            ]}},
         )
         for hit in response['hits']['hits']:
             yield hit['_id'], float(hit['_score'] or 0.0)

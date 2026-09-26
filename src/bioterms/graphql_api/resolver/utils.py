@@ -66,6 +66,7 @@ async def resolve_global_search(_, info, query: str,
             'vocabularies': prefixes,
             'pipeline': {
                 'lexical': True,
+                'fuzzy': execution.fuzzy_used,
                 'vector': execution.vector_used,
                 'mapped': execution.mapped_used,
                 'reranker': execution.reranker_used,

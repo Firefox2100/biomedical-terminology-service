@@ -350,6 +350,37 @@ class Settings(BaseSettings):
                     'before fusion. This is independent of the API result limit and the '
                     'number of fused candidates passed to the reranker.',
     )
+    search_fuzzy_recall_limit: int = Field(
+        50,
+        ge=0,
+        description='Candidate depth for the separate edit-distance lexical recall arm. '
+                    'Zero disables fuzzy recall. Approximate matches are fused below exact, '
+                    'ordinary lexical, and semantic evidence using search_fuzzy_rrf_weight.',
+    )
+    search_fuzzy_rrf_weight: float = Field(
+        0.75,
+        ge=0.0,
+        le=1.0,
+        description='Relative RRF contribution of fuzzy lexical recall. Values below one '
+                    'prevent a typo-only match from outranking candidates supported by an '
+                    'ordinary lexical or vector arm.',
+    )
+    search_fuzzy_min_token_length: int = Field(
+        4,
+        ge=3,
+        description='Minimum token length eligible for edit-distance expansion. Short '
+                    'biomedical symbols remain exact/semantic-only to control false matches.',
+    )
+    search_fuzzy_minimum_should_match: str = Field(
+        '2<75%',
+        description='Elasticsearch minimum_should_match expression for fuzzy query tokens. '
+                    'This tolerates one missing/extra word in longer aliases.',
+    )
+    search_fuzzy_max_expansions: int = Field(
+        50,
+        ge=1,
+        description='Maximum Elasticsearch fuzzy term expansions per eligible token.',
+    )
     search_vector_overretrieve_factor: float = Field(
         1.0,
         ge=1.0,

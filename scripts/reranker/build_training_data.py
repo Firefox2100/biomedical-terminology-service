@@ -25,7 +25,7 @@ RANK_BAND_LABELS: list[str] = ['very_hard', 'hard', 'medium']
 OVERFLOW_BAND_LABEL = 'long_tail'
 
 RECALL_SOURCES: list[str] = [
-    'lexical', 'alias_embedding', 'definition_embedding', 'exact_mapping',
+    'lexical', 'fuzzy_lexical', 'alias_embedding', 'definition_embedding', 'exact_mapping',
 ]
 
 
@@ -54,6 +54,7 @@ class MiningStats:
     rejected_by_equivalence_filter: int = 0
     skipped_below_min_negatives: int = 0
     skipped_gold_not_retrieved: int = 0
+    skipped_missing_gold_concept: int = 0
 
     def record(self, negatives: list[dict], duplicate_merges: int, rejected: int) -> None:
         self.total_negatives += len(negatives)
@@ -78,6 +79,7 @@ class MiningStats:
             'rejected_by_equivalence_filter': self.rejected_by_equivalence_filter,
             'skipped_below_min_negatives': self.skipped_below_min_negatives,
             'skipped_gold_not_retrieved': self.skipped_gold_not_retrieved,
+            'skipped_missing_gold_concept': self.skipped_missing_gold_concept,
         }
 
 
@@ -267,7 +269,7 @@ async def _mine_negatives(doc_db: DocumentDatabase,
                           additional_ranked_hits: dict[str, list[str]] | None = None,
                           ) -> tuple[list[dict], list[dict], int, int, dict | None]:
     """
-    Run the query through the lexical/alias-embedding/definition-embedding recall arms,
+    Run the query through the lexical/fuzzy/alias-embedding/definition-embedding recall arms,
     aggregate hits by concept_id (a concept hit by several arms becomes one candidate with all
     evidence attached), reject invalid candidates, and select negatives.
     :return: (selected_negatives, full_candidate_pool, duplicate_cross_source_merges,
@@ -284,11 +286,16 @@ async def _mine_negatives(doc_db: DocumentDatabase,
         ))[0]
 
     lexical_task = doc_db.lexical_search(unit.prefix, unit.item.text, limit=candidate_pool)
+    fuzzy_method = getattr(doc_db, 'fuzzy_search', None)
+    fuzzy_task = (fuzzy_method(unit.prefix, unit.item.text, limit=candidate_pool)
+                  if fuzzy_method is not None else asyncio.sleep(0, result=[]))
     alias_task = vector_db.search_items(query_vector, unit.prefix, EmbeddingKind.ALIAS, limit=candidate_pool)
     definition_task = vector_db.search_items(
         query_vector, unit.prefix, EmbeddingKind.DEFINITION, limit=candidate_pool,
     )
-    lexical_hits, alias_hits, definition_hits = await asyncio.gather(lexical_task, alias_task, definition_task)
+    lexical_hits, fuzzy_hits, alias_hits, definition_hits = await asyncio.gather(
+        lexical_task, fuzzy_task, alias_task, definition_task,
+    )
 
     merged: dict[str, dict] = {}
     duplicate_merges = 0
@@ -320,6 +327,7 @@ async def _mine_negatives(doc_db: DocumentDatabase,
                 entry['scores'][source] = float(score)
 
     add_hits(lexical_hits, 'lexical')
+    add_hits(fuzzy_hits, 'fuzzy_lexical')
     add_hits(alias_hits, 'alias_embedding')
     add_hits(definition_hits, 'definition_embedding')
     for source, concept_ids in (additional_ranked_hits or {}).items():

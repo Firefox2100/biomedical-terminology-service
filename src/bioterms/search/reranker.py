@@ -81,6 +81,7 @@ def _load_reranker():
         return models.ColBERT(
             model_name_or_path=CONFIG.reranker_model,
             device=CONFIG.torch_device,
+            trust_remote_code=True,
         )
     except KeyError as error:
         # PyLate 1.6 / SentenceTransformers 6 changed Dense's serialized activation field.
@@ -94,6 +95,44 @@ def _load_reranker():
             CONFIG.reranker_model,
         )
         return _load_legacy_reranker(models)
+    except TypeError as error:
+        if "unexpected keyword argument 'module_input_name'" not in str(error):
+            raise
+        return _load_st6_dense_compat_reranker(models)
+
+
+def _load_st6_dense_compat_reranker(models):
+    """Load PyLate 1.6 bundles whose Dense config was emitted by ST6."""
+    from pathlib import Path
+    from pylate.models import Dense as PyLateDense
+    from safetensors.torch import load_model as load_safetensors_model
+    from sentence_transformers.util import import_from_string
+
+    original_load = PyLateDense.load
+
+    def load_dense(input_path):
+        path = Path(input_path)
+        config = json.loads((path / 'config.json').read_text(encoding='utf-8'))
+        config.pop('module_input_name', None)
+        config.pop('module_output_name', None)
+        config['activation_function'] = import_from_string(config['activation_function'])()
+        dense = PyLateDense(**config)
+        load_safetensors_model(dense, str(path / 'model.safetensors'))
+        return dense
+
+    LOGGER.warning('Using the ST6 Dense compatibility loader for %s.', CONFIG.reranker_model)
+    PyLateDense.load = staticmethod(load_dense)
+    try:
+        model = models.ColBERT(
+            model_name_or_path=CONFIG.reranker_model,
+            device=CONFIG.torch_device,
+            trust_remote_code=True,
+        )
+    finally:
+        PyLateDense.load = original_load
+    if not hasattr(model, '_text_length') and hasattr(model, '_input_length'):
+        model._text_length = model._input_length
+    return model
 
 
 def _load_legacy_reranker(models):

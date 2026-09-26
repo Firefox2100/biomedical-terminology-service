@@ -239,6 +239,29 @@ class DocumentDatabase(ABC):
 
         return results
 
+    async def fuzzy_search_iter(self,
+                                prefix: ConceptPrefix,
+                                query: str,
+                                limit: int = 10,
+                                ) -> AsyncIterator[tuple[str, float]]:
+        """Yield approximate lexical matches when the backend supports them.
+
+        Fuzzy recall is deliberately a separate capability from ``lexical_search``: callers
+        can give edit-distance evidence a lower fusion weight instead of allowing approximate
+        matches to dilute ordinary BM25/full-text ranking.  Backends without a safe indexed
+        implementation return no candidates rather than performing an unbounded scan.
+        """
+        if False:  # pragma: no cover - makes this a no-op async generator for base backends.
+            yield '', 0.0
+
+    async def fuzzy_search(self,
+                           prefix: ConceptPrefix,
+                           query: str,
+                           limit: int = 10,
+                           ) -> list[tuple[str, float]]:
+        """Return approximate lexical matches ranked on the backend's private score scale."""
+        return [item async for item in self.fuzzy_search_iter(prefix, query, limit)]
+
     _backend_name = 'unknown'
 
     @abstractmethod

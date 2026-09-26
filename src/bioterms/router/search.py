@@ -137,6 +137,7 @@ async def _search_terms_v2(query: str,
             durationMs=(perf_counter() - started) * 1000,
             vocabularies=vocabularies,
             pipeline=SearchPipelineV2(
+                fuzzy=execution.fuzzy_used,
                 vector=execution.vector_used,
                 mapped=execution.mapped_used,
                 reranker=execution.reranker_used,

@@ -112,6 +112,7 @@ type SearchResult {
 
 type SearchPipeline {
     lexical: Boolean!
+    fuzzy: Boolean!
     vector: Boolean!
     mapped: Boolean!
     reranker: Boolean!

@@ -180,6 +180,13 @@ async def _run(args: argparse.Namespace) -> None:
         raise SystemExit('--defer-targets and --only-targets are mutually exclusive')
 
     for prefix_1, prefix_2 in pairs:
+        # Target filters can exclude a declared pair before touching the graph database.
+        # This is important for resumable per-target runs: without it, every run streams
+        # every annotation edge in the database merely to discard unrelated pairs later.
+        if only_targets and prefix_1 not in only_targets and prefix_2 not in only_targets:
+            continue
+        if defer_targets and prefix_1 in defer_targets and prefix_2 in defer_targets:
+            continue
         edge_count = 0
         async for prefix_from, concept_from, prefix_to, concept_to in _exact_edges(
                 graph_db, prefix_1, prefix_2):
@@ -245,6 +252,35 @@ async def _run(args: argparse.Namespace) -> None:
                 break
 
             source_to_gold = sorted(mapping_by_direction[(target_prefix, source_prefix)])
+            if not source_to_gold:
+                continue
+
+            # Annotation sources occasionally contain identifiers in an upstream namespace
+            # shape that does not exist in the loaded target vocabulary (for example an NCIt
+            # numeric code without its required ``C`` prefix). Such a row cannot be rendered,
+            # scored, trained, or returned by production, so reject it before query expansion.
+            target_config = get_vocabulary_config(target_prefix)
+            requested_gold_ids = sorted({gold_id for _source_id, gold_id in source_to_gold})
+            existing_gold_ids: set[str] = set()
+            for offset in range(0, len(requested_gold_ids), 5000):
+                target_concepts = await doc_db.get_terms_by_ids(
+                    prefix=target_prefix,
+                    concept_ids=requested_gold_ids[offset:offset + 5000],
+                    model_class=target_config['conceptClass'],
+                )
+                existing_gold_ids.update(concept.concept_id for concept in target_concepts)
+            missing_mapping_count = sum(
+                gold_id not in existing_gold_ids for _source_id, gold_id in source_to_gold
+            )
+            if missing_mapping_count:
+                stats.skipped_missing_gold_concept += missing_mapping_count
+                source_to_gold = [
+                    pair for pair in source_to_gold if pair[1] in existing_gold_ids
+                ]
+                print(
+                    f'[{source_prefix.value}->{target_prefix.value}] rejected '
+                    f'{missing_mapping_count} mappings whose target concept is not loaded'
+                )
             if not source_to_gold:
                 continue
 

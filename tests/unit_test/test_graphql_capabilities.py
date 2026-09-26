@@ -117,7 +117,8 @@ async def test_root_search_exposes_v2_results(monkeypatch):
     }
     assert response['meta']['vocabularies'] == [ConceptPrefix.HPO, ConceptPrefix.MONDO]
     assert response['meta']['pipeline'] == {
-        'lexical': True, 'vector': True, 'mapped': False, 'reranker': False,
+        'lexical': True, 'fuzzy': False, 'vector': True, 'mapped': False,
+        'reranker': False,
     }
 
 

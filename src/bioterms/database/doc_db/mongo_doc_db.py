@@ -687,6 +687,53 @@ class MongoDocumentDatabase(DocumentDatabase):
             if concept_id is not None:
                 yield concept_id, float(doc.get('score', 0.0))
 
+    async def fuzzy_search_iter(self,
+                                prefix: ConceptPrefix,
+                                query: str,
+                                limit: int = 10,
+                                ) -> AsyncIterator[tuple[str, float]]:
+        """Use Atlas Search autocomplete fuzziness when the native index is available."""
+        search_query = normalise_search_query(query)
+        words = [word for word in search_query.words
+                 if len(word) >= CONFIG.search_fuzzy_min_token_length]
+        if not words:
+            return
+        collection = self.db[str(prefix.value)]
+        if not await self._supports_native_text_search(collection):
+            # Community MongoDB's stored character n-grams provide substring lookup but no
+            # bounded edit-distance operator. Avoid a collection scan; vector recall remains
+            # the typo-tolerant fallback for that deployment.
+            return
+        await self._ensure_text_index(collection)
+        pipeline = [
+            {'$search': {
+                'index': CONFIG.mongodb_text_index_name,
+                'compound': {
+                    'should': [{
+                        'autocomplete': {
+                            'query': word,
+                            'path': ['conceptId', 'label', 'synonyms'],
+                            'fuzzy': {
+                                'maxEdits': 1 if len(word) < 7 else 2,
+                                'prefixLength': 1,
+                                'maxExpansions': CONFIG.search_fuzzy_max_expansions,
+                            },
+                        },
+                    } for word in words],
+                    'minimumShouldMatch': 1,
+                },
+            }},
+            {'$addFields': {'score': {'$meta': 'searchScore'}}},
+            {'$sort': {'score': -1}},
+            {'$limit': limit},
+            {'$project': {'_id': 0, 'conceptId': 1, 'score': 1}},
+        ]
+        cursor = await collection.aggregate(pipeline)
+        async for doc in cursor:
+            concept_id = doc.get('conceptId')
+            if concept_id is not None:
+                yield concept_id, float(doc.get('score', 0.0))
+
     @staticmethod
     def _build_legacy_auto_complete_pipeline(n_gram_query: list[str],
                                              score_query: str,

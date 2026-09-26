@@ -69,6 +69,7 @@ async def test_document_save_uses_concept_id_as_bulk_document_id(monkeypatch):
     assert captured[0]['_op_type'] == 'index'
     mapping = client.indices.created[0][1]['mappings']['properties']
     assert mapping['label']['analyzer'] == 'bts_ngram'
+    assert mapping['label']['fields']['fuzzy']['analyzer'] == 'standard'
 
 
 @pytest.mark.asyncio
@@ -85,6 +86,33 @@ async def test_document_lexical_search_rejects_query_shorter_than_three_characte
     database = ElasticsearchDocumentDatabase(client)
 
     assert await database.lexical_search(ConceptPrefix.HPO, 'ab') == []
+    assert client.search_calls == []
+
+
+@pytest.mark.asyncio
+async def test_document_fuzzy_search_uses_bounded_edit_distance(monkeypatch):
+    client = FakeClient()
+    client.search_response = {'hits': {'hits': [{'_id': 'HP:1', '_score': 7.5}]}}
+    database = ElasticsearchDocumentDatabase(client)
+    client.indices.names.add(database._index_name(ConceptPrefix.HPO))
+
+    results = await database.fuzzy_search(ConceptPrefix.HPO, 'congenital diabtes', limit=12)
+
+    assert results == [('HP:1', 7.5)]
+    call = client.search_calls[-1]
+    assert call['size'] == 12
+    fuzzy = call['query']['dis_max']['queries'][0]['multi_match']
+    assert fuzzy['fuzziness'] == 'AUTO:4,7'
+    assert fuzzy['prefix_length'] == 1
+    assert fuzzy['query'] == 'congenital diabtes'
+
+
+@pytest.mark.asyncio
+async def test_document_fuzzy_search_skips_short_symbols():
+    client = FakeClient()
+    database = ElasticsearchDocumentDatabase(client)
+
+    assert await database.fuzzy_search(ConceptPrefix.HPO, 'B2') == []
     assert client.search_calls == []
 
 

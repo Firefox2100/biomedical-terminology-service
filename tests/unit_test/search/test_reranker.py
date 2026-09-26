@@ -46,4 +46,6 @@ def test_loader_passes_local_path_or_huggingface_id_unchanged(monkeypatch, sourc
 
     reranker._load_reranker()
 
-    assert calls == [{'model_name_or_path': source, 'device': 'cpu'}]
+    assert calls == [{
+        'model_name_or_path': source, 'device': 'cpu', 'trust_remote_code': True,
+    }]

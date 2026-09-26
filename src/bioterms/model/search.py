@@ -32,6 +32,7 @@ class SearchPipelineV2(JsonModel):
     """Search stages actually used for this response."""
 
     lexical: bool = True
+    fuzzy: bool = False
     vector: bool
     mapped: bool = False
     reranker: bool

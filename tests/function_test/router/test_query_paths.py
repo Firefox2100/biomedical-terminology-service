@@ -55,9 +55,10 @@ def make_concept(concept_id, label):
 
 
 class FakeDocumentDatabase:
-    def __init__(self, concepts, lexical_results=None):
+    def __init__(self, concepts, lexical_results=None, fuzzy_results=None):
         self.concepts = concepts
         self.lexical_results = lexical_results or []
+        self.fuzzy_results = fuzzy_results or []
         self.calls = []
 
     async def get_terms_by_ids_iter(self, prefix, concept_ids, model_class=Concept):
@@ -88,6 +89,15 @@ class FakeDocumentDatabase:
             'limit': limit,
         })
         return self.lexical_results[:limit]
+
+    async def fuzzy_search(self, prefix, query, limit):
+        self.calls.append({
+            'method': 'fuzzy_search',
+            'prefix': prefix,
+            'query': query,
+            'limit': limit,
+        })
+        return self.fuzzy_results[:limit]
 
 
 class FakeVectorDatabase:
@@ -230,6 +240,7 @@ async def test_search_terms_v1_fuses_alias_embedding_recall(monkeypatch):
     ])
     monkeypatch.setattr(search_module, 'get_vocabulary_config', lambda prefix: {'conceptClass': Concept})
     monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(hybrid_module, 'reranker_enabled', lambda: False)
     monkeypatch.setattr(
         hybrid_module, 'get_vocabulary_status',
         fake_get_vocabulary_status_with_vector_count(vector_db.vector_count),
@@ -291,8 +302,38 @@ async def test_search_terms_v2_returns_envelope_and_uses_shared_query_path(monke
     }
     assert body['meta']['vocabularies'] == ['hpo', 'mondo']
     assert body['meta']['pipeline'] == {
-        'lexical': True, 'vector': True, 'mapped': False, 'reranker': False,
+        'lexical': True, 'fuzzy': False, 'vector': True, 'mapped': False,
+        'reranker': False,
     }
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_recall_is_a_lower_weight_unpinned_fusion_arm(monkeypatch):
+    lexical = make_concept('lexical', 'Alpha syndrome')
+    fuzzy = make_concept('fuzzy', 'Alfa syndrome')
+    doc_db = FakeDocumentDatabase(
+        {'lexical': lexical, 'fuzzy': fuzzy},
+        lexical_results=[('lexical', 10.0)],
+        fuzzy_results=[('fuzzy', 20.0)],
+    )
+    vector_db = FakeVectorDatabase(vector_count=0)
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_fuzzy_recall_limit', 20)
+    monkeypatch.setattr(hybrid_module.CONFIG, 'search_fuzzy_rrf_weight', 0.5)
+    monkeypatch.setattr(hybrid_module, 'reranker_enabled', lambda: False)
+    monkeypatch.setattr(
+        hybrid_module, 'get_vocabulary_status',
+        fake_get_vocabulary_status_with_vector_count(0),
+    )
+
+    execution = await hybrid_module.execute_hybrid_search(
+        query='alhpa syndrome', prefixes=[ConceptPrefix.HPO], doc_db=doc_db,
+        vector_db=vector_db, limit=2,
+    )
+
+    assert [hit.concept.concept_id for hit in execution.hits] == ['lexical', 'fuzzy']
+    assert execution.fuzzy_used is True
+    fuzzy_calls = [call for call in doc_db.calls if call['method'] == 'fuzzy_search']
+    assert fuzzy_calls[0]['limit'] == 20
 
 
 @pytest.mark.asyncio
@@ -374,6 +415,7 @@ async def test_vector_recall_can_overretrieve_without_changing_return_limit(monk
         ('0000001', 'First Concept', 0.9), ('0000002', 'Second Concept', 0.8),
     ])
     monkeypatch.setattr(hybrid_module, 'TextTransformer', FakeTextTransformer)
+    monkeypatch.setattr(hybrid_module, 'reranker_enabled', lambda: False)
     monkeypatch.setattr(hybrid_module.CONFIG, 'search_retrieval_candidate_limit', 12)
     monkeypatch.setattr(hybrid_module.CONFIG, 'search_vector_overretrieve_factor', 2.5)
     monkeypatch.setattr(

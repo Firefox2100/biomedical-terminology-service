@@ -60,6 +60,31 @@ def _reciprocal_rank_fusion_scores(ranked_lists: list[list[str]],
     return scores
 
 
+def _weighted_reciprocal_rank_fusion_scores(
+        ranked_lists: list[tuple[list[str], float]], k: int) -> dict[str, float]:
+    """Fuse ranked evidence arms while allowing noisy recall to contribute less."""
+    scores: dict[str, float] = {}
+    for ranked, weight in ranked_lists:
+        if weight <= 0:
+            continue
+        seen: set[str] = set()
+        for rank, concept_id in enumerate(ranked, start=1):
+            if concept_id in seen:
+                continue
+            seen.add(concept_id)
+            scores[concept_id] = scores.get(concept_id, 0.0) + weight / (k + rank)
+    return scores
+
+
+async def _fuzzy_recall(doc_db: DocumentDatabase, prefix: ConceptPrefix,
+                        query: str, limit: int) -> list[tuple[str, float]]:
+    """Call the optional backend fuzzy capability without breaking lightweight adapters."""
+    method = getattr(doc_db, 'fuzzy_search', None)
+    if method is None or limit <= 0 or CONFIG.search_fuzzy_rrf_weight <= 0:
+        return []
+    return await method(prefix=prefix, query=query, limit=limit)
+
+
 def _dedupe_by_concept(items: list[tuple[str, str, float]]) -> list[str]:
     """Keep the best-ranked vector hit for each concept."""
     seen: set[str] = set()
@@ -114,6 +139,7 @@ class SearchExecution:
     vector_used: bool
     reranker_used: bool
     mapped_used: bool = False
+    fuzzy_used: bool = False
 
 
 @dataclass(frozen=True)
@@ -121,6 +147,7 @@ class _PrefixCandidates:
     exact: list[SearchHit]
     semantic: list[tuple[Concept, float]]
     vector_used: bool
+    fuzzy_used: bool = False
 
 
 @lru_cache(maxsize=None)
@@ -225,7 +252,9 @@ async def _add_mapped_recall(candidates: _PrefixCandidates,
         ((concepts_by_id[concept_id], score) for concept_id, score in scores.items()),
         key=lambda item: item[1], reverse=True,
     )
-    return _PrefixCandidates(candidates.exact, semantic, candidates.vector_used)
+    return _PrefixCandidates(
+        candidates.exact, semantic, candidates.vector_used, candidates.fuzzy_used,
+    )
 
 
 async def _retrieve_prefix(query: str,
@@ -241,11 +270,14 @@ async def _retrieve_prefix(query: str,
                            ) -> _PrefixCandidates:
     """Retrieve exact and fused candidates for one vocabulary without reranking them."""
     probe_limit = max(retrieval_limit, _EXACT_MATCH_PROBE_LIMIT)
+    fuzzy_limit = (max(retrieval_limit, CONFIG.search_fuzzy_recall_limit)
+                   if CONFIG.search_fuzzy_recall_limit > 0 else 0)
 
     if vectors_loaded:
         assert query_vector is not None
-        lexical_results, alias_results, definition_results, exact_id_matches = await asyncio.gather(
+        lexical_results, fuzzy_results, alias_results, definition_results, exact_id_matches = await asyncio.gather(
             doc_db.lexical_search(prefix=prefix, query=query, limit=probe_limit),
+            _fuzzy_recall(doc_db, prefix, query, fuzzy_limit),
             vector_db.search_items(
                 query_vector=query_vector, prefix=prefix, kind=EmbeddingKind.ALIAS,
                 limit=vector_retrieval_limit,
@@ -258,12 +290,14 @@ async def _retrieve_prefix(query: str,
         )
     else:
         alias_results, definition_results = [], []
-        lexical_results, exact_id_matches = await asyncio.gather(
+        lexical_results, fuzzy_results, exact_id_matches = await asyncio.gather(
             doc_db.lexical_search(prefix=prefix, query=query, limit=probe_limit),
+            _fuzzy_recall(doc_db, prefix, query, fuzzy_limit),
             doc_db.get_terms_by_ids(prefix=prefix, concept_ids=[query], model_class=model_class),
         )
 
     lexical_ranked = [concept_id for concept_id, _score in lexical_results]
+    fuzzy_ranked = [concept_id for concept_id, _score in fuzzy_results]
     alias_ranked = _dedupe_by_concept(alias_results)
     definition_ranked = _dedupe_by_concept(definition_results)
 
@@ -275,12 +309,13 @@ async def _retrieve_prefix(query: str,
         ))
         exact_seen.add(concept.concept_id)
 
-    if lexical_ranked:
+    probe_ranked = list(dict.fromkeys(lexical_ranked + fuzzy_ranked))
+    if probe_ranked:
         probe_concepts = await doc_db.get_terms_by_ids(
-            prefix=prefix, concept_ids=lexical_ranked, model_class=model_class,
+            prefix=prefix, concept_ids=probe_ranked, model_class=model_class,
         )
         probe_by_id = {concept.concept_id: concept for concept in probe_concepts}
-        for concept_id in lexical_ranked:
+        for concept_id in probe_ranked:
             if concept_id in exact_seen:
                 continue
             concept = probe_by_id.get(concept_id)
@@ -293,14 +328,19 @@ async def _retrieve_prefix(query: str,
                 ))
                 exact_seen.add(concept_id)
 
-    rrf_scores = _reciprocal_rank_fusion_scores(
-        [lexical_ranked[:retrieval_limit], alias_ranked, definition_ranked],
+    rrf_scores = _weighted_reciprocal_rank_fusion_scores(
+        [
+            (lexical_ranked[:retrieval_limit], 1.0),
+            (alias_ranked, 1.0),
+            (definition_ranked, 1.0),
+            (fuzzy_ranked, CONFIG.search_fuzzy_rrf_weight),
+        ],
         k=CONFIG.search_rrf_k,
     )
     fused_ranked = sorted(rrf_scores, key=rrf_scores.__getitem__, reverse=True)
     non_exact_ids = [concept_id for concept_id in fused_ranked if concept_id not in exact_seen]
     if not non_exact_ids:
-        return _PrefixCandidates(exact_hits, [], vectors_loaded)
+        return _PrefixCandidates(exact_hits, [], vectors_loaded, bool(fuzzy_ranked))
 
     concepts = await doc_db.get_terms_by_ids(
         prefix=prefix, concept_ids=non_exact_ids, model_class=model_class,
@@ -311,7 +351,7 @@ async def _retrieve_prefix(query: str,
         for concept_id in non_exact_ids
         if concept_id in concepts_by_id
     ]
-    return _PrefixCandidates(exact_hits, semantic, vectors_loaded)
+    return _PrefixCandidates(exact_hits, semantic, vectors_loaded, bool(fuzzy_ranked))
 
 
 async def execute_hybrid_search(query: str,
@@ -396,6 +436,7 @@ async def execute_hybrid_search(query: str,
         vector_used=any(candidates.vector_used for candidates in per_prefix),
         reranker_used=reranker_was_used,
         mapped_used=CONFIG.search_mapped_recall_limit > 0,
+        fuzzy_used=any(candidates.fuzzy_used for candidates in per_prefix),
     )
 
 
