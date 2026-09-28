@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import types
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -181,6 +182,7 @@ def _load_groups(paths: list[Path],
                  exclude_vocabularies: set[str] | None = None,
                  ranking_score_key: str | None = None,
                  compact_model_candidates: int | None = None,
+                 compact_retrieval_negatives: int | None = None,
                  eval_fraction: float = 0.02,
                  split_seed: int = 13,
                  sampling_seed: int = 42,
@@ -204,6 +206,14 @@ def _load_groups(paths: list[Path],
                         continue
                     if exclude_vocabularies is not None and prefix in exclude_vocabularies:
                         continue
+                    split_key = f'{split_seed}:{prefix}:{group["gold_concept_id"]}'
+                    is_eval = _stable_unit_fraction(split_key) < eval_fraction
+                    source_negatives = group.get('negatives') or []
+                    if compact_retrieval_negatives is not None and not is_eval:
+                        # Retrieval training consumes only the first N mined negatives.  Do
+                        # this projection while the JSON row is in hand instead of retaining
+                        # millions of unused dictionaries.  Evaluation keeps the full pool.
+                        source_negatives = source_negatives[:compact_retrieval_negatives]
                     projected = {
                         'prefix': prefix,
                         'query_id': group['query_id'],
@@ -211,13 +221,18 @@ def _load_groups(paths: list[Path],
                         'gold_concept_id': group['gold_concept_id'],
                         'negatives': [
                             {'concept_id': negative['concept_id']}
-                            for negative in (group.get('negatives') or [])
+                            for negative in source_negatives
                         ],
                     }
                     if group.get('query_kind') is not None:
                         projected['query_kind'] = group['query_kind']
+                    # Candidate pools are not consumed by retrieval-negative training.  Keep
+                    # them only for the held-out candidate-set evaluation; retaining them for
+                    # every training row expanded the V7 corpus to ~68 GiB and triggered the
+                    # host OOM killer before the first optimizer step.
+                    retain_candidate_pool = ranking_score_key is not None or is_eval
                     candidate_pool = []
-                    for candidate in group.get('candidate_pool') or []:
+                    for candidate in (group.get('candidate_pool') or []) if retain_candidate_pool else ():
                         record = {
                             'concept_id': candidate['concept_id'],
                             'role': candidate.get('role'),
@@ -228,8 +243,6 @@ def _load_groups(paths: list[Path],
                                 record['ranking_scores'] = {ranking_score_key: score}
                         candidate_pool.append(record)
                     if compact_model_candidates and ranking_score_key is not None:
-                        split_key = f'{split_seed}:{prefix}:{group["gold_concept_id"]}'
-                        is_eval = _stable_unit_fraction(split_key) < eval_fraction
                         if not is_eval:
                             gold = [candidate for candidate in candidate_pool
                                     if candidate.get('role') == 'gold']
@@ -630,6 +643,7 @@ def _flatten_to_rows(sampled_groups: list[dict],
                      ranking_score_key: str | None = None,
                      training_objective: str = 'contrastive',
                      distillation_temperature: float = 1.0,
+                     sample_index_offset: int = 0,
                      ) -> tuple[list[dict], dict[str, int]]:
     """
     Resolve/render each sampled group into one row (query, positive, negative_1..K) with K
@@ -645,7 +659,8 @@ def _flatten_to_rows(sampled_groups: list[dict],
         'skipped_insufficient_resolvable_negatives': 0,
     }
 
-    for sample_index, group in enumerate(sampled_groups):
+    for local_index, group in enumerate(sampled_groups):
+        sample_index = sample_index_offset + local_index
         if _should_drop_preferred_label_query(group, concept_store, preferred_label_keep_probability, seed):
             stats['skipped_preferred_label_downsampled'] += 1
             continue
@@ -711,6 +726,135 @@ def _flatten_to_rows(sampled_groups: list[dict],
     )
 
     return rows, stats
+
+
+def _preparation_signature(args: argparse.Namespace, train_paths: list[Path]) -> dict:
+    """Fingerprint every input and option that changes prepared training/eval examples."""
+    semantic_args = {
+        key: getattr(args, key)
+        for key in (
+            'eval_fraction', 'split_seed', 'max_groups', 'vocab_sampling_alpha',
+            'negatives_per_query', 'negative_sampling', 'ranking_score_key',
+            'training_objective', 'distillation_temperature', 'teacher_replay_fraction',
+            'teacher_replay_min_margin', 'preferred_label_query_keep_probability',
+            'max_aliases_rendered', 'eval_render_variant', 'seed',
+            'drop_ambiguous_training_queries', 'drop_contextless_training_queries',
+            'include_vocabularies', 'exclude_vocabularies',
+        )
+    }
+    return {
+        'schema_version': 1,
+        'arguments': semantic_args,
+        'inputs': [
+            {
+                'path': str(path),
+                'size': path.stat().st_size,
+                'mtime_ns': path.stat().st_mtime_ns,
+            }
+            for path in train_paths
+        ],
+    }
+
+
+def _write_jsonl(path: Path, rows) -> None:
+    with path.open('w', encoding='utf-8') as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n')
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    with path.open(encoding='utf-8') as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def _build_prepared_dataset(prepared_dir: Path,
+                            sampled_groups: list[dict],
+                            eval_groups: list[dict],
+                            concept_store: dict[tuple[str, str], dict],
+                            args: argparse.Namespace,
+                            signature: dict,
+                            max_aliases: int | None,
+                            ):
+    """Stream rendered rows to Arrow and atomically publish the reusable mmap dataset."""
+    from datasets import Dataset
+
+    if prepared_dir.exists():
+        raise SystemExit(
+            f'Prepared directory {prepared_dir} exists but is incomplete or incompatible; '
+            'move it aside or choose a new --prepared-data-dir.'
+        )
+    temporary = prepared_dir.with_name(prepared_dir.name + '.building')
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir(parents=True)
+
+    totals = Counter()
+
+    def generate_rows():
+        chunk_size = 8192
+        for offset in range(0, len(sampled_groups), chunk_size):
+            chunk, stats = _flatten_to_rows(
+                sampled_groups[offset:offset + chunk_size], concept_store,
+                args.negatives_per_query, seed=args.seed, max_aliases=max_aliases,
+                preferred_label_keep_probability=args.preferred_label_query_keep_probability,
+                negative_sampling=args.negative_sampling,
+                ranking_score_key=args.ranking_score_key,
+                training_objective=args.training_objective,
+                distillation_temperature=args.distillation_temperature,
+                sample_index_offset=offset,
+            )
+            totals.update(stats)
+            totals['rows'] += len(chunk)
+            yield from chunk
+
+    # from_generator writes Arrow incrementally; save_to_disk preserves memory mapping for
+    # every DDP worker instead of rebuilding a Python list in every process.
+    dataset = Dataset.from_generator(
+        generate_rows, cache_dir=str(temporary / 'generator-cache'),
+        keep_in_memory=False,
+    )
+    if not len(dataset):
+        raise SystemExit('No trainable rows were produced while preparing the disk dataset.')
+    dataset.save_to_disk(str(temporary / 'train.arrow'))
+    _write_jsonl(temporary / 'eval-groups.jsonl', eval_groups)
+    with (temporary / 'manifest.json').open('w', encoding='utf-8') as handle:
+        json.dump({
+            'signature': signature,
+            'train_rows': len(dataset),
+            'eval_groups': len(eval_groups),
+            'flatten_stats': dict(totals),
+        }, handle, indent=2, sort_keys=True)
+    # The saved dataset is self-contained; remove the transient generator cache before the
+    # atomic publication so restarts need only one canonical copy.
+    shutil.rmtree(temporary / 'generator-cache', ignore_errors=True)
+    temporary.rename(prepared_dir)
+    print(
+        f'Prepared disk-backed dataset: {len(dataset)} train rows, {len(eval_groups)} eval '
+        f'groups at {prepared_dir}.', flush=True,
+    )
+    return dataset
+
+
+def _load_prepared_dataset(prepared_dir: Path, signature: dict):
+    from datasets import load_from_disk
+
+    manifest_path = prepared_dir / 'manifest.json'
+    if not manifest_path.exists():
+        return None
+    with manifest_path.open(encoding='utf-8') as handle:
+        manifest = json.load(handle)
+    if manifest.get('signature') != signature:
+        raise SystemExit(
+            f'Prepared dataset {prepared_dir} does not match the current inputs/options; '
+            'use a different directory or rebuild it explicitly.'
+        )
+    dataset = load_from_disk(str(prepared_dir / 'train.arrow'), keep_in_memory=False)
+    eval_groups = _load_jsonl(prepared_dir / 'eval-groups.jsonl')
+    print(
+        f'Memory-mapped prepared dataset: {len(dataset)} train rows and '
+        f'{len(eval_groups)} eval groups from {prepared_dir}.', flush=True,
+    )
+    return dataset, eval_groups, manifest
 
 
 def _hybrid_listwise_loss(model, distillation_weight: float,
@@ -1203,6 +1347,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--quality-review-limit', type=int, default=1000)
     parser.add_argument('--resume-from-checkpoint', default=None, help='Path to a checkpoint directory to resume from.')
     parser.add_argument(
+        '--prepared-data-dir', default=None,
+        help='Disk-backed Arrow preprocessing directory. Reuses a compatible completed build, '
+             'or writes it when used with --prepare-only.',
+    )
+    parser.add_argument(
+        '--prepare-only', action='store_true',
+        help='Build --prepared-data-dir once without loading a model or starting training. '
+             'Use this before torchrun so DDP workers memory-map one shared dataset.',
+    )
+    parser.add_argument(
         '--trainer-args-json', default=None,
         help='Optional JSON object merged into SentenceTransformerTrainingArguments, e.g. \'{"dataloader_num_workers": 8}\'.',
     )
@@ -1249,6 +1403,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         errors.append('--eval-steps must be >= 0.')
     if args.quality_review_limit < 0:
         errors.append('--quality-review-limit must be >= 0.')
+    if args.prepare_only and not args.prepared_data_dir:
+        errors.append('--prepare-only requires --prepared-data-dir.')
     if args.eval_steps > 0 and args.save_steps % args.eval_steps != 0:
         errors.append('--save-steps must be a multiple of --eval-steps for best-checkpoint selection.')
     if args.include_vocabularies and args.exclude_vocabularies:
@@ -1356,55 +1512,125 @@ def main() -> None:
         print(f'Saved full per-vocabulary results to {result_path}', flush=True)
         return
 
-    all_groups = _load_groups(
-        train_paths, include_vocabularies, exclude_vocabularies, args.ranking_score_key,
-        compact_model_candidates=(args.negatives_per_query
-                                  if args.negative_sampling == 'model_stratified' else None),
-        eval_fraction=args.eval_fraction,
-        split_seed=args.split_seed,
-        sampling_seed=args.seed,
-    )
-    all_groups, duplicate_count = _deduplicate_groups(all_groups)
-    if duplicate_count:
-        print(f'Deduplication: removed {duplicate_count} repeated query groups.')
+    prepared_dir = Path(args.prepared_data_dir) if args.prepared_data_dir else None
+    signature = _preparation_signature(args, train_paths)
+    prepared = _load_prepared_dataset(prepared_dir, signature) if prepared_dir else None
+
     concept_store = _load_concept_store(
         concept_store_dirs,
         include_vocabularies,
         exclude_vocabularies,
     )
-    print(f'Loaded {len(all_groups)} query groups and {len(concept_store)} concepts.')
+    print(f'Loaded {len(concept_store)} concepts.')
 
-    if all_groups:
-        resolved = sum(1 for g in all_groups if (g['prefix'], g['gold_concept_id']) in concept_store)
-        resolution_fraction = resolved / len(all_groups)
-        if resolution_fraction < MIN_CONCEPT_RESOLUTION_FRACTION:
+    if prepared is not None:
+        train_dataset, eval_groups, _prepared_manifest = prepared
+        if args.prepare_only:
+            print('Compatible prepared dataset already complete; nothing to rebuild.', flush=True)
+            return
+    else:
+        if int(os.environ.get('WORLD_SIZE', '1')) > 1:
             raise SystemExit(
-                f'Only {resolution_fraction:.1%} of loaded query groups resolved a gold concept '
-                f'in the concept store (< {MIN_CONCEPT_RESOLUTION_FRACTION:.0%} threshold) -- '
-                f'check --concept-store-dir points at the store(s) produced for this --train-data.'
+                'Refusing to preprocess independently in every distributed worker. Run once '
+                'with --prepare-only --prepared-data-dir PATH, then launch torchrun with the '
+                'same --prepared-data-dir PATH.'
+            )
+        all_groups = _load_groups(
+            train_paths, include_vocabularies, exclude_vocabularies, args.ranking_score_key,
+            compact_model_candidates=(args.negatives_per_query
+                                      if args.negative_sampling == 'model_stratified' else None),
+            compact_retrieval_negatives=(args.negatives_per_query
+                                         if args.negative_sampling == 'retrieval' else None),
+            eval_fraction=args.eval_fraction,
+            split_seed=args.split_seed,
+            sampling_seed=args.seed,
+        )
+        all_groups, duplicate_count = _deduplicate_groups(all_groups)
+        if duplicate_count:
+            print(f'Deduplication: removed {duplicate_count} repeated query groups.')
+        print(f'Loaded {len(all_groups)} query groups and {len(concept_store)} concepts.')
+
+        if all_groups:
+            resolved = sum(
+                1 for group in all_groups
+                if (group['prefix'], group['gold_concept_id']) in concept_store
+            )
+            resolution_fraction = resolved / len(all_groups)
+            if resolution_fraction < MIN_CONCEPT_RESOLUTION_FRACTION:
+                raise SystemExit(
+                    f'Only {resolution_fraction:.1%} of loaded query groups resolved a gold concept '
+                    f'in the concept store (< {MIN_CONCEPT_RESOLUTION_FRACTION:.0%} threshold) -- '
+                    f'check --concept-store-dir points at the store(s) produced for this --train-data.'
+                )
+
+        train_groups, eval_groups = _split_by_concept(
+            all_groups, args.eval_fraction, args.split_seed,
+        )
+        print(
+            f'Concept-grouped split: {len(train_groups)} train groups, '
+            f'{len(eval_groups)} eval groups.'
+        )
+
+        ambiguous_keys = _ambiguous_query_keys(all_groups)
+        ambiguous_train_count = sum(
+            (group['prefix'], _normalise_query(group['query'])) in ambiguous_keys
+            for group in train_groups
+        )
+        print(
+            f'Ambiguity audit: {len(ambiguous_keys)} normalised query keys map to multiple gold '
+            f'concepts ({ambiguous_train_count} train groups).'
+        )
+        if args.drop_ambiguous_training_queries or args.drop_contextless_training_queries:
+            train_groups, quality_counts = _filter_training_quality(
+                train_groups, ambiguous_keys,
+                args.drop_ambiguous_training_queries,
+                args.drop_contextless_training_queries,
+                Path(args.quality_review_output) if args.quality_review_output else None,
+                args.quality_review_limit,
+            )
+            print(
+                f'Quality filtering: {len(train_groups)} train groups retained; '
+                f'exclusions by reason/vocabulary: {json.dumps(quality_counts, sort_keys=True)}'
             )
 
-    train_groups, eval_groups = _split_by_concept(all_groups, args.eval_fraction, args.split_seed)
-    print(f'Concept-grouped split: {len(train_groups)} train groups, {len(eval_groups)} eval groups.')
+        if args.teacher_replay_fraction:
+            sampled_groups, replay_stats = _sample_with_teacher_replay(
+                train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups,
+                seed=args.seed, ranking_score_key=args.ranking_score_key,
+                replay_fraction=args.teacher_replay_fraction,
+                minimum_margin=args.teacher_replay_min_margin,
+            )
+            print(f'Teacher replay: {json.dumps(replay_stats, sort_keys=True)}')
+        else:
+            sampled_groups = _vocab_balanced_sample(
+                train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups,
+                seed=args.seed,
+            )
+        _report_sampling_diagnostics(sampled_groups)
 
-    ambiguous_keys = _ambiguous_query_keys(all_groups)
-    ambiguous_train_count = sum(
-        (g['prefix'], _normalise_query(g['query'])) in ambiguous_keys for g in train_groups
-    )
-    print(
-        f'Ambiguity audit: {len(ambiguous_keys)} normalised query keys map to multiple gold '
-        f'concepts ({ambiguous_train_count} train groups).'
-    )
-    if args.drop_ambiguous_training_queries or args.drop_contextless_training_queries:
-        train_groups, quality_counts = _filter_training_quality(
-            train_groups, ambiguous_keys,
-            args.drop_ambiguous_training_queries,
-            args.drop_contextless_training_queries,
-            Path(args.quality_review_output) if args.quality_review_output else None,
-            args.quality_review_limit,
-        )
-        print(f'Quality filtering: {len(train_groups)} train groups retained; '
-              f'exclusions by reason/vocabulary: {json.dumps(quality_counts, sort_keys=True)}')
+        if prepared_dir:
+            train_dataset = _build_prepared_dataset(
+                prepared_dir, sampled_groups, eval_groups, concept_store, args,
+                signature, max_aliases,
+            )
+        else:
+            rows, _flatten_stats = _flatten_to_rows(
+                sampled_groups, concept_store, args.negatives_per_query, seed=args.seed,
+                max_aliases=max_aliases,
+                preferred_label_keep_probability=args.preferred_label_query_keep_probability,
+                negative_sampling=args.negative_sampling,
+                ranking_score_key=args.ranking_score_key,
+                training_objective=args.training_objective,
+                distillation_temperature=args.distillation_temperature,
+            )
+            if not rows:
+                raise SystemExit('No trainable rows were produced.')
+            from datasets import Dataset
+            train_dataset = Dataset.from_list(rows)
+
+        if args.prepare_only:
+            print('Preparation complete; model loading and training were intentionally skipped.', flush=True)
+            return
 
     if os.environ.get('RANK', '0') == '0':
         output_dir = Path(args.output_dir)
@@ -1412,53 +1638,12 @@ def main() -> None:
         with (output_dir / 'run_config.json').open('w', encoding='utf-8') as handle:
             json.dump(vars(args), handle, indent=2, sort_keys=True)
 
-    eval_examples = _build_candidate_sets(eval_groups, concept_store, eval_variant, max_aliases)
-    if not eval_examples:
-        raise SystemExit(
-            'No evaluation candidate sets could be built (need a resolvable gold concept plus '
-            'at least one resolvable negative per eval group) -- increase --eval-fraction, mine '
-            'more negatives, or check --concept-store-dir.'
-        )
-    print(f'Held-out candidate-set evaluation examples: {len(eval_examples)}')
-
-    if args.teacher_replay_fraction:
-        sampled_groups, replay_stats = _sample_with_teacher_replay(
-            train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups,
-            seed=args.seed, ranking_score_key=args.ranking_score_key,
-            replay_fraction=args.teacher_replay_fraction,
-            minimum_margin=args.teacher_replay_min_margin,
-        )
-        print(f'Teacher replay: {json.dumps(replay_stats, sort_keys=True)}')
-    else:
-        sampled_groups = _vocab_balanced_sample(
-            train_groups, alpha=args.vocab_sampling_alpha, target_size=args.max_groups,
-            seed=args.seed,
-        )
-    _report_sampling_diagnostics(sampled_groups)
-
-    rows, _flatten_stats = _flatten_to_rows(
-        sampled_groups, concept_store, args.negatives_per_query, seed=args.seed,
-        max_aliases=max_aliases, preferred_label_keep_probability=args.preferred_label_query_keep_probability,
-        negative_sampling=args.negative_sampling, ranking_score_key=args.ranking_score_key,
-        training_objective=args.training_objective,
-        distillation_temperature=args.distillation_temperature,
-    )
-    if not rows:
-        raise SystemExit(
-            'No trainable rows were produced -- check --train-data/--concept-store-dir point '
-            'at matching mining output, that --negatives-per-query is not larger than what was '
-            'mined (--min-negatives-per-query on the miner), and that --eval-fraction has not '
-            'consumed the entire pool (it is a fraction of concepts, not rows).'
-        )
-
     # Imported here, not at module load time, so `--help` and the argument-only validation
     # above work without the (heavy) ML stack installed.
     from datasets import Dataset
     from sentence_transformers import SentenceTransformerTrainer, SentenceTransformerTrainingArguments
     from pylate import evaluation, losses, models, utils
     from transformers import set_seed
-
-    train_dataset = Dataset.from_list(rows)
 
     # SentenceTransformerTrainingArguments seeds training later, but the ColBERT projection is
     # created before Trainer construction. Seed explicitly so the step-zero model is reproducible.
@@ -1601,28 +1786,67 @@ def main() -> None:
         data_collator=utils.ColBERTCollator(model.tokenize),
     )
 
+    if args.resume_from_checkpoint:
+        # Transformers blocks all pickle-backed optimizer restoration on torch<2.6 because
+        # arbitrary downloaded checkpoints are unsafe.  A checkpoint produced inside this
+        # exact output directory is trusted run state, and restoring its optimizer/scheduler
+        # is required for genuinely resumable training after an interruption.  Keep the
+        # override deliberately narrower than a global environment switch: an external or
+        # unrelated checkpoint continues to receive Transformers' normal safety rejection.
+        resume_path = Path(args.resume_from_checkpoint).resolve()
+        output_path = Path(args.output_dir).resolve()
+        try:
+            is_local_run_checkpoint = resume_path.parent == output_path
+        except OSError:
+            is_local_run_checkpoint = False
+        if is_local_run_checkpoint:
+            import transformers.trainer as transformers_trainer
+            transformers_trainer.check_torch_load_is_safe = lambda: None
+            # torch<2.6's weights-only loader does not yet allow NumPy's RNG-state
+            # representation by default.  Limit these additional globals to the same
+            # trusted local-run resume path; they are precisely the types written by
+            # Trainer when checkpointing np.random state.
+            import numpy as np
+            import torch
+            torch.serialization.add_safe_globals([
+                np.core.multiarray._reconstruct,
+                np.ndarray,
+                np.dtype,
+                type(np.dtype(np.uint32)),
+            ])
+            print(f'Trusting locally generated optimizer state in {resume_path}.', flush=True)
+
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
-    final_dir = Path(args.output_dir) / 'final'
-    model.save_pretrained(str(final_dir))
-    print(f'Saved final model to {final_dir}')
+    if trainer.is_world_process_zero():
+        final_dir = Path(args.output_dir) / 'final'
+        model.save_pretrained(str(final_dir))
+        print(f'Saved final model to {final_dir}')
 
-    if triplet_evaluator is not None:
-        triplet_result = triplet_evaluator(model)
-        print(f'Secondary triplet-evaluator smoke test (NOT the primary metric): {triplet_result}')
-        with (Path(args.output_dir) / 'final_eval_triplet_result.json').open('w', encoding='utf-8') as f:
-            json.dump(triplet_result, f, indent=2)
+        if triplet_evaluator is not None:
+            triplet_result = triplet_evaluator(model)
+            print(f'Secondary triplet-evaluator smoke test (NOT the primary metric): {triplet_result}')
+            with (Path(args.output_dir) / 'final_eval_triplet_result.json').open('w', encoding='utf-8') as f:
+                json.dump(triplet_result, f, indent=2)
 
-    candidate_set_result = _run_candidate_set_evaluation(
-        model, eval_examples, batch_size=args.eval_batch_size,
-        prediction_output=Path(args.prediction_output) if args.prediction_output else None,
-    )
-    result_path = Path(args.output_dir) / 'final_eval_result.json'
-    with result_path.open('w', encoding='utf-8') as f:
-        json.dump(candidate_set_result, f, indent=2)
-    print(f'Primary candidate-set evaluation (global): {candidate_set_result.get("global")}')
-    print(f'(full per-vocabulary breakdown saved to {result_path} -- compare this file across '
-          f'dataset-size runs to decide whether to grow the dataset further)')
+        # Full candidate materialisation is needed only once after distributed training. Other
+        # ranks never allocate the potentially large held-out candidate dictionaries.
+        eval_examples = _build_candidate_sets(
+            eval_groups, concept_store, eval_variant, max_aliases,
+        )
+        if not eval_examples:
+            raise SystemExit('No held-out candidate sets could be built.')
+        print(f'Held-out candidate-set evaluation examples: {len(eval_examples)}')
+        candidate_set_result = _run_candidate_set_evaluation(
+            model, eval_examples, batch_size=args.eval_batch_size,
+            prediction_output=Path(args.prediction_output) if args.prediction_output else None,
+        )
+        result_path = Path(args.output_dir) / 'final_eval_result.json'
+        with result_path.open('w', encoding='utf-8') as f:
+            json.dump(candidate_set_result, f, indent=2)
+        print(f'Primary candidate-set evaluation (global): {candidate_set_result.get("global")}')
+        print(f'(full per-vocabulary breakdown saved to {result_path} -- compare this file across '
+              f'dataset-size runs to decide whether to grow the dataset further)')
 
 
 if __name__ == '__main__':

@@ -13,7 +13,9 @@ from audit_mapping_conflicts import classify_mapping_conflict
 from audit_retrieval import _rrf_rank, audit as audit_retrieval
 from probe_live_retrieval import _fused_gold_rank, _unique_ids
 from concept_rendering import RenderVariant
-from build_training_data import QueryUnit, _MiningOutput, _mine_negatives
+from build_training_data import (
+    QueryUnit, _MiningOutput, _build_query_units, _mine_negatives, _noisy_alias,
+)
 from mine_cross_vocab_positives import (
     _direction_key, _offer_bounded_mapping, _order_and_cap_units,
     _retrieval_miss_record,
@@ -36,6 +38,8 @@ from train_reranker import (
     _teacher_gold_margin,
     _training_negatives,
     _flatten_to_rows,
+    _build_prepared_dataset,
+    _load_prepared_dataset,
 )
 from query_quality import contextless_query_reason
 from bioterms.etc.consts import DEFAULT_RERANKER_MODEL
@@ -176,6 +180,42 @@ async def test_mining_retains_fuzzy_recall_as_separate_evidence():
     assert pool[0]['sources'] == ['fuzzy_lexical']
 
 
+def test_noisy_query_units_are_deterministic_and_keep_clean_aliases():
+    concept = types.SimpleNamespace(embedding_items=lambda: [
+        EmbeddingItem(
+            item_id='C1:alias:0', concept_id='C1', kind=EmbeddingKind.ALIAS,
+            text='Congenital retinal hemorrhage',
+        ),
+    ])
+
+    first = _build_query_units(
+        ConceptPrefix.HPO, {'C1': concept}, 4, noisy_query_fraction=1.0,
+        noise_types=('typo',),
+    )
+    second = _build_query_units(
+        ConceptPrefix.HPO, {'C1': concept}, 4, noisy_query_fraction=1.0,
+        noise_types=('typo',),
+    )
+
+    assert first[0].item.text == 'Congenital retinal hemorrhage'
+    assert first[0].query_kind == 'alias'
+    assert first[1].query_kind == 'alias_typo'
+    assert first[1].item.text == second[1].item.text
+    assert first[1].item.text != first[0].item.text
+
+
+def test_missing_word_augmentation_skips_single_word_aliases():
+    multi = EmbeddingItem(
+        item_id='multi', concept_id='C1', kind=EmbeddingKind.ALIAS, text='alpha syndrome',
+    )
+    single = EmbeddingItem(
+        item_id='single', concept_id='C1', kind=EmbeddingKind.ALIAS, text='syndrome',
+    )
+
+    assert _noisy_alias(multi, 'missing_word', 0).text == 'syndrome'
+    assert _noisy_alias(single, 'missing_word', 0) is None
+
+
 def test_live_probe_truncates_items_before_concept_deduplication():
     items = [('other', 'alias 1', 1.0), ('other', 'alias 2', 0.9),
              ('gold', 'gold alias', 0.8)]
@@ -207,6 +247,60 @@ def test_training_discovers_shards_and_applies_vocabulary_masks(tmp_path):
 
     assert paths == [hpo_path.resolve(), snomed_path.resolve()]
     assert [group['prefix'] for group in groups] == ['hpo']
+
+
+def test_retrieval_projection_discards_only_unused_training_candidates(tmp_path):
+    path = tmp_path / 'aliases.hpo.jsonl'
+    group = _group('hpo', 'h1', 'g1', 'query')
+    group['negatives'] = [{'concept_id': f'n{i}'} for i in range(6)]
+    group['candidate_pool'] = [
+        {'concept_id': 'g1', 'role': 'gold'},
+        {'concept_id': 'n0', 'role': 'retrieval_negative'},
+    ]
+    path.write_text(json.dumps(group) + '\n')
+
+    train_projection = _load_groups(
+        [path], compact_retrieval_negatives=2, eval_fraction=0.0,
+    )[0]
+    assert [item['concept_id'] for item in train_projection['negatives']] == ['n0', 'n1']
+    assert train_projection['candidate_pool'] == []
+
+    eval_projection = _load_groups(
+        [path], compact_retrieval_negatives=2, eval_fraction=1.0,
+    )[0]
+    assert len(eval_projection['negatives']) == 6
+    assert [item['concept_id'] for item in eval_projection['candidate_pool']] == ['g1', 'n0']
+
+
+def test_prepared_dataset_is_disk_backed_and_reusable(tmp_path):
+    groups = [{
+        'prefix': 'hpo', 'query_id': 'q1', 'query': 'abnormal eye',
+        'gold_concept_id': 'g1', 'query_kind': 'alias',
+        'negatives': [{'concept_id': 'n1'}], 'candidate_pool': [],
+    }]
+    concepts = {
+        ('hpo', 'g1'): {'label': 'Abnormality of eye', 'synonyms': [], 'definition': None},
+        ('hpo', 'n1'): {'label': 'Abnormality of ear', 'synonyms': [], 'definition': None},
+    }
+    args = types.SimpleNamespace(
+        negatives_per_query=1, seed=42, preferred_label_query_keep_probability=1.0,
+        negative_sampling='retrieval', ranking_score_key=None,
+        training_objective='contrastive', distillation_temperature=1.0,
+    )
+    prepared = tmp_path / 'prepared'
+    signature = {'schema_version': 1, 'test': True}
+
+    dataset = _build_prepared_dataset(
+        prepared, groups, groups, concepts, args, signature, max_aliases=6,
+    )
+    assert len(dataset) == 1
+    assert (prepared / 'train.arrow' / 'dataset_info.json').exists()
+
+    loaded, eval_groups, manifest = _load_prepared_dataset(prepared, signature)
+    assert len(loaded) == 1
+    assert loaded.cache_files
+    assert eval_groups[0]['query_id'] == 'q1'
+    assert manifest['train_rows'] == 1
 
 
 def _group(prefix: str, query_id: str, gold: str, query: str) -> dict:

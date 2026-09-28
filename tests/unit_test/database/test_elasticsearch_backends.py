@@ -70,6 +70,7 @@ async def test_document_save_uses_concept_id_as_bulk_document_id(monkeypatch):
     mapping = client.indices.created[0][1]['mappings']['properties']
     assert mapping['label']['analyzer'] == 'bts_ngram'
     assert mapping['label']['fields']['fuzzy']['analyzer'] == 'standard'
+    assert mapping['conceptId']['fields']['fuzzy']['analyzer'] == 'standard'
 
 
 @pytest.mark.asyncio

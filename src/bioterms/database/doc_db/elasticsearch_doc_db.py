@@ -3,7 +3,7 @@
 from typing import AsyncIterator
 from uuid import UUID
 
-from elasticsearch import AsyncElasticsearch
+from elasticsearch import AsyncElasticsearch, BadRequestError
 from elasticsearch.helpers import async_bulk
 
 from bioterms.etc.consts import CONFIG, LOGGER
@@ -115,6 +115,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
     _client: AsyncElasticsearch | None = None
 
     def __init__(self, client: AsyncElasticsearch | None = None):
+        self._existing_indices: set[str] = set()
         if client is not None:
             self._client = client
 
@@ -131,6 +132,15 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
     def _index_name(self, prefix: ConceptPrefix) -> str:
         return f'{_index_part(CONFIG.elasticsearch_index_prefix)}-concept-{_index_part(prefix.value)}'
 
+    async def _index_exists(self, name: str) -> bool:
+        """Cache immutable vocabulary-index existence for high-volume search paths."""
+        if name in self._existing_indices:
+            return True
+        exists = bool(await self.client.indices.exists(index=name))
+        if exists:
+            self._existing_indices.add(name)
+        return exists
+
     @property
     def users(self) -> ElasticsearchUserRepository:
         return ElasticsearchUserRepository(
@@ -146,7 +156,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
 
     async def _ensure_index(self, prefix: ConceptPrefix) -> str:
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             LOGGER.info('Creating Elasticsearch concept index: %s', name)
             autocomplete = {
                 'type': 'text', 'analyzer': 'bts_ngram', 'search_analyzer': 'standard',
@@ -165,15 +175,16 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
                     }}},
                 },
                 mappings={'properties': {
-                    'conceptId': {'type': 'keyword', 'fields': {'search': {
-                        **autocomplete, 'fields': {'fuzzy': fuzzy_text},
-                    }}},
+                    'conceptId': {'type': 'keyword', 'fields': {
+                        'search': autocomplete, 'fuzzy': fuzzy_text,
+                    }},
                     'prefix': {'type': 'keyword'},
                     'label': {**autocomplete, 'fields': {
                         'exact': {'type': 'keyword'}, 'fuzzy': fuzzy_text,
                     }},
                     'synonyms': {**autocomplete, 'fields': {'fuzzy': fuzzy_text}},
                 }})
+            self._existing_indices.add(name)
         return name
 
     async def create_index(self, prefix, field, unique=False, overwrite=False):
@@ -223,13 +234,13 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
 
     async def count_terms(self, prefix):
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return 0
         return int((await self.client.count(index=name))['count'])
 
     async def get_terms_iter(self, prefix, limit=0, model_class=Concept) -> AsyncIterator[ConceptUnion]:
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return
         remaining = limit if limit > 0 else None
         search_after = None
@@ -255,7 +266,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
         if not concept_ids:
             return
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return
         response = await self.client.mget(index=name, ids=concept_ids)
         for doc in response['docs']:
@@ -264,9 +275,10 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
 
     async def delete_all_for_label(self, prefix):
         name = self._index_name(prefix)
-        if await self.client.indices.exists(index=name):
+        if await self._index_exists(name):
             LOGGER.info('Deleting Elasticsearch concept index: %s', name)
             await self.client.indices.delete(index=name)
+            self._existing_indices.discard(name)
         await self._ensure_index(prefix)
 
     @staticmethod
@@ -278,7 +290,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
         if not search_query.words:
             return
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return
         response = await self.client.search(
             index=name, size=limit,
@@ -305,16 +317,14 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
         if not fuzzy_words:
             return
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return
         fuzzy_query = ' '.join(fuzzy_words)
-        response = await self.client.search(
-            index=name, size=limit, source=False,
-            query={'dis_max': {'queries': [
+        queries = [
                 {'multi_match': {
                     'query': fuzzy_query,
                     'fields': ['label.fuzzy^3', 'synonyms.fuzzy^2',
-                               'conceptId.search.fuzzy'],
+                               'conceptId.fuzzy'],
                     'type': 'best_fields', 'operator': 'or',
                     'minimum_should_match': CONFIG.search_fuzzy_minimum_should_match,
                     'fuzziness': 'AUTO:4,7', 'prefix_length': 1,
@@ -329,14 +339,31 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
                     'max_expansions': CONFIG.search_fuzzy_max_expansions,
                     'fuzzy_transpositions': True,
                 }},
-            ]}},
-        )
+            ]
+        try:
+            response = await self.client.search(
+                index=name, size=limit, source=False,
+                query={'dis_max': {'queries': queries}},
+            )
+        except BadRequestError as exc:
+            if 'too many clauses' not in str(exc).lower():
+                raise
+            # Long aliases in very large vocabularies can expand beyond Elasticsearch's
+            # Boolean-clause ceiling.  Preserve fuzzy recall with a bounded standard-field
+            # retry rather than failing the whole search/mining batch.
+            LOGGER.warning('Retrying fuzzy search with bounded expansions for %s', name)
+            conservative = dict(queries[0]['multi_match'])
+            conservative['max_expansions'] = min(10, CONFIG.search_fuzzy_max_expansions)
+            response = await self.client.search(
+                index=name, size=limit, source=False,
+                query={'multi_match': conservative},
+            )
         for hit in response['hits']['hits']:
             yield hit['_id'], float(hit['_score'] or 0.0)
 
     async def _auto_complete_iter(self, prefix, search_query: SearchQuery, limit, model_class):
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return
         response = await self.client.search(
             index=name, size=limit or 10_000,
@@ -355,7 +382,7 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
 
     async def get_random_term_ids(self, prefix, count):
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return []
         response = await self.client.search(
             index=name, size=count, source=False,

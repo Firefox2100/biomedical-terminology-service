@@ -16,6 +16,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
     _client: AsyncElasticsearch | None = None
 
     def __init__(self, client: AsyncElasticsearch | None = None):
+        self._existing_indices: set[str] = set()
         if client is not None:
             self._client = client
 
@@ -32,13 +33,22 @@ class ElasticsearchVectorDatabase(VectorDatabase):
     def _index_name(self, prefix: ConceptPrefix) -> str:
         return f'{_index_part(CONFIG.elasticsearch_index_prefix)}-vector-{_index_part(prefix.value)}'
 
+    async def _index_exists(self, name: str) -> bool:
+        """Cache immutable vocabulary-vector index existence on retrieval hot paths."""
+        if name in self._existing_indices:
+            return True
+        exists = bool(await self.client.indices.exists(index=name))
+        if exists:
+            self._existing_indices.add(name)
+        return exists
+
     async def close(self):
         if self._client is not None:
             await self._client.close()
 
     async def _ensure_index(self, prefix: ConceptPrefix) -> str:
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             LOGGER.info('Creating Elasticsearch vector index: %s', name)
             await self.client.indices.create(index=name, mappings={'properties': {
                 'itemId': {'type': 'keyword'},
@@ -52,6 +62,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
                     'similarity': 'cosine',
                 },
             }})
+            self._existing_indices.add(name)
         return name
 
     async def load_embedding_items(self, prefix, items, total_items=None) -> int:
@@ -83,7 +94,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
 
     async def get_embedded_concept_ids(self, prefix) -> set[str]:
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return set()
         result: set[str] = set()
         after = None
@@ -105,7 +116,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
 
     async def count_vectors(self, prefix) -> int:
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return 0
         return int((await self.client.count(index=name))['count'])
 
@@ -113,7 +124,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
         if limit <= 0:
             return
         name = self._index_name(prefix)
-        if not await self.client.indices.exists(index=name):
+        if not await self._index_exists(name):
             return
         candidates = max(limit, limit * CONFIG.elasticsearch_vector_num_candidates_multiplier)
         response = await self.client.search(
@@ -131,6 +142,7 @@ class ElasticsearchVectorDatabase(VectorDatabase):
 
     async def delete_vectors_for_prefix(self, prefix) -> None:
         name = self._index_name(prefix)
-        if await self.client.indices.exists(index=name):
+        if await self._index_exists(name):
             LOGGER.info('Deleting Elasticsearch vector index: %s', name)
             await self.client.indices.delete(index=name)
+            self._existing_indices.discard(name)

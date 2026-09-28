@@ -186,7 +186,15 @@ def main() -> None:
 
     from pylate import models
     concepts = _load_concepts(Path(args.concept_store_dir))
-    model = models.ColBERT(model_name_or_path=args.model)
+    model_path = Path(args.model)
+    if model_path.is_dir() and (model_path / 'modules.json').exists():
+        # Local training bundles contain PyLate's custom Dense module and may have been
+        # serialized by SentenceTransformers 5 or 6. Reuse the compatibility loader used by
+        # training/evaluation instead of asking generic ST loading to import it implicitly.
+        from train_reranker import _load_local_colbert_bundle
+        model = _load_local_colbert_bundle(str(model_path), models, 32, 64)
+    else:
+        model = models.ColBERT(model_name_or_path=args.model, trust_remote_code=True)
     allowed = set(args.include_vocabularies or [])
     allowed_files = set(args.include_files or [])
     sources = sorted(Path(args.input_dir).glob('*.jsonl'))

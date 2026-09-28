@@ -4,11 +4,14 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import time
 from contextlib import ExitStack
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from elastic_transport import ConnectionTimeout
 
 from bioterms.etc.enums import ConceptPrefix, ConceptRelationshipType, EmbeddingKind
 from bioterms.database import DocumentDatabase, GraphDatabase, VectorDatabase, get_active_doc_db, \
@@ -29,6 +32,17 @@ RECALL_SOURCES: list[str] = [
 ]
 
 
+async def _retry_retrieval(operation, attempts: int = 5):
+    """Retry isolated backend timeouts without discarding an entire long-running shard."""
+    for attempt in range(attempts):
+        try:
+            return await operation()
+        except (ConnectionTimeout, asyncio.TimeoutError):
+            if attempt + 1 >= attempts:
+                raise
+            await asyncio.sleep(min(2 ** attempt, 8))
+
+
 def _stable_hash_int(*parts: str) -> int:
     """Deterministic hash of a tuple of strings to an integer."""
     digest = hashlib.sha256(':'.join(parts).encode('utf-8')).hexdigest()
@@ -41,6 +55,7 @@ class QueryUnit:
     prefix: ConceptPrefix
     concept_id: str
     item: EmbeddingItem
+    query_kind: str = 'alias'
 
 
 @dataclass
@@ -124,9 +139,44 @@ def _iter_vocabularies(requested: list[str] | None) -> list[ConceptPrefix]:
     return sorted(prefixes, key=lambda p: p.value)
 
 
+def _noisy_alias(item: EmbeddingItem, noise_type: str, seed: int) -> EmbeddingItem | None:
+    """Return one deterministic, conservative human-error simulation for an alias."""
+    text = item.text
+    if noise_type == 'missing_word':
+        matches = list(re.finditer(r'\b[\w-]+\b', text, flags=re.UNICODE))
+        if len(matches) < 2:
+            return None
+        match = matches[seed % len(matches)]
+        noisy = (text[:match.start()] + text[match.end():]).strip()
+        noisy = re.sub(r'\s+', ' ', noisy)
+    elif noise_type == 'typo':
+        matches = [match for match in re.finditer(r'\b[^\W\d_]{4,}\b', text, flags=re.UNICODE)]
+        if not matches:
+            return None
+        match = matches[seed % len(matches)]
+        word = match.group(0)
+        offset = (seed // max(1, len(matches))) % (len(word) - 1)
+        if (seed // 17) % 2 == 0:
+            changed = word[:offset] + word[offset + 1:]
+        else:
+            changed = word[:offset] + word[offset + 1] + word[offset] + word[offset + 2:]
+        noisy = text[:match.start()] + changed + text[match.end():]
+    else:
+        raise ValueError(f'Unsupported noise type: {noise_type}')
+
+    if noisy == text or len(noisy) < 3:
+        return None
+    return EmbeddingItem(
+        item_id=f'{item.item_id}:noise:{noise_type}', concept_id=item.concept_id,
+        kind=item.kind, text=noisy,
+    )
+
+
 def _build_query_units(prefix: ConceptPrefix,
                        concepts: dict[str, Concept],
                        max_queries_per_concept: int,
+                       noisy_query_fraction: float = 0.0,
+                       noise_types: tuple[str, ...] = ('typo', 'missing_word'),
                        ) -> list[QueryUnit]:
     """Build a deterministic, order-unbiased set of alias queries."""
     units: list[QueryUnit] = []
@@ -140,6 +190,15 @@ def _build_query_units(prefix: ConceptPrefix,
 
         for query_item in alias_items[:max_queries_per_concept]:
             units.append(QueryUnit(prefix=prefix, concept_id=concept_id, item=query_item))
+            selection = _stable_hash_int(prefix.value, concept_id, query_item.item_id, 'noise')
+            if noise_types and selection % 1_000_000 < int(noisy_query_fraction * 1_000_000):
+                noise_type = noise_types[(selection // 1_000_000) % len(noise_types)]
+                noisy_item = _noisy_alias(query_item, noise_type, selection)
+                if noisy_item is not None:
+                    units.append(QueryUnit(
+                        prefix=prefix, concept_id=concept_id, item=noisy_item,
+                        query_kind=f'alias_{noise_type}',
+                    ))
 
     return units
 
@@ -285,13 +344,22 @@ async def _mine_negatives(doc_db: DocumentDatabase,
             None, transformer.embed_strings, [unit.item.text]
         ))[0]
 
-    lexical_task = doc_db.lexical_search(unit.prefix, unit.item.text, limit=candidate_pool)
+    lexical_task = _retry_retrieval(
+        lambda: doc_db.lexical_search(unit.prefix, unit.item.text, limit=candidate_pool)
+    )
     fuzzy_method = getattr(doc_db, 'fuzzy_search', None)
-    fuzzy_task = (fuzzy_method(unit.prefix, unit.item.text, limit=candidate_pool)
-                  if fuzzy_method is not None else asyncio.sleep(0, result=[]))
-    alias_task = vector_db.search_items(query_vector, unit.prefix, EmbeddingKind.ALIAS, limit=candidate_pool)
-    definition_task = vector_db.search_items(
-        query_vector, unit.prefix, EmbeddingKind.DEFINITION, limit=candidate_pool,
+    fuzzy_task = (_retry_retrieval(
+        lambda: fuzzy_method(unit.prefix, unit.item.text, limit=candidate_pool)
+    ) if fuzzy_method is not None else asyncio.sleep(0, result=[]))
+    alias_task = _retry_retrieval(
+        lambda: vector_db.search_items(
+            query_vector, unit.prefix, EmbeddingKind.ALIAS, limit=candidate_pool,
+        )
+    )
+    definition_task = _retry_retrieval(
+        lambda: vector_db.search_items(
+            query_vector, unit.prefix, EmbeddingKind.DEFINITION, limit=candidate_pool,
+        )
     )
     lexical_hits, fuzzy_hits, alias_hits, definition_hits = await asyncio.gather(
         lexical_task, fuzzy_task, alias_task, definition_task,
@@ -500,7 +568,11 @@ async def _run(args: argparse.Namespace) -> None:
                     f'equivalence -- these will not be mined as negatives for each other.'
                 )
 
-            units = _build_query_units(prefix, concepts, args.max_queries_per_concept)
+            units = _build_query_units(
+                prefix, concepts, args.max_queries_per_concept,
+                noisy_query_fraction=args.noisy_query_fraction,
+                noise_types=tuple(args.noise_types),
+            )
             manifest[prefix.value] = len(units)
             stats.vocabularies[prefix.value] = len(units)
             print(f'[{prefix.value}] {len(concepts)} concepts, {len(units)} candidate query units')
@@ -536,7 +608,7 @@ async def _run(args: argparse.Namespace) -> None:
                     'prefix': unit.prefix.value,
                     'gold_concept_id': unit.concept_id,
                     'query': unit.item.text,
-                    'query_kind': 'alias',
+                    'query_kind': unit.query_kind,
                     'gold_retrieval_evidence': gold_evidence,
                     'candidate_pool': candidate_pool,
                     'negatives': negatives,
@@ -593,6 +665,8 @@ async def _run(args: argparse.Namespace) -> None:
             'skip': args.skip,
             'limit': args.limit,
             'per_vocabulary_limit': args.per_vocabulary_limit,
+            'noisy_query_fraction': args.noisy_query_fraction,
+            'noise_types': args.noise_types,
             'elapsed_seconds': time.perf_counter() - start_time,
             **stats.as_dict(),
         }, stats_file, indent=2)
@@ -641,6 +715,15 @@ def main() -> None:
         help='Cap on query units per concept, hash-selected from its aliases.',
     )
     parser.add_argument(
+        '--noisy-query-fraction', type=float, default=0.0,
+        help='Fraction of clean alias units that also receive one deterministic noisy counterpart.',
+    )
+    parser.add_argument(
+        '--noise-types', nargs='+', choices=('typo', 'missing_word'),
+        default=['typo', 'missing_word'],
+        help='Human-error simulations used by --noisy-query-fraction.',
+    )
+    parser.add_argument(
         '--negatives-per-query', type=int, default=8,
         help='Target negatives kept per query after source-coverage and rank-band selection.',
     )
@@ -664,6 +747,8 @@ def main() -> None:
         parser.error('--per-vocabulary-limit must be >= 1 when set')
     if args.max_queries_per_concept < 1:
         parser.error('--max-queries-per-concept must be >= 1')
+    if not 0.0 <= args.noisy_query_fraction <= 1.0:
+        parser.error('--noisy-query-fraction must be between 0 and 1')
     if args.negatives_per_query < 1:
         parser.error('--negatives-per-query must be >= 1')
     if not 0 <= args.min_negatives_per_query <= args.negatives_per_query:
