@@ -38,6 +38,11 @@ _allowed_redirect_regex = [
 BEARER_SECURITY = HTTPBearer()
 
 VOCABULARY_CACHE_CONTROL = 'public, max-age=86400, stale-while-revalidate=172800'
+SERVICE_NAME = 'BioMedical Terminology Service'
+# JSON-LD keys and vocabulary for the schema.org structured data on UI pages
+LD_CONTEXT = '@context'
+LD_TYPE = '@type'
+SCHEMA_ORG = 'https://schema.org'
 
 
 class CacheControlMiddleware(BaseHTTPMiddleware):
@@ -256,29 +261,29 @@ def build_structured_data(base_url: str) -> list[dict]:
     homepage_url = base_url + '/'
 
     website_ld = {
-        '@context': 'https://schema.org',
-        '@type': 'WebSite',
-        'name': 'BioMedical Terminology Service',
+        LD_CONTEXT: SCHEMA_ORG,
+        LD_TYPE: 'WebSite',
+        'name': SERVICE_NAME,
         'url': homepage_url,
         'description': 'A service for using with biomedical terminologies, '
                        'such as ontologies or vocabularies.',
     }
 
     organisation_ld = {
-        '@context': 'https://schema.org',
-        '@type': 'Organization',
-        'name': 'BioMedical Terminology Service',
+        LD_CONTEXT: SCHEMA_ORG,
+        LD_TYPE: 'Organization',
+        'name': SERVICE_NAME,
         'url': homepage_url,
         'creator': {
-            '@type': 'Person',
+            LD_TYPE: 'Person',
             'name': 'Patrick Wang (@Firefox2100)',
         },
     }
 
     webapp_ld = {
-        '@context': 'https://schema.org',
-        '@type': 'WebApplication',
-        'name': 'BioMedical Terminology Service',
+        LD_CONTEXT: SCHEMA_ORG,
+        LD_TYPE: 'WebApplication',
+        'name': SERVICE_NAME,
         'url': homepage_url,
         'applicationCategory': 'MedicalApplication',
         'operatingSystem': 'All',

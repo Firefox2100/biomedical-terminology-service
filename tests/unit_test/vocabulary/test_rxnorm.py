@@ -72,3 +72,38 @@ def test_concepts_and_relationships_follow_rrf_direction(monkeypatch, tmp_path):
         == ConceptRelationshipType.RXNORM_RELATIONSHIP
     assert graph.edges['300', '200', 'replaced_by']['label'] \
         == ConceptRelationshipType.REPLACED_BY
+
+
+def test_concept_label_prefers_preferred_then_active_then_first_atom(monkeypatch, tmp_path):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    directory = tmp_path / 'rxnorm'
+    directory.mkdir()
+
+    def atom(rxcui, ispref, tty, text, suppress):
+        return _rrf(rxcui, 'ENG', '', '', '', '', ispref, '', '', '', '', 'RXNORM',
+                    tty, rxcui, text, '', suppress, '')
+
+    (directory / 'RXNCONSO.RRF').write_text(
+        # 1: a later preferred active atom wins over earlier active and suppressed ones.
+        atom('1', 'Y', 'SY', 'Suppressed first', 'O')
+        + atom('1', 'N', 'SY', 'Active synonym', 'N')
+        + atom('1', 'Y', 'IN', ' Preferred name ', 'N')
+        + atom('1', 'Y', 'IN', 'Active synonym', 'N')
+        # 2: no preferred atom, so the first active atom is the label.
+        + atom('2', 'N', 'SY', '  ', 'N')
+        + atom('2', 'N', 'SCD', 'First active', 'N')
+        # 3: every atom suppressed, so the concept is deprecated with its first label.
+        + atom('3', 'Y', 'BN', 'Old brand', 'O')
+        + atom('3', 'Y', 'BN', 'Older brand', 'E')
+    )
+
+    concepts = rxnorm.load_rxnorm_concepts()
+
+    assert concepts['1'].label == 'Preferred name'
+    assert concepts['1'].synonyms == ['Suppressed first', 'Active synonym']
+    assert concepts['1'].status == ConceptStatus.ACTIVE
+    assert concepts['2'].label == 'First active'
+    assert concepts['2'].synonyms is None
+    assert concepts['3'].label == 'Old brand'
+    assert concepts['3'].synonyms == ['Older brand']
+    assert concepts['3'].status == ConceptStatus.DEPRECATED

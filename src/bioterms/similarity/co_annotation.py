@@ -22,6 +22,46 @@ except ImportError:
     cp = None
 
 
+@njit(cache=True, nogil=True)
+def _sorted_intersection_size(annotation_ids, p1, e1, p2, e2):
+    """Count the annotation IDs shared by two sorted CSR row slices."""
+    inter = 0
+    while p1 < e1 and p2 < e2:
+        a, b = annotation_ids[p1], annotation_ids[p2]
+        if a < b:
+            p1 += 1
+        elif a > b:
+            p2 += 1
+        else:
+            inter += 1
+            p1 += 1
+            p2 += 1
+    return inter
+
+
+@njit(cache=True, nogil=True)
+def _pair_similarity(inter, len_1, len_2, total_annotation_count, threshold):
+    """
+    Score one pair as NPMI x Jaccard over their annotation sets, or NaN when the pair shares
+    nothing or falls below the threshold. Mirrors the `score` CUDA kernel below.
+    """
+    if inter == 0:
+        return np.nan
+    jaccard = inter / (len_1 + len_2 - inter)
+    if jaccard < threshold:
+        return np.nan
+    if inter == total_annotation_count:
+        npmi = 1.0
+    else:
+        numerator = (inter * total_annotation_count) / (len_1 * len_2)
+        if numerator <= 0.0:
+            return np.nan
+        denom = math.log(total_annotation_count / inter)
+        npmi = 1.0 if abs(denom) <= 1e-15 else (1.0 + math.log(numerator) / denom) / 2.0
+    similarity = npmi * jaccard
+    return similarity if similarity >= threshold and similarity >= 0.0 else np.nan
+
+
 @njit(cache=True, nogil=True, parallel=True)
 def _score_pairs_cpu(row_ptr, annotation_ids, lhs, rhs, total_annotation_count, threshold):
     output = np.empty(lhs.shape[0], dtype=np.float64)
@@ -29,37 +69,8 @@ def _score_pairs_cpu(row_ptr, annotation_ids, lhs, rhs, total_annotation_count, 
         arow, brow = lhs[k], rhs[k]
         p1, e1 = row_ptr[arow], row_ptr[arow + 1]
         p2, e2 = row_ptr[brow], row_ptr[brow + 1]
-        len_1, len_2 = e1 - p1, e2 - p2
-        inter = 0
-        while p1 < e1 and p2 < e2:
-            a, b = annotation_ids[p1], annotation_ids[p2]
-            if a < b:
-                p1 += 1
-            elif a > b:
-                p2 += 1
-            else:
-                inter += 1
-                p1 += 1
-                p2 += 1
-        if inter == 0:
-            output[k] = np.nan
-            continue
-        union = len_1 + len_2 - inter
-        jaccard = inter / union
-        if jaccard < threshold:
-            output[k] = np.nan
-            continue
-        if inter == total_annotation_count:
-            npmi = 1.0
-        else:
-            numerator = (inter * total_annotation_count) / (len_1 * len_2)
-            if numerator <= 0.0:
-                output[k] = np.nan
-                continue
-            denom = math.log(total_annotation_count / inter)
-            npmi = 1.0 if abs(denom) <= 1e-15 else (1.0 + math.log(numerator) / denom) / 2.0
-        similarity = npmi * jaccard
-        output[k] = similarity if similarity >= threshold and similarity >= 0.0 else np.nan
+        inter = _sorted_intersection_size(annotation_ids, p1, e1, p2, e2)
+        output[k] = _pair_similarity(inter, e1 - p1, e2 - p2, total_annotation_count, threshold)
     return output
 
 

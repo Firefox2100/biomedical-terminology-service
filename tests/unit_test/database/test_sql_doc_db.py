@@ -12,8 +12,10 @@ real Postgres container, since PostgreSQL is the primary supported SQL backend.
 import pytest
 import pytest_asyncio
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from bioterms.database.doc_db import sql_doc_db
 from bioterms.database.doc_db.sql_doc_db import SqlDocumentDatabase
 from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
@@ -176,3 +178,54 @@ async def test_user_repository_api_keys(doc_db):
 
     await users.delete('bob')
     assert await users.get('bob') is None
+
+
+async def _side_table_rows(db, table_name):
+    async with db._engine.connect() as conn:
+        rows = (await conn.execute(text(f'SELECT concept_id FROM "{table_name}"'))).all()
+    return sorted(row[0] for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('mode', 'side_table'), [
+    (SqlDocumentDatabase._NATIVE_NONE, 'concept_hpo_ngram'),
+    (SqlDocumentDatabase._NATIVE_SQLITE_TRIGRAM, 'concept_hpo_fts'),
+])
+async def test_save_terms_replaces_search_side_rows_across_batches(mode, side_table):
+    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+    db = SqlDocumentDatabase(engine, batch_size=2)
+
+    async def forced_mode():
+        return mode
+
+    db._get_native_search_mode = forced_mode
+    await db.initialize()
+    try:
+        await db.save_terms([make_concept(f'HP:{i}', f'Fever {i}') for i in range(5)])
+        before = await _side_table_rows(db, side_table)
+        await db.save_terms([make_concept('HP:1', 'Fever one'), make_concept('HP:9', 'Fever nine')])
+        after = await _side_table_rows(db, side_table)
+
+        assert set(after) == {f'HP:{i}' for i in (0, 1, 2, 3, 4, 9)}
+        if mode == SqlDocumentDatabase._NATIVE_SQLITE_TRIGRAM:
+            # One mirrored FTS row per concept: re-saving replaces rather than duplicates.
+            assert after == sorted(set(after))
+        else:
+            # Unchanged concepts keep their n-grams; the re-saved one is rebuilt, not appended.
+            assert after.count('HP:0') == before.count('HP:0')
+            assert after.count('HP:1') == len(make_concept('HP:1', 'Fever one').n_grams())
+        terms = {t.concept_id: t.label for t in await db.get_terms(ConceptPrefix.HPO)}
+        assert terms['HP:1'] == 'Fever one'
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_save_terms_falls_back_to_manual_upsert(doc_db, monkeypatch):
+    monkeypatch.setattr(sql_doc_db, '_build_upsert_stmt', lambda *args, **kwargs: None)
+
+    await doc_db.save_terms([make_concept('HP:1', 'Foo'), make_concept('HP:2', 'Bar')])
+    await doc_db.save_terms([make_concept('HP:1', 'Foo updated'), make_concept('HP:3', 'Baz')])
+
+    terms = {t.concept_id: t.label for t in await doc_db.get_terms(ConceptPrefix.HPO)}
+    assert terms == {'HP:1': 'Foo updated', 'HP:2': 'Bar', 'HP:3': 'Baz'}

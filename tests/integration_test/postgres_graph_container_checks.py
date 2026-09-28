@@ -385,9 +385,10 @@ async def test_save_vocabulary_graph_keeps_nodes_and_edges_if_closure_build_fail
     monkeypatch.setattr(type(graph_db), '_build_closure', failing_build_closure)
 
     concepts = [make_concept(ConceptPrefix.HPO, cid) for cid in ('HP:leaf', 'HP:mid1', 'HP:mid2', 'HP:root')]
+    hierarchy = hpo_hierarchy_graph()
 
     with pytest.raises(RuntimeError, match='simulated closure failure'):
-        await graph_db.save_vocabulary_graph(concepts, hpo_hierarchy_graph())
+        await graph_db.save_vocabulary_graph(concepts, hierarchy)
 
     assert await graph_db.count_terms(ConceptPrefix.HPO) == 4
 

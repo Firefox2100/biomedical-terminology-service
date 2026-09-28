@@ -407,3 +407,128 @@ async def test_download_vocabulary_skips_files_that_already_exist(monkeypatch, t
         'https://ftp.uniprot.org/pub/databases/uniprot/current_release/'
         'knowledgebase/complete/uniprot_trembl.dat.gz'
     )
+
+
+def test_parse_go_mappings_merges_evidence_per_go_id():
+    lines = [
+        'AC   P68104; P04719;\n',
+        'DR   GO; GO:0005737; C:cytoplasm; IDA:UniProtKB.\n',
+        'DR   GO; GO:0005737; C:cytoplasm; IEA:Ensembl.\n',
+        'DR   GO; GO:0005737; C:cytoplasm; IDA:UniProtKB.\n',
+        'DR   GO; GO:0003924; F:GTPase activity; TAS:Reactome.\n',
+        'DR   GO; malformed line.\n',
+    ]
+
+    accession, mappings = uniprot._parse_go_mappings(lines)
+
+    assert accession == 'P68104'
+    assert mappings == {
+        '0005737': {
+            'aspect': 'cellular_component', 'term': 'cytoplasm',
+            'evidence': ['IDA:UniProtKB', 'IEA:Ensembl'],
+        },
+        '0003924': {
+            'aspect': 'molecular_function', 'term': 'GTPase activity',
+            'evidence': ['TAS:Reactome'],
+        },
+    }
+
+
+def test_parse_go_mappings_without_accession():
+    assert uniprot._parse_go_mappings(['DR   GO; GO:0005737; C:cytoplasm; IDA:UniProtKB.\n'])[0] is None
+
+
+def test_build_record_concepts_adds_deprecated_secondary_stubs():
+    record = {
+        'accession': 'P68104', 'secondary_accessions': ['P04719', 'Q6IQ15'], 'reviewed': True,
+        'label': 'Elongation factor 1-alpha 1', 'synonyms': ['EF-1-alpha-1'],
+        'organism_name': 'Homo sapiens (Human)', 'organism_tax_id': '9606',
+    }
+
+    concepts, replacements = uniprot._build_record_concepts(record)
+
+    assert [c.concept_id for c in concepts] == ['P68104', 'P04719', 'Q6IQ15']
+    assert concepts[0].status.value == 'active'
+    assert all(c.status.value == 'deprecated' for c in concepts[1:])
+    assert all(c.label == 'Elongation factor 1-alpha 1' and not c.synonyms for c in concepts[1:])
+    assert replacements == [('P04719', 'P68104'), ('Q6IQ15', 'P68104')]
+
+
+def test_de_name_regexes_strip_terminator_and_evidence():
+    lines = [
+        'AC   P1;\n',
+        'DE   RecName: Full=Kinase; with semicolon {ECO:0000256|ARBA:1} ;  \n',
+        'DE            Short=KIN {ECO:1};\n',
+    ]
+
+    record = uniprot._parse_dat_record(lines)
+
+    assert record['label'] == 'Kinase; with semicolon'
+    assert record['synonyms'] == ['KIN']
+
+
+def test_regexes_stay_linear_on_pathological_lines():
+    # Regression for super-linear backtracking (Sonar S8786): these took seconds before.
+    import time
+
+    padding = ' ' * 50000
+    lines = [
+        'AC   P1;\n',
+        'DE   RecName: Full=a' + padding + 'b\n',
+        'DE   AltName: Full=' + 'a' * 5000 + padding + 'b\n',
+        'GN   Name=' + padding + 'x;\n',
+        'DR   HGNC; HGNC:1;' + padding + '\n',
+    ]
+
+    started = time.perf_counter()
+    uniprot._parse_dat_record(lines)
+    assert time.perf_counter() - started < 0.5
+
+
+class _RecordingDocDb:
+    def __init__(self):
+        self.batches = []
+
+    async def save_terms(self, terms, no_upsert):
+        self.batches.append(([t.concept_id for t in terms], no_upsert))
+
+
+class _RecordingGraphDb:
+    def __init__(self, symbol_count):
+        self.symbol_count = symbol_count
+        self.graphs = []
+        self.annotations = []
+
+    async def count_terms(self, _prefix):
+        return self.symbol_count
+
+    async def save_vocabulary_graph(self, concepts, graph):
+        self.graphs.append(sorted((source, target) for source, target, *_ in graph))
+
+    async def save_annotations(self, annotations):
+        self.annotations.append([a.concept_id_to for a in annotations])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('symbol_count', [1, 0])
+async def test_load_vocabulary_from_file_streams_in_batches_online(monkeypatch, tmp_path, symbol_count):
+    monkeypatch.setattr(uniprot, '_BATCH_SIZE', 3)
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    uniprot_dir = tmp_path / 'uniprot'
+    uniprot_dir.mkdir()
+    _write_gz(uniprot_dir / 'uniprot_sprot.dat.gz', REVIEWED_HUMAN_RECORD + UNREVIEWED_NONHUMAN_RECORD)
+    _write_gz(uniprot_dir / 'uniprot_trembl.dat.gz', UNREVIEWED_WITH_EVIDENCE_TAGS_RECORD)
+    doc_db, graph_db = _RecordingDocDb(), _RecordingGraphDb(symbol_count)
+
+    await uniprot.load_vocabulary_from_file(doc_db=doc_db, graph_db=graph_db)
+
+    # The reviewed entry and its three secondaries fill the first batch; the rest of each
+    # file is flushed as a remainder batch, always with idempotent upserts.
+    assert doc_db.batches == [
+        (['P68104', 'P04719', 'P04720', 'Q6IQ15'], False),
+        (['P0DTD1'], False),
+        (['A0A0A0MS99'], False),
+    ]
+    assert graph_db.graphs[0] == [('P04719', 'P68104'), ('P04720', 'P68104'), ('Q6IQ15', 'P68104')]
+    # Symbol annotations are only saved when HGNC symbols are already loaded.
+    assert graph_db.annotations == ([['EEF1A1'], [], []] if symbol_count else [])

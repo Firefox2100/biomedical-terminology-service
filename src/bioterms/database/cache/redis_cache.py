@@ -18,6 +18,7 @@ from .cache import Cache
 CacheModel = TypeVar('CacheModel', bound=BaseModel)
 CACHE_PAYLOAD_VERSION = 1
 REFRESH_LOCK_KEY = 'lock:cache_rebuild'
+DATASET_VERSION_KEY = 'version:dataset'
 
 
 class RedisCache(Cache):
@@ -285,14 +286,14 @@ class RedisCache(Cache):
         Rotate the dataset version in the cache. This is called when database is updated, and controls
         whether the cached results in proxy are still valid or not.
         """
-        await self.db.set('version:dataset', datetime.now(timezone.utc).isoformat())
+        await self.db.set(DATASET_VERSION_KEY, datetime.now(timezone.utc).isoformat())
 
     async def get_dataset_last_modified(self) -> datetime:
         """
         Get the last modified timestamp of the dataset from the cache.
         :return: The last modified timestamp of the dataset.
         """
-        key = 'version:dataset'
+        key = DATASET_VERSION_KEY
         value = await self.db.get(key)
 
         if value is None:
@@ -306,10 +307,10 @@ class RedisCache(Cache):
         """
         Purge cached data without changing the dataset generation validator.
         """
-        dataset_version = await self.db.get('version:dataset')
+        dataset_version = await self.db.get(DATASET_VERSION_KEY)
         await self.db.flushdb()
         if dataset_version is not None:
-            await self.db.set('version:dataset', dataset_version)
+            await self.db.set(DATASET_VERSION_KEY, dataset_version)
 
     async def close(self) -> None:
         """

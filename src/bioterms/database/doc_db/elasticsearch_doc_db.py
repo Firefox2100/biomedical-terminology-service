@@ -246,10 +246,10 @@ class ElasticsearchDocumentDatabase(DocumentDatabase):
         search_after = None
         while remaining is None or remaining > 0:
             size = min(1000, remaining) if remaining is not None else 1000
-            kwargs = dict(
-                index=name, query={'match_all': {}}, size=size,
-                sort=[{'conceptId': 'asc'}],
-            )
+            kwargs = {
+                'index': name, 'query': {'match_all': {}}, 'size': size,
+                'sort': [{'conceptId': 'asc'}],
+            }
             if search_after is not None:
                 kwargs['search_after'] = search_after
             response = await self.client.search(**kwargs)

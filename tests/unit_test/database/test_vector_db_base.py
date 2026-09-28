@@ -236,3 +236,57 @@ async def test_insert_concepts_propagates_embedding_exception(monkeypatch):
 
     with pytest.raises(RuntimeError, match='embedding failed'):
         await vector_db.insert_concepts(concepts=concepts, prefix=ConceptPrefix.HPO)
+
+
+@pytest.mark.asyncio
+async def test_insert_concepts_accepts_async_iterator_and_adjusts_total(monkeypatch):
+    seen_totals = []
+
+    def fake_embed_concepts(_self, concepts, total_concepts=None):
+        seen_totals.append(total_concepts)
+
+        async def batches():
+            async for concept in concepts:
+                yield [(
+                    EmbeddingItem(item_id=f'{concept.concept_id}:alias:0', concept_id=concept.concept_id,
+                                  kind=EmbeddingKind.ALIAS, text=concept.label),
+                    [0.1, 0.2, 0.3],
+                )]
+
+        return batches()
+
+    monkeypatch.setattr('bioterms.embedding.ConceptTransformer.embed_concepts', fake_embed_concepts)
+    monkeypatch.setattr('bioterms.embedding.ConceptTransformer.__init__', lambda self, *a, **k: None)
+
+    async def concept_stream():
+        for concept_id in ('HP:0000001', 'HP:0000002', 'HP:0000003'):
+            yield make_concept(concept_id, concept_id)
+
+    vector_db = FakeVectorDatabase(already_embedded={'HP:0000001'})
+
+    written = await vector_db.insert_concepts(concept_stream(), ConceptPrefix.HPO, total_concepts=3)
+
+    assert written == 2
+    assert [item.concept_id for item in vector_db.loaded_items] == ['HP:0000002', 'HP:0000003']
+    # Progress totals exclude concepts a previous run already embedded.
+    assert seen_totals == [2]
+
+
+@pytest.mark.asyncio
+async def test_insert_concepts_empty_list_skips_backend():
+    vector_db = FakeVectorDatabase()
+    vector_db.get_embedded_concept_ids = None  # would raise if called
+
+    assert await vector_db.insert_concepts([], ConceptPrefix.HPO) == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_concepts_rejects_unsupported_input(monkeypatch):
+    monkeypatch.setattr(
+        'bioterms.embedding.text_transformer.TextTransformer.embed_strings',
+        FakeTextTransformer.embed_strings,
+    )
+    vector_db = FakeVectorDatabase()
+
+    with pytest.raises(TypeError, match='list or an AsyncIterator'):
+        await vector_db.insert_concepts(tuple(), ConceptPrefix.HPO)

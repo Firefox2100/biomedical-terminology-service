@@ -362,6 +362,86 @@ def edge_iter(graph: nx.DiGraph | nx.MultiDiGraph | Iterable[tuple[str, str, Opt
         raise TypeError('Graph must be a DiGraph, MultiDiGraph, or an iterable of edge tuples.')
 
 
+async def _download_attempt(download_client: httpx.AsyncClient,
+                            url: str,
+                            file_path: str,
+                            absolute_file_path: str,
+                            headers: dict[str, str] | None,
+                            ):
+    """
+    Run one download attempt for download_file, resuming from any bytes already on disk.
+    Transport and HTTP status errors propagate so the caller can retry.
+    """
+    resume_from = (
+        await aiofiles.os.path.getsize(absolute_file_path)
+        if await aiofiles.os.path.exists(absolute_file_path)
+        else 0
+    )
+
+    request_headers = dict(headers or {})
+    if resume_from:
+        request_headers['Range'] = f'bytes={resume_from}-'
+
+    async with download_client.stream(
+            'GET',
+            url,
+            follow_redirects=True,
+            headers=request_headers,
+    ) as response:
+        if resume_from and response.status_code == 416:
+            # The range starts at/beyond the resource's current size: the file on
+            # disk is already the complete download.
+            LOGGER.info('Download already complete: %s (%s bytes)', file_path, resume_from)
+            return
+
+        if resume_from and response.status_code != 206:
+            # Range not honoured (some servers just return 200 with the full body).
+            # The existing partial file's bytes can't be trusted as a prefix of this
+            # fresh, full response, so start this attempt over from scratch.
+            resume_from = 0
+
+        response.raise_for_status()
+        await _write_response_body(
+            response, absolute_file_path, os.path.basename(file_path), resume_from,
+        )
+
+    final_size = await aiofiles.os.path.getsize(absolute_file_path)
+    LOGGER.info('Downloaded %s (%s bytes)', file_path, final_size)
+
+
+async def _write_response_body(response: httpx.Response,
+                               absolute_file_path: str,
+                               file_name: str,
+                               resume_from: int,
+                               ):
+    """
+    Stream a download response to disk, appending when resuming, with a progress bar that
+    starts at the resumed offset unless progress bars are disabled.
+    """
+    mode = 'ab' if resume_from else 'wb'
+    response_headers = getattr(response, 'headers', {})
+    remaining = int(response_headers.get('content-length', 0)) or None
+    total = resume_from + remaining if remaining is not None else None
+
+    async with aiofiles.open(absolute_file_path, mode) as data_file:
+        if CONFIG.disable_progress_bar:
+            async for chunk in response.aiter_bytes():
+                await data_file.write(chunk)
+            return
+
+        columns = _download_progress_columns() if total is not None \
+            else _progress_columns(total_known=False)
+        with Progress(*columns, transient=total is None) as progress:
+            task = progress.add_task(
+                description=f'Downloading {file_name}',
+                total=total,
+                completed=resume_from,
+            )
+            async for chunk in response.aiter_bytes():
+                await data_file.write(chunk)
+                progress.advance(task, len(chunk))
+
+
 async def download_file(url: str,
                         file_path: str,
                         headers: dict[str, str] = None,
@@ -391,65 +471,13 @@ async def download_file(url: str,
 
     absolute_file_path = os.path.join(CONFIG.data_dir, file_path)
     os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
-    file_name = os.path.basename(file_path)
     LOGGER.info('Downloading %s from %s', file_path, _redact_url_credentials(url))
 
     last_error: Exception | None = None
 
     for attempt in range(1, CONFIG.download_max_retries + 1):
-        resume_from = (
-            await aiofiles.os.path.getsize(absolute_file_path)
-            if await aiofiles.os.path.exists(absolute_file_path)
-            else 0
-        )
-
-        request_headers = dict(headers or {})
-        if resume_from:
-            request_headers['Range'] = f'bytes={resume_from}-'
-
         try:
-            async with download_client.stream(
-                    'GET',
-                    url,
-                    follow_redirects=True,
-                    headers=request_headers,
-            ) as response:
-                if resume_from and response.status_code == 416:
-                    # The range starts at/beyond the resource's current size: the file on
-                    # disk is already the complete download.
-                    LOGGER.info('Download already complete: %s (%s bytes)', file_path, resume_from)
-                    return
-
-                if resume_from and response.status_code != 206:
-                    # Range not honoured (some servers just return 200 with the full body).
-                    # The existing partial file's bytes can't be trusted as a prefix of this
-                    # fresh, full response, so start this attempt over from scratch.
-                    resume_from = 0
-
-                response.raise_for_status()
-
-                mode = 'ab' if resume_from else 'wb'
-                response_headers = getattr(response, 'headers', {})
-                remaining = int(response_headers.get('content-length', 0)) or None
-                total = resume_from + remaining if remaining is not None else None
-                async with aiofiles.open(absolute_file_path, mode) as data_file:
-                    if CONFIG.disable_progress_bar:
-                        async for chunk in response.aiter_bytes():
-                            await data_file.write(chunk)
-                    else:
-                        columns = _download_progress_columns() if total is not None \
-                            else _progress_columns(total_known=False)
-                        with Progress(*columns, transient=total is None) as progress:
-                            task = progress.add_task(
-                                description=f'Downloading {file_name}',
-                                total=total,
-                                completed=resume_from,
-                            )
-                            async for chunk in response.aiter_bytes():
-                                await data_file.write(chunk)
-                                progress.advance(task, len(chunk))
-            final_size = await aiofiles.os.path.getsize(absolute_file_path)
-            LOGGER.info('Downloaded %s (%s bytes)', file_path, final_size)
+            await _download_attempt(download_client, url, file_path, absolute_file_path, headers)
             return
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             last_error = exc

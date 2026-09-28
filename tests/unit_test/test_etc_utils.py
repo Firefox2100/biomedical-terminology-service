@@ -98,6 +98,55 @@ class _FakeDownloadClient:
         return _FakeStreamContextManager(self._responses.pop(0))
 
 
+class _RecordingProgress:
+    """Stands in for rich.Progress and records the task set-up and advances."""
+    instances: list = []
+
+    def __init__(self, *columns, transient=False):
+        self.transient = transient
+        self.task = None
+        self.advanced = 0
+        _RecordingProgress.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def add_task(self, description, total, completed):
+        self.task = {'description': description, 'total': total, 'completed': completed}
+        return 0
+
+    def advance(self, _task, amount):
+        self.advanced += amount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('content_length', 'expected_total', 'transient'), [
+    ('6', 10, False),   # known size: total counts the resumed prefix too
+    (None, None, True),  # unknown size: indeterminate, transient progress bar
+])
+async def test_download_file_reports_resumed_progress(monkeypatch, tmp_path, content_length,
+                                                      expected_total, transient):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    monkeypatch.setattr(CONFIG, 'disable_progress_bar', False)
+    monkeypatch.setattr(utils, 'Progress', _RecordingProgress)
+    _RecordingProgress.instances = []
+    (tmp_path / 'f.bin').write_bytes(b'abcd')
+    response = _FakeStreamResponse(206, b'efghij')
+    response.headers = {'content-length': content_length} if content_length else {}
+    client = _FakeDownloadClient([response])
+
+    await download_file('http://example.com/f', 'f.bin', download_client=client)
+
+    assert (tmp_path / 'f.bin').read_bytes() == b'abcdefghij'
+    progress = _RecordingProgress.instances[0]
+    assert progress.task == {'description': 'Downloading f.bin', 'total': expected_total, 'completed': 4}
+    assert progress.advanced == 6
+    assert progress.transient is transient
+
+
 @pytest.mark.asyncio
 async def test_download_file_fresh_download_sends_no_range_header(monkeypatch, tmp_path):
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))

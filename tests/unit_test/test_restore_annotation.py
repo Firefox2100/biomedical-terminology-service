@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from bioterms.annotation import _infer_annotation_dump_prefixes, restore_annotation
-from bioterms.etc.enums import AnnotationType
+from bioterms.etc.enums import AnnotationType, ConceptPrefix
 
 
 class RecordingGraphDatabase:
@@ -83,14 +83,71 @@ async def test_restore_annotation_rejects_malformed_rows(tmp_path):
     dump_path = tmp_path / 'hgnc-gene.annotation.dump'
     write_dump(dump_path, [['hgnc', '5']])
 
+    graph_db = RecordingGraphDatabase()
+    cache = RecordingCache()
+
     with pytest.raises(ValueError, match='expected at least 6'):
-        await restore_annotation(
-            dump_path,
-            graph_db=RecordingGraphDatabase(),
-            cache=RecordingCache(),
-        )
+        await restore_annotation(dump_path, graph_db=graph_db, cache=cache)
 
 
 def test_infer_prefixes_from_filename():
     assert _infer_annotation_dump_prefixes(Path('gene-hpo.annotation.dump')) == ('gene', 'hpo')
     assert _infer_annotation_dump_prefixes(Path('mondo.annotation.dump')) == ('mondo', None)
+
+
+@pytest.mark.asyncio
+async def test_restore_annotation_skips_blank_rows_and_parses_properties(tmp_path):
+    dump_path = tmp_path / 'hgnc-gene.annotation.dump'
+    write_dump(dump_path, [
+        [],
+        ['', '  ', ''],
+        ['hgnc', '5', 'gene', 'A1BG', 'has_symbol', '{"source": "HGNC"}', 'extra column'],
+    ])
+    graph_db = RecordingGraphDatabase()
+
+    count = await restore_annotation(dump_path, graph_db=graph_db, cache=RecordingCache())
+
+    assert count == 1
+    assert graph_db.batches[0][0].properties == {'source': 'HGNC'}
+
+
+@pytest.mark.asyncio
+async def test_restore_annotation_rejects_invalid_properties_json(tmp_path):
+    dump_path = tmp_path / 'hgnc-gene.annotation.dump'
+    write_dump(dump_path, [['hgnc', '5', 'gene', 'A1BG', 'has_symbol', '{not json']])
+    graph_db = RecordingGraphDatabase()
+    cache = RecordingCache()
+
+    with pytest.raises(ValueError, match=r'annotation\.dump:1 contains invalid properties JSON'):
+        await restore_annotation(dump_path, graph_db=graph_db, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_restore_annotation_overwrite_requires_resolvable_pair(tmp_path):
+    dump_path = tmp_path / 'unknown.annotation.dump'
+    write_dump(dump_path, [['hgnc', '5', 'gene', 'A1BG', 'has_symbol', '']])
+    graph_db = RecordingGraphDatabase()
+    cache = RecordingCache()
+
+    with pytest.raises(ValueError, match='Cannot determine the'):
+        await restore_annotation(dump_path, overwrite=True, graph_db=graph_db, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_restore_annotation_overwrite_deletes_existing_pair_first(tmp_path, monkeypatch):
+    import bioterms.annotation as annotation
+
+    calls = []
+
+    async def fake_delete(prefix_1, prefix_2, graph_db):
+        calls.append((prefix_1, prefix_2, graph_db))
+
+    monkeypatch.setattr(annotation, 'delete_annotation', fake_delete)
+    dump_path = tmp_path / 'hgnc-gene.annotation.dump'
+    write_dump(dump_path, [['hgnc', '5', 'gene', 'A1BG', 'has_symbol', '']])
+    graph_db = RecordingGraphDatabase()
+
+    await restore_annotation(dump_path, overwrite=True, graph_db=graph_db, cache=RecordingCache())
+
+    assert calls == [(ConceptPrefix.HGNC, ConceptPrefix.HGNC_SYMBOL, graph_db)]
+    assert len(graph_db.batches) == 1

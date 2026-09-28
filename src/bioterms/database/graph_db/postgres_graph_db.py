@@ -128,7 +128,6 @@ class PostgresReactomeRepository(ReactomeRepository):
 
     async def _related_by_type(self,
                                ids: list[str],
-                               id_label: str,
                                source_type: str,
                                rel_type: str,
                                target_type: str,
@@ -138,7 +137,6 @@ class PostgresReactomeRepository(ReactomeRepository):
         Shared implementation for the Reactome repository's one-hop "related concepts of a
         given type, reached via a given relationship type and direction" queries.
         :param ids: The concept IDs to find related concepts for.
-        :param id_label: Unused, kept for readability at call sites.
         :param source_type: The required `types` entry for the input concepts.
         :param rel_type: The relationship type to traverse.
         :param target_type: The required `types` entry for the related concepts.
@@ -178,53 +176,81 @@ class PostgresReactomeRepository(ReactomeRepository):
 
     async def get_sub_pathways(self, pathway_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            pathway_ids, 'pathway_id', 'pathway', ConceptRelationshipType.PART_OF.value, 'pathway', 'in',
+            pathway_ids, 'pathway', ConceptRelationshipType.PART_OF.value, 'pathway', 'in',
         )
 
     async def get_super_pathways(self, pathway_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            pathway_ids, 'pathway_id', 'pathway', ConceptRelationshipType.PART_OF.value, 'pathway', 'out',
+            pathway_ids, 'pathway', ConceptRelationshipType.PART_OF.value, 'pathway', 'out',
         )
 
     async def get_reactions_in_pathway(self, pathway_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            pathway_ids, 'pathway_id', 'pathway', ConceptRelationshipType.PART_OF.value, 'reaction', 'in',
+            pathway_ids, 'pathway', ConceptRelationshipType.PART_OF.value, 'reaction', 'in',
         )
 
     async def get_pathways_of_reaction(self, reaction_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            reaction_ids, 'reaction_id', 'reaction', ConceptRelationshipType.PART_OF.value, 'pathway', 'out',
+            reaction_ids, 'reaction', ConceptRelationshipType.PART_OF.value, 'pathway', 'out',
         )
 
     async def get_preceding_reactions(self, reaction_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            reaction_ids, 'reaction_id', 'reaction', ConceptRelationshipType.PRECEDED_BY.value, 'reaction', 'out',
+            reaction_ids, 'reaction', ConceptRelationshipType.PRECEDED_BY.value, 'reaction', 'out',
         )
 
     async def get_subsequent_reactions(self, reaction_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            reaction_ids, 'reaction_id', 'reaction', ConceptRelationshipType.PRECEDED_BY.value, 'reaction', 'in',
+            reaction_ids, 'reaction', ConceptRelationshipType.PRECEDED_BY.value, 'reaction', 'in',
         )
 
     async def get_reaction_inputs(self, reaction_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            reaction_ids, 'reaction_id', 'reaction', ConceptRelationshipType.HAS_INPUT.value, 'gene', 'out',
+            reaction_ids, 'reaction', ConceptRelationshipType.HAS_INPUT.value, 'gene', 'out',
         )
 
     async def get_reaction_outputs(self, reaction_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            reaction_ids, 'reaction_id', 'reaction', ConceptRelationshipType.HAS_OUTPUT.value, 'gene', 'out',
+            reaction_ids, 'reaction', ConceptRelationshipType.HAS_OUTPUT.value, 'gene', 'out',
         )
 
     async def get_gene_input_reactions(self, gene_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            gene_ids, 'gene_id', 'gene', ConceptRelationshipType.HAS_INPUT.value, 'reaction', 'in',
+            gene_ids, 'gene', ConceptRelationshipType.HAS_INPUT.value, 'reaction', 'in',
         )
 
     async def get_gene_output_reactions(self, gene_ids: list[str]) -> list[RelatedTerm]:
         return await self._related_by_type(
-            gene_ids, 'gene_id', 'gene', ConceptRelationshipType.HAS_OUTPUT.value, 'reaction', 'in',
+            gene_ids, 'gene', ConceptRelationshipType.HAS_OUTPUT.value, 'reaction', 'in',
         )
+
+
+def _group_similar_terms(scores_by_prefix: dict[str, dict[str, dict[str, float]]],
+                         limit: int | None,
+                         ) -> list[SimilarTermByPrefix]:
+    """
+    Turn one concept's similarity scores into per-prefix groups, prefixes in sorted order and
+    each group's concepts ranked by their best score, keeping at most `limit` per group.
+    :param scores_by_prefix: other prefix -> other concept_id -> {method[:corpus]: score}.
+    :param limit: The maximum number of similar concepts per prefix group, or None for all.
+    """
+    groups = []
+    for other_prefix in sorted(scores_by_prefix):
+        concepts_by_score = sorted(
+            scores_by_prefix[other_prefix].items(),
+            key=lambda kv: max(kv[1].values()), reverse=True,
+        )
+        if limit is not None:
+            concepts_by_score = concepts_by_score[:limit]
+
+        groups.append(SimilarTermByPrefix(
+            prefix=ConceptPrefix(other_prefix),
+            similarConcepts=[
+                SimilarTermWithScores(conceptId=other_id, similarity_scores=scores)
+                for other_id, scores in concepts_by_score
+            ],
+        ))
+    return groups
 
 
 class PostgresGraphDatabase(GraphDatabase):
@@ -1756,6 +1782,63 @@ class PostgresGraphDatabase(GraphDatabase):
         for cid, _ in similarity_queries:
             yield SimilarTermAggregate(conceptId=cid, similarConcepts=by_id[cid])
 
+    async def _fetch_similarity_scores(self,
+                                       conn,
+                                       prefix: ConceptPrefix,
+                                       concept_ids: list[str],
+                                       threshold: float,
+                                       same_prefix: bool,
+                                       corpus_prefix: ConceptPrefix | None,
+                                       method: SimilarityMethod | None,
+                                       ) -> dict[str, dict[str, dict[str, dict[str, float]]]]:
+        """
+        Fetch similarity scores in either edge direction for each queried concept.
+        :return: concept_id -> other prefix -> other concept_id -> {method[:corpus]: best score}.
+            Every queried concept ID is present, with an empty mapping when it has no matches.
+        """
+        grouped: dict[str, dict[str, dict[str, dict[str, float]]]] = {
+            cid: {} for cid in concept_ids
+        }
+        if not await self._table_exists(conn, 'graph_similarity'):
+            return grouped
+
+        prefix_filter = '' if not same_prefix else 'AND m.other_prefix = :prefix'
+        result = await conn.execute(text(f"""
+            SELECT q.concept_id, m.other_prefix, m.other_id, m.method, m.corpus_prefix, m.score
+            FROM unnest(:concept_ids) AS q(concept_id)
+            JOIN LATERAL (
+                SELECT prefix_to AS other_prefix, concept_to AS other_id, method, corpus_prefix, score
+                FROM graph_similarity
+                WHERE prefix_from = :prefix AND concept_from = q.concept_id AND score >= :threshold
+                    AND (:method IS NULL OR method = :method)
+                    AND (:corpus IS NULL OR corpus_prefix = :corpus)
+                UNION ALL
+                SELECT prefix_from AS other_prefix, concept_from AS other_id, method, corpus_prefix, score
+                FROM graph_similarity
+                WHERE prefix_to = :prefix AND concept_to = q.concept_id AND score >= :threshold
+                    AND (:method IS NULL OR method = :method)
+                    AND (:corpus IS NULL OR corpus_prefix = :corpus)
+            ) m ON true
+            WHERE true {prefix_filter}
+        """).bindparams(
+            _array_param('concept_ids', concept_ids),
+            bindparam('method', type_=Text),
+            bindparam('corpus', type_=Text),
+        ), {
+            'prefix': prefix.value,
+            'threshold': threshold,
+            'method': method.value if method else None,
+            'corpus': corpus_prefix.value if corpus_prefix else None,
+        })
+
+        for row in result:
+            by_prefix = grouped[row.concept_id].setdefault(row.other_prefix, {})
+            by_id = by_prefix.setdefault(row.other_id, {})
+            key = f'{row.method}:{row.corpus_prefix}' if row.corpus_prefix else row.method
+            by_id[key] = max(by_id.get(key, row.score), row.score)
+
+        return grouped
+
     async def get_similar_terms_iter(self,
                                      prefix: ConceptPrefix,
                                      concept_ids: list[str],
@@ -1782,72 +1865,21 @@ class PostgresGraphDatabase(GraphDatabase):
         result_label = 'ok'
 
         try:
-            # concept_id -> prefix -> other_id -> {key: score}
-            grouped: dict[str, dict[str, dict[str, dict[str, float]]]] = {
-                cid: {} for cid in concept_ids
-            }
-
             async with self.engine.connect() as conn:
-                if await self._table_exists(conn, 'graph_similarity'):
-                    prefix_filter = '' if not same_prefix else 'AND m.other_prefix = :prefix'
-                    result = await conn.execute(text(f"""
-                        SELECT q.concept_id, m.other_prefix, m.other_id, m.method, m.corpus_prefix, m.score
-                        FROM unnest(:concept_ids) AS q(concept_id)
-                        JOIN LATERAL (
-                            SELECT prefix_to AS other_prefix, concept_to AS other_id, method, corpus_prefix, score
-                            FROM graph_similarity
-                            WHERE prefix_from = :prefix AND concept_from = q.concept_id AND score >= :threshold
-                                AND (:method IS NULL OR method = :method)
-                                AND (:corpus IS NULL OR corpus_prefix = :corpus)
-                            UNION ALL
-                            SELECT prefix_from AS other_prefix, concept_from AS other_id, method, corpus_prefix, score
-                            FROM graph_similarity
-                            WHERE prefix_to = :prefix AND concept_to = q.concept_id AND score >= :threshold
-                                AND (:method IS NULL OR method = :method)
-                                AND (:corpus IS NULL OR corpus_prefix = :corpus)
-                        ) m ON true
-                        WHERE true {prefix_filter}
-                    """).bindparams(
-                        _array_param('concept_ids', concept_ids),
-                        bindparam('method', type_=Text),
-                        bindparam('corpus', type_=Text),
-                    ), {
-                        'prefix': prefix.value,
-                        'threshold': threshold,
-                        'method': method.value if method else None,
-                        'corpus': corpus_prefix.value if corpus_prefix else None,
-                    })
-
-                    for row in result:
-                        by_prefix = grouped[row.concept_id].setdefault(row.other_prefix, {})
-                        by_id = by_prefix.setdefault(row.other_id, {})
-                        key = f'{row.method}:{row.corpus_prefix}' if row.corpus_prefix else row.method
-                        by_id[key] = max(by_id.get(key, row.score), row.score)
+                grouped = await self._fetch_similarity_scores(
+                    conn, prefix, concept_ids, threshold, same_prefix, corpus_prefix, method,
+                )
 
             for cid in concept_ids:
                 if first is None:
                     first = time.perf_counter()
 
-                groups: list[SimilarTermByPrefix] = []
-                total = 0
-                for other_prefix in sorted(grouped[cid].keys()):
-                    concepts_by_score = sorted(
-                        grouped[cid][other_prefix].items(),
-                        key=lambda kv: max(kv[1].values()), reverse=True,
+                groups = _group_similar_terms(grouped[cid], limit)
+                for group in groups:
+                    SIM_PER_GROUP.labels(prefix=prefix.value, variant=variant).observe(
+                        len(group.similar_concepts),
                     )
-                    if limit is not None:
-                        concepts_by_score = concepts_by_score[:limit]
-
-                    similar_concepts = [
-                        SimilarTermWithScores(conceptId=other_id, similarity_scores=scores)
-                        for other_id, scores in concepts_by_score
-                    ]
-                    SIM_PER_GROUP.labels(prefix=prefix.value, variant=variant).observe(len(similar_concepts))
-                    total += len(similar_concepts)
-
-                    groups.append(SimilarTermByPrefix(
-                        prefix=ConceptPrefix(other_prefix), similarConcepts=similar_concepts,
-                    ))
+                total = sum(len(group.similar_concepts) for group in groups)
 
                 if not groups:
                     continue

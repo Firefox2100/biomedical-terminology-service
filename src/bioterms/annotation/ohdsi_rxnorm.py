@@ -16,7 +16,8 @@ VOCABULARY_PREFIX_2 = ConceptPrefix.RXNORM
 FILE_PATHS = ['ohdsi/CONCEPT.csv']
 
 
-async def download_annotation(download_client: httpx.AsyncClient = None):
+# Signature (async, unused client) is the shared annotation-module interface.
+async def download_annotation(download_client: httpx.AsyncClient = None):  # NOSONAR
     """Confirm the manually obtained Athena release contains its concept table."""
     if check_files_exist(FILE_PATHS):
         return
