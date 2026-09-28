@@ -49,6 +49,7 @@ def test_initialisation_binds_every_proxy_once(fresh_metrics, monkeypatch, drive
     assert len(fresh_metrics) == 1
     assert ('backend_class' in fresh_metrics[0]) is expects_redis
     proxies = [value for value in vars(metrics).values() if isinstance(value, metrics.MetricProxy)]
-    assert proxies and all(proxy._target is not None for proxy in proxies)
+    assert proxies
+    assert all(proxy._target is not None for proxy in proxies)
     metrics.DOCDB_OP_DURATION.labels(backend='sql', op='get', prefix='hpo', result='ok').observe(0.1)
     metrics.DOCDB_OP_ERRORS.labels(backend='sql', op='get', prefix='hpo', error_type='X').inc()

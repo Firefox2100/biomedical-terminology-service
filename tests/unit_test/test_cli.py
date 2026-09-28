@@ -4,6 +4,9 @@ backend operations replaced by recorders, checking argument parsing, target sele
 dispatch and the reported outcome. Commands report per-target failures and carry on, but still
 exit with status 1 so scripts and CI see the failure.
 """
+import re
+from types import SimpleNamespace
+
 import pytest
 from typer.testing import CliRunner
 
@@ -19,11 +22,15 @@ from bioterms.model.user import User
 from bioterms.model.vocabulary_status import VocabularyStatus
 
 RUNNER = CliRunner()
+# CI runners (GITHUB_ACTIONS / FORCE_COLOR) make Rich emit colour codes and 80-column boxes,
+# which split the messages asserted on below; render plain, wide output instead.
+PLAIN_TERMINAL = {'NO_COLOR': '1', 'FORCE_COLOR': None, 'GITHUB_ACTIONS': None, 'TERM': 'dumb', 'COLUMNS': '250'}
+ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*m')
 
 
 def invoke(*args):
-    result = RUNNER.invoke(create_cli(), list(args))
-    return result
+    result = RUNNER.invoke(create_cli(), list(args), env=PLAIN_TERMINAL)
+    return SimpleNamespace(exit_code=result.exit_code, output=ANSI_ESCAPE.sub('', result.output))
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +38,7 @@ def quiet(monkeypatch):
     monkeypatch.setattr(CONFIG, 'disable_progress_bar', True)
     monkeypatch.setattr('bioterms.cli.utils.report_exception', lambda exc: None)
     monkeypatch.setattr('bioterms.cli.utils.CONSOLE.width', 250)  # keep Rich tables unwrapped
+    monkeypatch.setattr('bioterms.cli.utils.CONSOLE.no_color', True)
 
 
 def record(monkeypatch, module, name, result=None, error=None):
@@ -146,7 +154,8 @@ def test_vocabulary_restore_reports_summary(monkeypatch):
 
     assert calls == [((ConceptPrefix.HPO,), {'overwrite': True, 'batch_size': 50,
                                             'offline_dir': '/dumps', 'restore_embeddings': False})]
-    assert '12' in result.output and 'skipped' in result.output
+    assert '12' in result.output
+    assert 'skipped' in result.output
 
 
 def test_vocabulary_embed_modes(monkeypatch):
@@ -216,7 +225,8 @@ def test_annotation_restore_and_status(monkeypatch, tmp_path):
     shown = invoke('annotation', 'status', 'hpo', 'mondo')
 
     assert '42' in restored.output
-    assert restores[0][1]['overwrite'] is True and restores[0][1]['batch_size'] == 10
+    assert restores[0][1]['overwrite'] is True
+    assert restores[0][1]['batch_size'] == 10
     assert 'HPO to MONDO' in shown.output
 
 
@@ -240,7 +250,8 @@ def test_similarity_calculate_validates_annotation_file_and_reports_failures(mon
     bad = invoke('similarity', 'calculate', '--target', 'hpo', '--annotation-file', str(tmp_path / 'x'))
     failed = invoke('similarity', 'calculate', '--target', 'hpo', '--corpus', 'omim', '--method', 'relevance')
 
-    assert bad.exit_code != 0 and 'requires --offline' in bad.output
+    assert bad.exit_code != 0
+    assert 'requires --offline' in bad.output
     assert 'Failed to calculate similarity' in failed.output
     assert failed.exit_code == 1
 
@@ -276,7 +287,8 @@ def test_cache_commands(monkeypatch):
 
     assert 'Successfully purged' in invoke('cache', 'purge').output
     invoke('cache', 'rebuild')
-    assert purged == [True] and rebuilt == [True]
+    assert purged == [True]
+    assert rebuilt == [True]
 
 
 def test_user_create_list_delete(monkeypatch):

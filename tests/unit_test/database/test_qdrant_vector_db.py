@@ -110,5 +110,7 @@ def test_client_must_be_configured():
 
 
 def test_stable_uuid_is_deterministic_per_item():
-    assert _stable_uuid('HP:1:alias:0') == _stable_uuid('HP:1:alias:0')
-    assert _stable_uuid('HP:1:alias:0') != _stable_uuid('HP:1:alias:1')
+    first, repeated = (_stable_uuid('HP:1:alias:0') for _ in range(2))
+
+    assert first == repeated
+    assert first != _stable_uuid('HP:1:alias:1')

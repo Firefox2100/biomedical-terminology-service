@@ -237,8 +237,10 @@ async def test_embed_vocabulary_online_requires_loaded_vocabulary(monkeypatch):
 
     monkeypatch.setattr(vocabulary, 'get_vocabulary_status', status)
 
+    vector_db = Recorder()
+
     with pytest.raises(RuntimeError, match='is not loaded. Cannot embed'):
-        await vocabulary.embed_vocabulary(ConceptPrefix.HPO, doc_db=object(), vector_db=Recorder())
+        await vocabulary.embed_vocabulary(ConceptPrefix.HPO, doc_db=object(), vector_db=vector_db)
 
 
 async def _write_embedding_dump(path):

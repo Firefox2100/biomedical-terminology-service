@@ -185,7 +185,8 @@ async def test_context_without_corpus_is_target_only():
         ConceptPrefix.HPO, None, {'corpusRequired': False, 'corpusGraphRequired': False}, False, None, _GraphData(),
     )
 
-    assert context.corpus is None and context.annotations is None
+    assert context.corpus is None
+    assert context.annotations is None
     assert set(context.target.node_ids) == {'HP:1', 'HP:2', 'HP:root'}
 
 
@@ -244,12 +245,14 @@ async def test_restore_similarity_batches_every_dump(tmp_path):
 
 @pytest.mark.asyncio
 async def test_restore_similarity_rejects_missing_or_malformed_dumps(tmp_path):
+    graph_db = _ScoreRecorder()
+
     with pytest.raises(ValueError, match='No similarity dump files found'):
-        await similarity.restore_similarity(ConceptPrefix.HPO, offline_dir=tmp_path, graph_db=_ScoreRecorder())
+        await similarity.restore_similarity(ConceptPrefix.HPO, offline_dir=tmp_path, graph_db=graph_db)
 
     (tmp_path / 'hpo-relevance.similarity.dump').write_text('HP:1,HP:2\n')
     with pytest.raises(ValueError, match='Malformed similarity row'):
-        await similarity.restore_similarity(ConceptPrefix.HPO, offline_dir=tmp_path, graph_db=_ScoreRecorder())
+        await similarity.restore_similarity(ConceptPrefix.HPO, offline_dir=tmp_path, graph_db=graph_db)
 
 
 @pytest.mark.parametrize(('name', 'message'), [

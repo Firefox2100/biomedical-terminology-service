@@ -170,7 +170,7 @@ def test_hpo_concept_with_hierarchy_replacements_similarity_and_mappings(graphql
     }]
     assert concept['annotatedMondo'] == [{'conceptId': 'MONDO:0000001', 'label': 'disease'}]
     # Every HPO field lookup for this request was batched through one data loader.
-    assert (ConceptPrefix.HPO, ('HP:0000118',)) == doc_db.batches[0]
+    assert doc_db.batches[0] == (ConceptPrefix.HPO, ('HP:0000118',))
 
 
 def test_missing_concept_returns_error_payload(graphql):
