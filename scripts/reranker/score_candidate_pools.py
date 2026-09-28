@@ -77,16 +77,14 @@ def _build_document_cache(model, source: Path, concepts: dict, args) -> dict[tup
         for key in ordered_keys
     ]
     print(f'[{source.name}] encoding {len(ordered_keys)} unique candidate documents once')
-    embeddings = model.encode(
-        texts, is_query=False, batch_size=args.encode_batch_size, show_progress_bar=True,
+    embeddings = model.encode_document(
+        texts, batch_size=args.encode_batch_size, show_progress_bar=True,
     )
     return dict(zip(ordered_keys, embeddings))
 
 
 def _score_batch(model, records: list[dict], concepts: dict,
                  document_cache: dict[tuple[str, str], object], args) -> list[dict]:
-    from pylate import rank
-
     variant = RenderVariant(args.render_variant)
     max_aliases = args.max_aliases if args.max_aliases > 0 else None
     pools, document_embeddings = [], []
@@ -98,15 +96,18 @@ def _score_batch(model, records: list[dict], concepts: dict,
             for candidate in pool
         ])
 
-    query_embeddings = model.encode(
-        [record['query'] for record in records], is_query=True, batch_size=args.encode_batch_size,
+    query_embeddings = model.encode_query(
+        [record['query'] for record in records], batch_size=args.encode_batch_size,
         show_progress_bar=False,
     )
-    ranked = rank.rerank(
-        documents_ids=[[candidate['concept_id'] for candidate in pool] for pool in pools],
-        queries_embeddings=query_embeddings, documents_embeddings=document_embeddings,
-        device=str(model.device),
-    )
+    ranked = []
+    for query_embedding, pool, documents in zip(query_embeddings, pools, document_embeddings):
+        scores = model.similarity([query_embedding], documents)[0]
+        order = scores.argsort(descending=True).tolist()
+        ranked.append([
+            {'id': pool[index]['concept_id'], 'score': float(scores[index])}
+            for index in order
+        ])
 
     outputs = []
     for record, pool, ranking in zip(records, pools, ranked):
@@ -184,17 +185,15 @@ def main() -> None:
     parser.add_argument('--overwrite', action='store_true')
     args = parser.parse_args()
 
-    from pylate import models
+    from sentence_transformers import MultiVectorEncoder
     concepts = _load_concepts(Path(args.concept_store_dir))
     model_path = Path(args.model)
     if model_path.is_dir() and (model_path / 'modules.json').exists():
-        # Local training bundles contain PyLate's custom Dense module and may have been
-        # serialized by SentenceTransformers 5 or 6. Reuse the compatibility loader used by
-        # training/evaluation instead of asking generic ST loading to import it implicitly.
+        # Native ST6 also converts legacy PyLate bundles without importing PyLate.
         from train_reranker import _load_local_colbert_bundle
-        model = _load_local_colbert_bundle(str(model_path), models, 32, 64)
+        model = _load_local_colbert_bundle(str(model_path))
     else:
-        model = models.ColBERT(model_name_or_path=args.model, trust_remote_code=True)
+        model = MultiVectorEncoder(args.model, trust_remote_code=True)
     allowed = set(args.include_vocabularies or [])
     allowed_files = set(args.include_files or [])
     sources = sorted(Path(args.input_dir).glob('*.jsonl'))

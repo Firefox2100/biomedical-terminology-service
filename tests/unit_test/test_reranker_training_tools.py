@@ -460,18 +460,16 @@ def test_candidate_sets_record_only_exact_normalised_alias_matches():
 
 
 def test_candidate_evaluation_exports_predictions_and_exactness(monkeypatch, tmp_path):
-    fake_pylate = types.ModuleType('pylate')
-    fake_pylate.rank = types.SimpleNamespace(
-        rerank=lambda **_kwargs: [[
-            {'id': 'negative', 'score': 2.0},
-            {'id': 'gold', 'score': 1.0},
-        ]],
-    )
-    monkeypatch.setitem(sys.modules, 'pylate', fake_pylate)
-
     class FakeModel:
-        def encode(self, values, **_kwargs):
+        def encode_query(self, values, **_kwargs):
             return values
+
+        def encode_document(self, values, **_kwargs):
+            return values
+
+        def similarity(self, _queries, _documents):
+            import torch
+            return torch.tensor([[1.0, 2.0]])
 
     path = tmp_path / 'predictions.jsonl'
     result = _run_candidate_set_evaluation(FakeModel(), [{

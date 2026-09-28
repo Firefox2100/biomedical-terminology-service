@@ -1,7 +1,5 @@
-import sys
-from types import SimpleNamespace
-
 import pytest
+import sentence_transformers
 
 from bioterms.etc.enums import ConceptPrefix, ConceptStatus
 from bioterms.model.concept import Concept
@@ -37,13 +35,14 @@ def test_loader_passes_local_path_or_huggingface_id_unchanged(monkeypatch, sourc
         def __init__(self, **kwargs):
             calls.append(kwargs)
 
-    monkeypatch.setitem(sys.modules, 'pylate', SimpleNamespace(
-        models=SimpleNamespace(ColBERT=FakeColBERT),
-    ))
+        def __getitem__(self, _index):
+            return type('Transformer', (), {
+                'query_length': 32, 'query_expansion': {'length': 32},
+            })()
+
+    monkeypatch.setattr(sentence_transformers, 'MultiVectorEncoder', FakeColBERT)
     monkeypatch.setattr(reranker.CONFIG, 'reranker_model', source)
     monkeypatch.setattr(reranker.CONFIG, 'torch_device', 'cpu')
-    monkeypatch.setattr(reranker, '_legacy_bundle_config', lambda: False)
-
     reranker._load_reranker()
 
     assert calls == [{

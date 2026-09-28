@@ -15,8 +15,17 @@ startup when it exists. Use `--output-dir runs/<experiment>` during tests or abl
 their checkpoints and model bundles separate; the service does not auto-load those runs.
 The service must be restarted to load a newly trained bundle.
 
+Reranking uses Sentence Transformers 6's native `MultiVectorEncoder`; PyLate is not a runtime
+or training dependency. ST6 can load existing PyLate bundles directly, so an older local bundle
+or Hugging Face upload does not need to be rewritten before deployment. Fresh models pin the
+historical settings explicitly instead of relying on different library defaults: `[Q]`/`[D]`
+markers, 32-token fixed `[MASK]` query expansion with expansion attention disabled, punctuation
+masking on documents, a bias-free 768-to-128 identity projection, token L2 normalization, and
+sum-MaxSim scoring. Query and document lengths are saved in the bundle; command-line length
+options govern newly initialized training runs.
+
 For a different deployment path or a published Hugging Face repository, set the model source
-explicitly; PyLate/SentenceTransformers use the same setting for both forms:
+explicitly; native Sentence Transformers 6 uses the same setting for both forms:
 
 ```dotenv
 # Local bundle
@@ -55,7 +64,7 @@ Four scripts, two machines:
   candidate, writing a new resumable set of JSONL shards with a named ranking-score channel.
   It never mutates or re-queries the source database data.
 - **`train_reranker.py`** -- standalone, no bioterms/database dependency at all, only the ML
-  stack (`pylate`, `sentence-transformers`, `datasets`, `torch`) plus the small
+  stack (`sentence-transformers`, `datasets`, `torch`) plus the small
   `concept_rendering.py` helper in this folder. Copy the JSONL files the mining script
   produces to your HPC system and run this there.
 
@@ -391,7 +400,7 @@ means “mine every mapping” and therefore has correspondingly large storage/r
 
 ## 2. Training
 
-On the HPC system, install `pylate`, `sentence-transformers`, `datasets`, and a
+On the HPC system, install Sentence Transformers 6+, `datasets`, and a
 CUDA-appropriate `torch` build (follow your cluster's usual PyTorch install instructions --
 `torch` itself is deliberately not pinned here since it's CUDA-version-specific). Keep
 `concept_rendering.py` alongside `train_reranker.py` -- it has no heavy dependencies itself.
@@ -531,7 +540,7 @@ longer, multi-epoch run with periodic saves; if you need that, either evaluate s
 checkpoints offline with this same evaluator, or wire it into periodic in-training evaluation
 on a fixed subset -- neither is implemented today.
 
-A cheap `ColBERTTripletEvaluator` (gold vs. one negative, also rendered without query-alias
+A cheap `MultiVectorTripletEvaluator` (gold vs. one negative, also rendered without query-alias
 exclusion) also runs, both periodically during training (`--eval-steps`) and once at the end
 (`final_eval_triplet_result.json`) -- treat it only as a fast smoke test, never as the primary
 evaluation metric, since it never sees the full candidate set a real query would face.

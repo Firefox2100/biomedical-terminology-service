@@ -1,11 +1,9 @@
 """Lazy ColBERT reranking for terminology search candidates."""
 import asyncio
 import hashlib
-import json
 from collections.abc import Sequence
-from pathlib import Path
 
-from bioterms.etc.consts import CONFIG, LOGGER
+from bioterms.etc.consts import CONFIG
 from bioterms.model.concept import Concept
 
 
@@ -53,109 +51,16 @@ def reranker_enabled() -> bool:
     return bool(CONFIG.reranker_model)
 
 
-def _legacy_bundle_config() -> bool:
-    """Detect bundles serialized before the SentenceTransformers 6 module format."""
-    source = CONFIG.reranker_model
-    config_path = Path(source) / 'config_sentence_transformers.json'
-    if not config_path.exists() and not Path(source).exists():
-        try:
-            from huggingface_hub import hf_hub_download
-            config_path = Path(hf_hub_download(source, 'config_sentence_transformers.json'))
-        except Exception:
-            return False
-    if not config_path.exists():
-        return False
-    try:
-        version = json.loads(config_path.read_text(encoding='utf-8')).get('__version__', {}) \
-            .get('sentence_transformers', '')
-        return bool(version) and int(version.split('.', 1)[0]) < 6
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return False
-
-
 def _load_reranker():
-    from pylate import models
-    if _legacy_bundle_config():
-        return _load_legacy_reranker(models)
-    try:
-        return models.ColBERT(
-            model_name_or_path=CONFIG.reranker_model,
-            device=CONFIG.torch_device,
-            trust_remote_code=True,
-        )
-    except KeyError as error:
-        # PyLate 1.6 / SentenceTransformers 6 changed Dense's serialized activation field.
-        # Bundles trained with PyLate 1.2 contain the correct projection weights but can hit
-        # that upstream compatibility error. Load their trusted, operator-configured modules
-        # with SentenceTransformer and wrap them without changing weights.
-        if error.args != ('activation_function',):
-            raise
-        LOGGER.warning(
-            'Using the legacy PyLate bundle compatibility loader for reranker %s.',
-            CONFIG.reranker_model,
-        )
-        return _load_legacy_reranker(models)
-    except TypeError as error:
-        if "unexpected keyword argument 'module_input_name'" not in str(error):
-            raise
-        return _load_st6_dense_compat_reranker(models)
-
-
-def _load_st6_dense_compat_reranker(models):
-    """Load PyLate 1.6 bundles whose Dense config was emitted by ST6."""
-    from pathlib import Path
-    from pylate.models import Dense as PyLateDense
-    from safetensors.torch import load_model as load_safetensors_model
-    from sentence_transformers.util import import_from_string
-
-    original_load = PyLateDense.load
-
-    def load_dense(input_path):
-        path = Path(input_path)
-        config = json.loads((path / 'config.json').read_text(encoding='utf-8'))
-        config.pop('module_input_name', None)
-        config.pop('module_output_name', None)
-        config['activation_function'] = import_from_string(config['activation_function'])()
-        dense = PyLateDense(**config)
-        load_safetensors_model(dense, str(path / 'model.safetensors'))
-        return dense
-
-    LOGGER.warning('Using the ST6 Dense compatibility loader for %s.', CONFIG.reranker_model)
-    PyLateDense.load = staticmethod(load_dense)
-    try:
-        model = models.ColBERT(
-            model_name_or_path=CONFIG.reranker_model,
-            device=CONFIG.torch_device,
-            trust_remote_code=True,
-        )
-    finally:
-        PyLateDense.load = original_load
-    if not hasattr(model, '_text_length') and hasattr(model, '_input_length'):
-        model._text_length = model._input_length
-    return model
-
-
-def _load_legacy_reranker(models):
-    from sentence_transformers import SentenceTransformer
-    LOGGER.warning(
-        'Using the legacy PyLate bundle compatibility loader for reranker %s.',
-        CONFIG.reranker_model,
-    )
-    sentence_model = SentenceTransformer(
-        CONFIG.reranker_model,
+    from sentence_transformers import MultiVectorEncoder
+    model = MultiVectorEncoder(
+        model_name_or_path=CONFIG.reranker_model,
         device=CONFIG.torch_device,
         trust_remote_code=True,
     )
-    model = models.ColBERT(
-        modules=list(sentence_model._modules.values()),
-        device=CONFIG.torch_device,
-        query_length=CONFIG.reranker_query_length,
-        document_length=CONFIG.reranker_document_length,
-    )
-    # PyLate 1.6 still calls the SentenceTransformers 5-era private name while
-    # SentenceTransformers 6 renamed it. Keep this compatibility local to the model.
-    if not hasattr(model, '_text_length') and hasattr(model, '_input_length'):
-        model._text_length = model._input_length
+    transformer = model[0]
+    if transformer.query_length is None and transformer.query_expansion is not None:
+        transformer.query_length = transformer.query_expansion['length']
     return model
 
 
@@ -171,25 +76,19 @@ async def get_reranker():
 
 
 def _rerank_sync(model, query: str, concepts: Sequence[Concept]) -> list[Concept]:
-    from pylate import rank
-
     texts = [render_reranker_candidate(concept) for concept in concepts]
-    query_embeddings = model.encode(
-        [query], is_query=True, batch_size=CONFIG.reranker_batch_size,
+    query_embeddings = model.encode_query(
+        [query], batch_size=CONFIG.reranker_batch_size,
         show_progress_bar=False,
     )
-    document_embeddings = model.encode(
-        [texts], is_query=False, batch_size=CONFIG.reranker_batch_size,
+    document_embeddings = model.encode_document(
+        texts, batch_size=CONFIG.reranker_batch_size,
         show_progress_bar=False,
     )
-    result = rank.rerank(
-        documents_ids=[[concept.concept_id for concept in concepts]],
-        queries_embeddings=query_embeddings,
-        documents_embeddings=document_embeddings,
-        device=str(model.device),
-    )[0]
+    scores = model.similarity(query_embeddings, document_embeddings)[0]
+    order = scores.argsort(descending=True).tolist()
     by_id = {concept.concept_id: concept for concept in concepts}
-    return [by_id[str(item['id'])] for item in result if str(item['id']) in by_id]
+    return [by_id[concepts[index].concept_id] for index in order]
 
 
 async def rerank_concepts(query: str, concepts: Sequence[Concept]) -> list[Concept]:
