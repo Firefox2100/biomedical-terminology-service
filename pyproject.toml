@@ -64,6 +64,7 @@ cuda = [
 test = [
     "asyncpg~=0.31.0",
     "aiosqlite~=0.22.1",
+    "datasets~=5.0.1",
     "deepdiff~=9.1.0",
     "elasticsearch[async]>=9.5,<10",
     "locust~=2.46.5",

@@ -48,8 +48,20 @@ _GN_NAMES = re.compile(r'(?:Name|Synonyms|OrderedLocusNames|ORFNames)=([^;]+)')
 _OX_TAXID = re.compile(r'NCBI_TaxID=(\d+)')
 _DR_HGNC_LINE = re.compile(r'^DR\s++HGNC;\s*+(HGNC:\d++);\s*+([^.]++)\.')
 _DR_GO_LINE = re.compile(r'^DR\s++GO;\s*+GO:(\d++);\s*+([CFP]):([^;]++);\s*+([^.]++)\.')
-# The lookbehind starts matches only at the head of a whitespace run, keeping `sub` linear.
-_EVIDENCE_TAG = re.compile(r'(?<!\s)\s*+\{[^}]*+\}')
+
+
+def _strip_evidence_tags(text: str) -> str:
+    """
+    Remove `{...}` evidence tags together with the whitespace just before each one. A plain
+    scan rather than a regex, so long whitespace runs cannot trigger backtracking.
+    """
+    parts = []
+    position = 0
+    while (start := text.find('{', position)) != -1 and (end := text.find('}', start)) != -1:
+        parts.append(text[position:start].rstrip())
+        position = end + 1
+    parts.append(text[position:])
+    return ''.join(parts)
 
 
 def _field_value(raw: str) -> str:
@@ -166,10 +178,10 @@ class _DatRecord:
         if self.label is None and line.startswith(('DE   RecName:', 'DE   SubName:')):
             match = _DE_NAME_LINE.match(line)
             if match:
-                self.label = _EVIDENCE_TAG.sub('', _field_value(match.group(1))).strip()
+                self.label = _strip_evidence_tags(_field_value(match.group(1))).strip()
         name_match = _DE_SYNONYM.search(line)
         if name_match:
-            name = _EVIDENCE_TAG.sub('', _field_value(name_match.group(1))).strip()
+            name = _strip_evidence_tags(_field_value(name_match.group(1))).strip()
             if name and name != self.label:
                 _append_unique(self.synonyms, name)
         if line.startswith('DE   Flags:') and 'Fragment' in line:
@@ -178,7 +190,7 @@ class _DatRecord:
     def _parse_gn(self, line: str) -> None:
         for values in _GN_NAMES.findall(line):
             for value in values.split(','):
-                value = _EVIDENCE_TAG.sub('', value).strip()
+                value = _strip_evidence_tags(value).strip()
                 if value:
                     _append_unique(self.gene_names, value)
 

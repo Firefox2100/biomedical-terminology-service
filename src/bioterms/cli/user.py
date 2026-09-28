@@ -5,7 +5,7 @@ from rich.table import Table
 from bioterms.etc.consts import PH
 from bioterms.database import get_active_doc_db
 from bioterms.model.user import User
-from .utils import run_async, CONSOLE, verbose_cli
+from .utils import run_async, CONSOLE, report_cli_failure, verbose_cli
 
 
 app = typer.Typer()
@@ -75,7 +75,7 @@ async def delete_user(username: Annotated[str, typer.Argument(help='Username of 
 
     user = await db.users.get(username)
     if not user:
-        CONSOLE.print(f'[red]No user found with username {username}[/red]')
+        report_cli_failure(f'No user found with username {username}')
         return
 
     await db.users.delete(username)

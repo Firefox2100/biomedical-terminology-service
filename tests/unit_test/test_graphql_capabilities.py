@@ -115,7 +115,7 @@ async def test_root_search_exposes_v2_results(monkeypatch):
             'text': 'Short stature',
         },
     }
-    assert response['meta']['vocabularies'] == [ConceptPrefix.HPO, ConceptPrefix.MONDO]
+    assert response['meta']['vocabularies'] == ['hpo', 'mondo']
     assert response['meta']['pipeline'] == {
         'lexical': True, 'fuzzy': False, 'vector': True, 'mapped': False,
         'reranker': False,

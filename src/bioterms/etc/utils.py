@@ -622,13 +622,15 @@ def _extract_tarball_sync(tarball_path: str,
     out_path.mkdir(parents=True, exist_ok=True)
 
     with tarfile.open(tarball_path, mode=mode) as tar:
+        # The 'data' filter rejects absolute paths, `..` traversal and links escaping
+        # `output_dir`, so even a tampered archive cannot write outside the output directory.
         if members is None:
-            tar.extractall(path=out_path)
+            tar.extractall(path=out_path, filter='data')
         else:
             # members may be file names (str); convert to TarInfo objects
             # if you want to filter by name:
             selected = [m for m in tar.getmembers() if m.name in members]
-            tar.extractall(path=out_path, members=selected)
+            tar.extractall(path=out_path, members=selected, filter='data')
 
 
 async def extract_file_from_tarball(tarball_path: str,

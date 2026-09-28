@@ -132,7 +132,7 @@ async def test_download_file_reports_resumed_progress(monkeypatch, tmp_path, con
     monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
     monkeypatch.setattr(CONFIG, 'disable_progress_bar', False)
     monkeypatch.setattr(utils, 'Progress', _RecordingProgress)
-    _RecordingProgress.instances = []
+    monkeypatch.setattr(_RecordingProgress, 'instances', [])
     (tmp_path / 'f.bin').write_bytes(b'abcd')
     response = _FakeStreamResponse(206, b'efghij')
     response.headers = {'content-length': content_length} if content_length else {}
@@ -322,3 +322,177 @@ async def test_extract_file_from_zip_optional_pattern_present_still_extracts(tmp
     ])
 
     assert dest.read_bytes() == b'assoc-data'
+
+
+# --- batching, peeking and archive helpers ---------------------------------------------------
+
+import gzip
+import io
+import tarfile
+
+from bioterms.etc.utils import peek_first
+
+
+@pytest.mark.parametrize('progress_disabled', [True, False])
+@pytest.mark.parametrize('consume', [False, True])
+def test_batch_iterable_on_lists(monkeypatch, progress_disabled, consume):
+    monkeypatch.setattr(CONFIG, 'disable_progress_bar', progress_disabled)
+    items = list(range(7))
+
+    batches = list(batch_iterable(items, batch_size=3, consume=consume))
+
+    assert sorted(x for batch in batches for x in batch) == list(range(7))
+    assert [len(b) for b in batches] == [3, 3, 1]
+    assert items == ([] if consume else list(range(7)))
+
+
+def test_batch_iterable_single_batch_and_empty(monkeypatch):
+    monkeypatch.setattr(CONFIG, 'disable_progress_bar', False)
+
+    assert list(batch_iterable([1, 2], batch_size=5)) == [[1, 2]]
+    assert list(batch_iterable([], batch_size=5)) == []
+
+
+def test_peek_first_keeps_every_item():
+    listed = [1, 2, 3]
+    first, rest = peek_first(listed)
+    assert (first, rest) == (1, listed)
+
+    first, rest = peek_first(x for x in 'abc')
+    assert (first, list(rest)) == ('a', ['a', 'b', 'c'])
+
+    assert peek_first([])[0] is None
+    assert peek_first(iter(()))[0] is None
+
+
+@pytest.mark.asyncio
+async def test_get_trud_release_url():
+    def handler(request):
+        if request.url.path.endswith('/ok'):
+            return httpx.Response(200, json={'httpStatus': 200, 'releases': [{'archiveFileUrl': 'https://x/r.zip'}]})
+        return httpx.Response(200, json={'httpStatus': 401, 'message': 'bad key'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url='https://trud') as client:
+        assert await utils.get_trud_release_url('https://trud/ok', client=client) == 'https://x/r.zip'
+        with pytest.raises(ValueError, match='bad key'):
+            await utils.get_trud_release_url('https://trud/denied', client=client)
+
+
+@pytest.mark.asyncio
+async def test_extract_file_from_gzip_streams_in_chunks(tmp_path):
+    payload = b'line\n' * 10_000
+    source = tmp_path / 'data.gz'
+    source.write_bytes(gzip.compress(payload))
+
+    await utils.extract_file_from_gzip(str(source), str(tmp_path / 'data'), chunk_size=1024)
+
+    assert (tmp_path / 'data').read_bytes() == payload
+
+
+def test_extract_tarball_optionally_filters_members(tmp_path):
+    archive = tmp_path / 'release.tar.gz'
+    with tarfile.open(archive, 'w:gz') as tar:
+        for name in ('keep.txt', 'skip.txt'):
+            info = tarfile.TarInfo(name)
+            info.size = len(name)
+            tar.addfile(info, io.BytesIO(name.encode()))
+
+    utils._extract_tarball_sync(str(archive), str(tmp_path / 'all'))
+    utils._extract_tarball_sync(str(archive), str(tmp_path / 'some'), members=['keep.txt'])
+
+    assert sorted(p.name for p in (tmp_path / 'all').iterdir()) == ['keep.txt', 'skip.txt']
+    assert [p.name for p in (tmp_path / 'some').iterdir()] == ['keep.txt']
+
+
+def _tampered_archive(path, member):
+    with tarfile.open(path, 'w:gz') as tar:
+        info = tarfile.TarInfo(member)
+        info.size = 4
+        tar.addfile(info, io.BytesIO(b'evil'))
+    return str(path)
+
+
+def test_extract_tarball_refuses_path_traversal(tmp_path):
+    archive = _tampered_archive(tmp_path / 'tampered.tar.gz', '../escaped.txt')
+
+    with pytest.raises(tarfile.FilterError):
+        utils._extract_tarball_sync(archive, str(tmp_path / 'out'))
+
+    assert not (tmp_path / 'escaped.txt').exists()
+
+
+def test_extract_tarball_confines_absolute_members_to_output_dir(tmp_path):
+    target = tmp_path / 'absolute.txt'
+    archive = _tampered_archive(tmp_path / 'tampered.tar.gz', str(target))
+
+    utils._extract_tarball_sync(archive, str(tmp_path / 'out'))
+
+    assert not target.exists()
+    assert (tmp_path / 'out' / str(target).lstrip('/')).read_bytes() == b'evil'
+
+
+@pytest.mark.asyncio
+async def test_download_rf2_downloads_then_extracts(monkeypatch):
+    calls = []
+
+    async def fake_download(url, file_path, download_client=None):
+        calls.append(('download', url, file_path.endswith('.zip')))
+
+    async def fake_extract(zip_path, file_mapping):
+        calls.append(('extract', zip_path.endswith('.zip'), file_mapping))
+
+    monkeypatch.setattr(utils, 'download_file', fake_download)
+    monkeypatch.setattr(utils, 'extract_file_from_zip', fake_extract)
+
+    await utils.download_rf2('https://x/rf2.zip', [('*Concept*', 'snomed/concept.txt')])
+
+    assert calls == [('download', 'https://x/rf2.zip', True), ('extract', True, [('*Concept*', 'snomed/concept.txt')])]
+
+
+@pytest.mark.asyncio
+async def test_download_obo_owl_release_skips_existing_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(CONFIG, 'data_dir', str(tmp_path))
+    client = _FakeDownloadClient([_FakeStreamResponse(200, b'<owl/>')])
+
+    await utils.download_obo_owl_release('https://x/hp.owl', 'hpo/hp.owl', download_client=client)
+    await utils.download_obo_owl_release('https://x/hp.owl', 'hpo/hp.owl', download_client=client)
+
+    assert (tmp_path / 'hpo' / 'hp.owl').read_bytes() == b'<owl/>'
+    assert len(client.calls) == 1
+
+
+# --- error reporting --------------------------------------------------------------------------
+
+@pytest.fixture
+def sentry(monkeypatch):
+    import sentry_sdk
+
+    state = {'initialised': False, 'options': None}
+    monkeypatch.setattr(sentry_sdk, 'is_initialized', lambda: state['initialised'])
+    monkeypatch.setattr(sentry_sdk, 'init', lambda **options: state.update(options=options))
+    return state
+
+
+@pytest.mark.parametrize(('enabled', 'dsn', 'expected'), [(False, 'https://k@sentry/1', False), (True, None, False)])
+def test_error_reporting_needs_flag_and_dsn(monkeypatch, sentry, enabled, dsn, expected):
+    monkeypatch.setattr(CONFIG, 'enable_error_reporting', enabled)
+    monkeypatch.setattr(CONFIG, 'sentry_dsn', dsn)
+
+    assert utils.initialize_error_reporting('1.0') is expected
+    assert sentry['options'] is None
+
+
+@pytest.mark.parametrize('profiling', [False, True])
+def test_error_reporting_initialises_sentry_once(monkeypatch, sentry, profiling):
+    monkeypatch.setattr(CONFIG, 'enable_error_reporting', True)
+    monkeypatch.setattr(CONFIG, 'sentry_dsn', 'https://k@sentry/1')
+    monkeypatch.setattr(CONFIG, 'enable_profiling', profiling)
+
+    assert utils.initialize_error_reporting('2.0.0') is True
+    assert sentry['options']['release'] == '2.0.0'
+    assert ('traces_sample_rate' in sentry['options']) is profiling
+
+    sentry['initialised'] = True
+    sentry['options'] = None
+    assert utils.initialize_error_reporting() is True
+    assert sentry['options'] is None

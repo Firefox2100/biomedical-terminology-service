@@ -188,9 +188,8 @@ async def post_login_credentials(request: Request,
     sanitised_next_url = sanitise_next_url(next_url) if next_url \
         else str(request.url_for('get_home_page'))
 
-    if not username or not password:
-        return _login_redirect(request, next_url, 'Please enter username or password correctly')
-
+    # Empty credentials never reach this point: FastAPI rejects a blank required Form() field
+    # with a 422 before the route runs.
     user = await doc_db.users.get(username)
 
     if not user or not user.validate_password(password):

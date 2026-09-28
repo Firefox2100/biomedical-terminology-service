@@ -36,7 +36,10 @@ jobs:
       - name: Run tests with coverage
         run: |
           export PYTHONPATH=./src:$PYTHONPATH
-          pytest --continue-on-collection-errors --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html
+          # `*_checks.py` are the Docker-backed integration checks (testcontainers), which the
+          # default local `pytest` run leaves out; the hosted runner has Docker, so include them.
+          pytest --continue-on-collection-errors -o python_files="test_*.py *_checks.py" \
+            --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html
 
       - name: Upload test results
         if: always()

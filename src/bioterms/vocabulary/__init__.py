@@ -50,7 +50,7 @@ async def delete_vocabulary_files(prefix: ConceptPrefix):
         # Fallback to default deletion method
         for file_path in vocabulary_module.FILE_PATHS:
             try:
-                await aiofiles.os.remove(file_path)
+                await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
             except Exception:
                 pass
 
