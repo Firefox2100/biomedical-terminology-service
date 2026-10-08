@@ -9,7 +9,7 @@ import bioterms.cli.cache as cache
 import bioterms.cli.similarity as similarity
 import bioterms.cli.user as user
 import bioterms.cli.vocabulary as vocabulary
-from bioterms.cli.utils import CONSOLE
+from bioterms.cli.utils import CONSOLE, configure_cli_output
 
 
 def create_cli() -> typer.Typer:
@@ -62,6 +62,7 @@ def create_cli() -> typer.Typer:
 
 
 def main():
+    configure_cli_output()
     app = create_cli()
 
     app()

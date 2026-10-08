@@ -24,6 +24,7 @@ import pytest_asyncio
 from neo4j import AsyncGraphDatabase
 
 from bioterms.database.graph_db.neo4j_graph_db import Neo4jGraphDatabase
+from bioterms.etc.consts import CONFIG
 from bioterms.etc.enums import (
     AnnotationType,
     ConceptPrefix,
@@ -133,6 +134,15 @@ async def test_save_and_get_vocabulary_graph_round_trip(graph_db):
 
     assert await graph_db.count_terms(ConceptPrefix.MONDO) == 3
     assert await graph_db.count_internal_relationships(ConceptPrefix.MONDO) == 2
+    async with graph_db._client.session() as session:
+        ownership = await (await session.run(
+            "MATCH (n:Concept {prefix: 'mondo'}) "
+            "WITH collect(DISTINCT n.owners) AS node_owners "
+            "MATCH (:Concept {prefix: 'mondo'})-[r]->(:Concept {prefix: 'mondo'}) "
+            "RETURN node_owners, collect(DISTINCT r.owners) AS relationship_owners"
+        )).single()
+        assert ownership['node_owners'] == [['mondo']]
+        assert ownership['relationship_owners'] == [['mondo']]
 
 
 @pytest.mark.asyncio
@@ -147,6 +157,85 @@ async def test_delete_vocabulary_graph_removes_nodes_and_relationships(graph_db)
 
     assert await graph_db.count_terms(ConceptPrefix.MONDO) == 0
     assert await graph_db.count_internal_relationships(ConceptPrefix.MONDO) == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_vocabulary_graph_removes_only_its_owner(graph_db):
+    await graph_db.save_vocabulary_graph(
+        [make_concept(ConceptPrefix.OHDSI, 'O1')], nx.MultiDiGraph(),
+    )
+    await graph_db.save_annotations([
+        Annotation(
+            conceptIdFrom='O1', prefixFrom=ConceptPrefix.OHDSI,
+            conceptIdTo='S1', prefixTo=ConceptPrefix.SNOMED,
+            annotationType=AnnotationType.EXACT,
+        ),
+        Annotation(
+            conceptIdFrom='O1', prefixFrom=ConceptPrefix.OHDSI,
+            conceptIdTo='X1', prefixTo='athena-only',
+            annotationType=AnnotationType.EXACT,
+        ),
+    ])
+    # Loading the real SNOMED concept adds a second owner to the placeholder that OHDSI
+    # created. Repeating the load must not duplicate that owner.
+    await graph_db.save_vocabulary_graph(
+        [make_concept(ConceptPrefix.SNOMED, 'S1')], nx.MultiDiGraph(),
+    )
+    await graph_db.save_vocabulary_graph(
+        [make_concept(ConceptPrefix.SNOMED, 'S1')], nx.MultiDiGraph(),
+    )
+
+    async with graph_db._client.session() as session:
+        record = await (await session.run(
+            "MATCH (:Concept {prefix: 'ohdsi', id: 'O1'})-[r]->"
+            "(n:Concept {prefix: 'snomed', id: 'S1'}) "
+            "RETURN n.owners AS owners, r.owners AS relationship_owners"
+        )).single()
+        assert set(record['owners']) == {'ohdsi', 'snomed'}
+        assert record['relationship_owners'] == ['ohdsi']
+
+    await graph_db.delete_vocabulary_graph(ConceptPrefix.OHDSI)
+
+    assert await graph_db.count_terms(ConceptPrefix.OHDSI) == 0
+    async with graph_db._client.session() as session:
+        snomed = await (await session.run(
+            "MATCH (n:Concept {prefix: 'snomed', id: 'S1'}) "
+            "RETURN n.owners AS owners, count { (n)--() } AS degree"
+        )).single()
+        assert snomed['owners'] == ['snomed']
+        assert snomed['degree'] == 0
+        orphan_count = await (await session.run(
+            "MATCH (n:Concept {prefix: 'athena-only'}) RETURN count(n) AS count"
+        )).single()
+        assert orphan_count['count'] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_vocabulary_graph_drains_high_degree_nodes_by_relationship(monkeypatch, graph_db):
+    monkeypatch.setattr(CONFIG, 'neo4j_delete_batch_size', 2)
+    await graph_db.save_vocabulary_graph(
+        [make_concept(ConceptPrefix.OHDSI, 'hub')], nx.MultiDiGraph(),
+    )
+    await graph_db.save_annotations([
+        Annotation(
+            conceptIdFrom='hub', prefixFrom=ConceptPrefix.OHDSI,
+            conceptIdTo=f'T{index}', prefixTo='athena-only',
+            annotationType=AnnotationType.EXACT,
+        )
+        for index in range(25)
+    ])
+
+    await graph_db.delete_vocabulary_graph(ConceptPrefix.OHDSI)
+
+    async with graph_db._client.session() as session:
+        remaining_nodes = await (await session.run(
+            "MATCH (n:Concept) RETURN count(n) AS count"
+        )).single()
+        remaining_relationships = await (await session.run(
+            "MATCH ()-[r]->() RETURN count(r) AS count"
+        )).single()
+        assert remaining_nodes['count'] == 0
+        assert remaining_relationships['count'] == 0
 
 
 # ---------------------------------------------------------------------------------------

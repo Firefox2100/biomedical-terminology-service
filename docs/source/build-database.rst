@@ -429,6 +429,7 @@ For ``xxx.node_ids.dump`` files, they are CSV files that contain node IDs, conce
         MERGE (n:Concept {prefix: $concept_prefix, id: conceptId})
         WITH n, labels, sourceVocabularyId, reviewed, organismTaxId, organismName
         CALL apoc.create.addLabels(n, labels) YIELD node
+        SET node.owners = apoc.coll.toSet(coalesce(node.owners, []) + [$concept_prefix])
         FOREACH (_ IN CASE WHEN sourceVocabularyId IS NULL THEN [] ELSE [1] END | SET node.sourceVocabularyId = sourceVocabularyId)
         FOREACH (_ IN CASE WHEN reviewed IS NULL THEN [] ELSE [1] END | SET node.reviewed = reviewed)
         FOREACH (_ IN CASE WHEN organismTaxId IS NULL THEN [] ELSE [1] END | SET node.organismTaxId = organismTaxId)
@@ -462,7 +463,10 @@ For ``xxx.graph.dump`` files, they are CSV files that contain internal relations
         "
         MERGE (source:Concept {prefix: $concept_prefix, id: src})
         MERGE (target:Concept {prefix: $concept_prefix, id: dst})
+        SET source.owners = apoc.coll.toSet(coalesce(source.owners, []) + [$concept_prefix]),
+            target.owners = apoc.coll.toSet(coalesce(target.owners, []) + [$concept_prefix])
         CALL apoc.merge.relationship(source, relType, {}, {}, target) YIELD rel
+        SET rel.owners = apoc.coll.toSet(coalesce(rel.owners, []) + [$concept_prefix])
         FOREACH (_ IN CASE WHEN relKey IS NULL THEN [] ELSE [1] END |
             SET rel.label =
                 apoc.coll.toSet(
@@ -498,11 +502,19 @@ For ``xxx.annotation.dump`` files, they are CSV files that contain cross-vocabul
         "
         MERGE (source:Concept {prefix: prefixFrom, id: idFrom})
         MERGE (target:Concept {prefix: prefixTo,   id: idTo})
+        SET source.owners = apoc.coll.toSet(coalesce(source.owners, []) + [prefixFrom]),
+            target.owners = apoc.coll.toSet(coalesce(target.owners, []) + [prefixFrom])
         WITH source, target, relType, apoc.convert.fromJsonMap(propsJson) AS props
         CALL apoc.merge.relationship(source, relType, {}, props, target) YIELD rel
+        SET rel.owners = apoc.coll.toSet(coalesce(rel.owners, []) + [source.prefix])
         RETURN 1
         ",
         {batchSize: 10000, parallel: false, retries: 20}
     );
+
+The ``owners`` lists are lifecycle metadata. A vocabulary graph claims its own prefix; an
+annotation claims the source prefix on the relationship and both endpoint nodes. Deletion removes
+one owner and only removes an entity when no owners remain. This lets a concept materialised by,
+for example, both SNOMED and OHDSI survive deletion of either loader.
 
 These queries may not be the most efficient way to import the data, but they are designed to be robust and handle various edge cases. Adjust the queries as needed based on your specific requirements and database setup, as long as the resulting schema remains consistent with the software's expectations.

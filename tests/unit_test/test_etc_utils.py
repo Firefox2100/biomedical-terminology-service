@@ -46,6 +46,43 @@ def test_iter_progress_accepts_tqdm_style_desc_alias(monkeypatch):
     assert list(iter_progress(range(2), desc='test', total=2)) == [0, 1]
 
 
+def test_iter_progress_uses_shared_console(monkeypatch):
+    monkeypatch.setattr(CONFIG, 'disable_progress_bar', False)
+    calls = []
+
+    class FakeProgress:
+        def __init__(self, *args, **kwargs):
+            calls.append(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def add_task(self, **kwargs):
+            return 1
+
+        def advance(self, task):
+            pass
+
+    monkeypatch.setattr(utils, 'Progress', FakeProgress)
+
+    assert list(iter_progress(range(2), total=2)) == [0, 1]
+    assert calls[0]['console'] is utils.CONSOLE
+
+
+def test_verbose_print_uses_shared_console_without_duplicate_debug_output(monkeypatch):
+    messages = []
+    monkeypatch.setattr(CONFIG, 'verbose_print', True)
+    monkeypatch.setattr(utils.CONSOLE, 'print', messages.append)
+    monkeypatch.setattr(utils.LOGGER, 'isEnabledFor', lambda level: False)
+
+    utils.verbose_print('detail')
+
+    assert messages == ['detail']
+
+
 def test_batch_iterable_does_not_construct_progress_when_disabled(monkeypatch):
     monkeypatch.setattr(CONFIG, 'disable_progress_bar', True)
     monkeypatch.setattr(utils, 'Progress', lambda *args, **kwargs: pytest.fail('progress constructed'))

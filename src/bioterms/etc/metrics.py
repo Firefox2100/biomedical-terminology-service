@@ -335,7 +335,7 @@ def initialize_metrics() -> None:
     for name, proxy in proxies.items():
         proxy.bind(created_metrics[name])
     _metrics_initialized = True
-    LOGGER.info(
+    LOGGER.debug(
         'Initialized metrics backend: %s',
         'redis' if CONFIG.cache_driver == CacheDriverType.REDIS else 'in-memory',
     )

@@ -277,7 +277,7 @@ def get_active_vector_db() -> VectorDatabase:
         QdrantVectorDatabase.set_client(qdrant_client)
 
         _active_vector_db = QdrantVectorDatabase()
-        LOGGER.info('Initialized vector database backend: qdrant')
+        LOGGER.debug('Initialized vector database backend: qdrant')
 
         return _active_vector_db
 
@@ -296,7 +296,7 @@ def get_active_vector_db() -> VectorDatabase:
         MongoVectorDatabase.set_client(mongo_client)
 
         _active_vector_db = MongoVectorDatabase()
-        LOGGER.info('Initialized vector database backend: mongodb')
+        LOGGER.debug('Initialized vector database backend: mongodb')
 
         return _active_vector_db
 
@@ -308,7 +308,7 @@ def get_active_vector_db() -> VectorDatabase:
         PostgresVectorDatabase.set_engine(pg_engine)
 
         _active_vector_db = PostgresVectorDatabase()
-        LOGGER.info('Initialized vector database backend: postgresql')
+        LOGGER.debug('Initialized vector database backend: postgresql')
 
         return _active_vector_db
 
@@ -325,7 +325,7 @@ def get_active_vector_db() -> VectorDatabase:
             )
         client = AsyncElasticsearch(CONFIG.elasticsearch_url, **kwargs)
         _active_vector_db = ElasticsearchVectorDatabase(client)
-        LOGGER.info('Initialized vector database backend: elasticsearch')
+        LOGGER.debug('Initialized vector database backend: elasticsearch')
         return _active_vector_db
 
     raise ValueError(f'Unsupported vector database driver: {CONFIG.vector_database_driver}')

@@ -808,7 +808,7 @@ def get_active_graph_db() -> GraphDatabase:
         Neo4jGraphDatabase.set_client(neo4j_client)
 
         _active_graph_db = Neo4jGraphDatabase()
-        LOGGER.info('Initialized graph database backend: neo4j')
+        LOGGER.debug('Initialized graph database backend: neo4j')
         return _active_graph_db
 
     if CONFIG.graph_database_driver == GraphDatabaseDriverType.POSTGRESQL:
@@ -819,7 +819,7 @@ def get_active_graph_db() -> GraphDatabase:
         PostgresGraphDatabase.set_engine(pg_engine)
 
         _active_graph_db = PostgresGraphDatabase()
-        LOGGER.info('Initialized graph database backend: postgresql')
+        LOGGER.debug('Initialized graph database backend: postgresql')
         return _active_graph_db
 
     raise ValueError(

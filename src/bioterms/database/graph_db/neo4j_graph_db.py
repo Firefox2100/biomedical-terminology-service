@@ -434,6 +434,10 @@ class Neo4jGraphDatabase(GraphDatabase):
                     UNWIND $concepts AS concept
                     WITH concept, coalesce(concept.conceptTypes, []) AS types
                     MERGE (n:Concept {id: concept.conceptId, prefix: concept.prefix})
+                    SET n.owners = CASE
+                        WHEN $owner IN coalesce(n.owners, []) THEN n.owners
+                        ELSE coalesce(n.owners, []) + $owner
+                    END
 
                     WITH n, concept, [t IN types WHERE t IS NOT NULL AND trim(t) <> ""] AS labels
                     SET n:$(labels)
@@ -446,6 +450,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     parameters={
                         'concepts': [concept.model_dump() for concept in concept_batch],
                         'extraProperties': GRAPH_NODE_EXTRA_PROPERTIES,
+                        'owner': prefix.value,
                     },
                 )
 
@@ -457,10 +462,22 @@ class Neo4jGraphDatabase(GraphDatabase):
                     UNWIND $edges AS edge
                     MERGE (source:Concept {id: edge[0], prefix: $concept_prefix})
                     MERGE (target:Concept {id: edge[1], prefix: $concept_prefix})
+                    SET source.owners = CASE
+                            WHEN $owner IN coalesce(source.owners, []) THEN source.owners
+                            ELSE coalesce(source.owners, []) + $owner
+                        END,
+                        target.owners = CASE
+                            WHEN $owner IN coalesce(target.owners, []) THEN target.owners
+                            ELSE coalesce(target.owners, []) + $owner
+                        END
                     WITH source, target, edge,
                         coalesce(edge[2], 'related_to') as rel_label,
                         edge[3] AS rel_key
                     MERGE (source)-[rel:$(rel_label)]->(target)
+                    SET rel.owners = CASE
+                        WHEN $owner IN coalesce(rel.owners, []) THEN rel.owners
+                        ELSE coalesce(rel.owners, []) + $owner
+                    END
                     WITH rel, rel_key
                     FOREACH (_ IN CASE WHEN rel_key IS NULL THEN [] ELSE [1] END |
                         SET rel.label = reduce(
@@ -484,6 +501,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                     parameters={
                         'edges': edge_batch,
                         'concept_prefix': prefix.value,
+                        'owner': prefix.value,
                     },
                 )
 
@@ -636,28 +654,122 @@ class Neo4jGraphDatabase(GraphDatabase):
         """
         batch_size = CONFIG.neo4j_delete_batch_size
 
-        # Neither a single CALL {} IN TRANSACTIONS OF N ROWS nor apoc.periodic.commit
-        # kept this bounded on constrained instances -- both still hold the *entire*
-        # driving MATCH's state open (directly or via APOC's own iteration) across the
-        # whole delete. Looping client-side instead, re-issuing a small bounded query
-        # as its own fresh auto-commit transaction every round trip, means no state at
-        # all is carried between iterations -- peak transaction memory is bounded by
-        # one batch of nodes (and their relationships) no matter how large the
-        # vocabulary is. DETACH DELETE removes a node's relationships together with it,
-        # so this replaces the old two-pass (relationships, then nodes) query, and with
-        # it the need to special-case internal (same-prefix-on-both-ends) relationships
-        # being matched twice by an undirected pattern.
+        owner = prefix.value
+
+        # A node batch does not bound a DETACH DELETE transaction: one high-degree OHDSI
+        # concept can pull millions of relationships into a transaction even when the node
+        # batch size is one. Drain relationships first. The element-id ordering predicate
+        # ensures an internal relationship (whose endpoints both have this prefix) is matched
+        # only once without an aggregation that would materialise the full edge set before LIMIT.
+        #
+        # Relationships shared by multiple loaders lose only this owner. Relationships from
+        # legacy databases have no owners and retain the previous behaviour: an edge incident
+        # to the deleted vocabulary belongs to that vocabulary and is removed. Annotation
+        # endpoint nodes are updated in the same bounded transaction, avoiding a global scan
+        # for list membership when the owner is later removed.
         async with self._client.session() as session:
             while True:
                 result = await _execute_query_with_retry(
                     query="""
-                    MATCH (n:Concept {prefix: $prefix})
-                    WITH n LIMIT $batch_size
-                    DETACH DELETE n
-                    RETURN count(n) AS deleted
+                    MATCH (owned:Concept {prefix: $prefix})-[r]-(other:Concept)
+                    WHERE $owner IN coalesce(r.owners, []) AND size(r.owners) > 1
+                        AND (other.prefix <> $prefix OR elementId(owned) < elementId(other))
+                    WITH r, other
+                    LIMIT $batch_size
+                    SET r.owners = [value IN r.owners WHERE value <> $owner]
+                    SET other.owners = CASE
+                        WHEN other.prefix = $prefix THEN other.owners
+                        ELSE [value IN coalesce(other.owners, []) WHERE value <> $owner]
+                    END
+                    RETURN count(r) AS processed
                     """,
                     session=session,
-                    parameters={'prefix': prefix.value, 'batch_size': batch_size},
+                    parameters={
+                        'prefix': prefix.value,
+                        'owner': owner,
+                        'batch_size': batch_size,
+                    },
+                )
+                if (await result.single())['processed'] == 0:
+                    break
+
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (owned:Concept {prefix: $prefix})-[r]-(other:Concept)
+                    WHERE (r.owners IS NULL OR size(r.owners) = 0 OR $owner IN r.owners)
+                        AND (other.prefix <> $prefix OR elementId(owned) < elementId(other))
+                    WITH r, other
+                    LIMIT $batch_size
+                    SET other.owners = CASE
+                        WHEN other.prefix = $prefix OR other.owners IS NULL THEN other.owners
+                        ELSE [value IN other.owners WHERE value <> $owner]
+                    END
+                    DELETE r
+                    RETURN count(*) AS deleted
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'owner': owner,
+                        'batch_size': batch_size,
+                    },
+                )
+                if (await result.single())['deleted'] == 0:
+                    break
+
+            # Remove this vocabulary's direct ownership. Nodes still claimed by another
+            # vocabulary/annotation remain. Legacy ownerless nodes with this prefix preserve
+            # the historical delete behaviour.
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.owners IS NULL OR $owner IN n.owners
+                    WITH n LIMIT $batch_size
+                    SET n.owners = CASE
+                        WHEN n.owners IS NULL THEN []
+                        ELSE [value IN n.owners WHERE value <> $owner]
+                    END
+                    WITH n
+                    WHERE size(n.owners) = 0 AND NOT (n)--()
+                    DELETE n
+                    RETURN count(*) AS deleted
+                    """,
+                    session=session,
+                    parameters={
+                        'prefix': prefix.value,
+                        'owner': owner,
+                        'batch_size': batch_size,
+                    },
+                )
+                await result.consume()
+                remaining = await _execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept {prefix: $prefix})
+                    WHERE n.owners IS NULL OR $owner IN n.owners
+                    RETURN count(n) AS remaining
+                    """,
+                    session=session,
+                    parameters={'prefix': prefix.value, 'owner': owner},
+                )
+                if (await remaining.single())['remaining'] == 0:
+                    break
+
+            # New owner-aware annotation endpoints that lost their final owner are explicit
+            # empty-list nodes. Delete only isolated ones; ownerless legacy nodes elsewhere
+            # are deliberately not guessed at during an in-place upgrade.
+            while True:
+                result = await _execute_query_with_retry(
+                    query="""
+                    MATCH (n:Concept)
+                    WHERE n.owners = [] AND NOT (n)--()
+                    WITH n LIMIT $batch_size
+                    DELETE n
+                    RETURN count(*) AS deleted
+                    """,
+                    session=session,
+                    parameters={'batch_size': batch_size},
                 )
                 if (await result.single())['deleted'] == 0:
                     break
@@ -759,9 +871,9 @@ class Neo4jGraphDatabase(GraphDatabase):
                 UNWIND $attributes AS attr
                 WITH DISTINCT attr
                 OPTIONAL MATCH (source:Concept {prefix: $prefix_from})
-                    -[r:similar_to]->
+                    -[r]->
                     (target:Concept {prefix: $prefix_to})
-                WHERE attr IN keys(r)
+                WHERE type(r) = 'similar_to' AND attr IN keys(r)
                 RETURN attr AS attribute, count(r) AS relationship_count
                 ORDER BY attribute;
                 """,
@@ -800,12 +912,26 @@ class Neo4jGraphDatabase(GraphDatabase):
                         UNWIND $annotations AS annotation
                         MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
                         MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                        WITH source, target, annotation, annotation.prefixFrom AS owner
+                        SET source.owners = CASE
+                                WHEN owner IN coalesce(source.owners, []) THEN source.owners
+                                ELSE coalesce(source.owners, []) + owner
+                            END,
+                            target.owners = CASE
+                                WHEN owner IN coalesce(target.owners, []) THEN target.owners
+                                ELSE coalesce(target.owners, []) + owner
+                            END
                         WITH source,
                             target,
+                            owner,
                             coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
                             annotation.properties AS props
                         MERGE (source)-[rel:$(rel_type) {source: props.source}]->(target)
-                        SET rel += props
+                        SET rel += props,
+                            rel.owners = CASE
+                                WHEN owner IN coalesce(rel.owners, []) THEN rel.owners
+                                ELSE coalesce(rel.owners, []) + owner
+                            END
                         RETURN count(rel) AS created
                         """,
                         session=session,
@@ -817,12 +943,26 @@ class Neo4jGraphDatabase(GraphDatabase):
                         UNWIND $annotations AS annotation
                         MERGE (source:Concept {id: annotation.conceptIdFrom, prefix: annotation.prefixFrom})
                         MERGE (target:Concept {id: annotation.conceptIdTo, prefix: annotation.prefixTo})
+                        WITH source, target, annotation, annotation.prefixFrom AS owner
+                        SET source.owners = CASE
+                                WHEN owner IN coalesce(source.owners, []) THEN source.owners
+                                ELSE coalesce(source.owners, []) + owner
+                            END,
+                            target.owners = CASE
+                                WHEN owner IN coalesce(target.owners, []) THEN target.owners
+                                ELSE coalesce(target.owners, []) + owner
+                            END
                         WITH source,
                             target,
+                            owner,
                             coalesce(annotation.annotationType, 'annotated_with') AS rel_type,
                             coalesce(annotation.properties, {}) AS props
                         MERGE (source)-[rel:$(rel_type)]->(target)
-                        SET rel += props
+                        SET rel += props,
+                            rel.owners = CASE
+                                WHEN owner IN coalesce(rel.owners, []) THEN rel.owners
+                                ELSE coalesce(rel.owners, []) + owner
+                            END
                         RETURN count(rel) AS created
                         """,
                         session=session,
@@ -1036,7 +1176,11 @@ class Neo4jGraphDatabase(GraphDatabase):
                     MATCH (target:Concept {id: sim.concept_to, prefix: $prefix_to})
                     WITH source, target, sim.similarity AS sim_score, $similarity_property AS similarity_property
                     MERGE (source)-[rel:similar_to]->(target)
-                    SET rel[similarity_property] = sim_score
+                    SET rel[similarity_property] = sim_score,
+                        rel.owners = CASE
+                            WHEN $owner IN coalesce(rel.owners, []) THEN rel.owners
+                            ELSE coalesce(rel.owners, []) + $owner
+                        END
                     RETURN count(rel) AS created
                     """,
                     session=session,
@@ -1048,6 +1192,7 @@ class Neo4jGraphDatabase(GraphDatabase):
                             f'{similarity_method.value}:{corpus_prefix.value}'
                             if corpus_prefix else similarity_method.value
                         ),
+                        'owner': prefix_from.value,
                     },
                 )
 
@@ -1721,7 +1866,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                 query="""
                 UNWIND $similarity_queries AS sim_query
                 MATCH (n:Concept {prefix: $prefix, id: sim_query.concept_id})
-                MATCH (n)-[r:similar_to]-(m:Concept {prefix: $prefix})
+                MATCH (n)-[r]-(m:Concept {prefix: $prefix})
+                WHERE type(r) = 'similar_to'
                 WITH n, m, properties(r) AS props, sim_query.threshold AS threshold
                 WITH
                     n,
@@ -1867,8 +2013,8 @@ class Neo4jGraphDatabase(GraphDatabase):
                     query="""
                     MATCH (n:Concept {prefix: $prefix})
                     WHERE n.id IN $concept_ids
-                    MATCH (n)-[r:similar_to]-(m:Concept)
-                    WHERE m.prefix IN $target_prefixes
+                    MATCH (n)-[r]-(m:Concept)
+                    WHERE type(r) = 'similar_to' AND m.prefix IN $target_prefixes
                     WITH n, m, properties(r) AS props
                     WITH
                         n,
@@ -2024,8 +2170,9 @@ class Neo4jGraphDatabase(GraphDatabase):
                 MATCH (n:Concept {prefix: $original_prefix})
                 WHERE n.id IN $original_ids
 
-                MATCH (n)-[r:similar_to]-(m:Concept {prefix: constraint_prefix})
-                WHERE m.id IN $constraint_ids[constraint_prefix]
+                MATCH (n)-[r]-(m:Concept {prefix: constraint_prefix})
+                WHERE type(r) = 'similar_to'
+                    AND m.id IN $constraint_ids[constraint_prefix]
 
                 WITH n, m, properties(r) AS props
                 WITH

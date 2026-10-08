@@ -396,7 +396,7 @@ async def get_active_doc_db() -> DocumentDatabase:
         doc_db = MongoDocumentDatabase()
         await doc_db.initialize()
         _active_doc_db = doc_db
-        LOGGER.info('Initialized document database backend: mongodb')
+        LOGGER.debug('Initialized document database backend: mongodb')
 
         return _active_doc_db
 
@@ -426,7 +426,7 @@ async def get_active_doc_db() -> DocumentDatabase:
         doc_db = SqlDocumentDatabase(sql_engine, batch_size=CONFIG.sql_batch_size)
         await doc_db.initialize()
         _active_doc_db = doc_db
-        LOGGER.info('Initialized document database backend: sql (%s)', sql_engine.dialect.name)
+        LOGGER.debug('Initialized document database backend: sql (%s)', sql_engine.dialect.name)
 
         return _active_doc_db
 
@@ -446,7 +446,7 @@ async def get_active_doc_db() -> DocumentDatabase:
         doc_db = ElasticsearchDocumentDatabase(client)
         await doc_db.initialize()
         _active_doc_db = doc_db
-        LOGGER.info('Initialized document database backend: elasticsearch')
+        LOGGER.debug('Initialized document database backend: elasticsearch')
         return _active_doc_db
 
     raise ValueError(

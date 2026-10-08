@@ -31,3 +31,16 @@ def test_create_index_indexes_every_extra_property():
     assert 'CREATE INDEX concept_{property_name}_index' in source
     for property_name in GRAPH_NODE_EXTRA_PROPERTIES:
         assert property_name  # sanity: list isn't empty, loop actually has work to do
+
+
+def test_similarity_reads_do_not_reference_a_missing_relationship_token():
+    """Fresh databases must not emit Neo4j 01N51 for an absent similarity type."""
+    for method_name in (
+        'count_similarity_relationships',
+        'get_similar_terms_aggregate_iter',
+        'get_similar_terms_iter',
+        'translate_terms_iter',
+    ):
+        source = inspect.getsource(getattr(Neo4jGraphDatabase, method_name))
+        assert '[r:similar_to]' not in source
+        assert "type(r) = 'similar_to'" in source

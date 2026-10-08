@@ -153,7 +153,7 @@ def get_active_cache() -> Cache:
         )
         RedisCache.set_client(redis_client)
         _active_cache = RedisCache()
-        LOGGER.info('Initialized cache backend: redis')
+        LOGGER.debug('Initialized cache backend: redis')
 
         return _active_cache
 

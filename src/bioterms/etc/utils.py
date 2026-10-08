@@ -3,6 +3,7 @@ Utility functions for data management, downloading, extraction, and processing.
 """
 
 import asyncio
+import logging
 import os
 import re
 import itertools
@@ -29,6 +30,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeEl
     TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 
 from .consts import CONFIG, DOWNLOAD_CLIENT, QUERY_CLIENT, LOGGER
+from .console import CONSOLE
 from .errors import FilesNotFound
 
 if TYPE_CHECKING:
@@ -239,7 +241,7 @@ def _batch_mutable_sequence(seq: MutableSequence,
                 yield [seq.pop() for _ in range(min(len(seq), batch_size))]
         return
 
-    with Progress(*_progress_columns()) as progress:
+    with Progress(*_progress_columns(), console=CONSOLE) as progress:
         task = progress.add_task(description="Batching...", total=batch_count)
 
         if not consume:
@@ -279,7 +281,9 @@ def _batch_general_iterable(seq: Iterable,
                 return
             batch = [first]
 
-    with Progress(*_progress_columns(total_known=False), transient=False) as progress:
+    with Progress(
+        *_progress_columns(total_known=False), console=CONSOLE, transient=False,
+    ) as progress:
         task = progress.add_task(description="Batching...", total=None)
 
         batch = [first]
@@ -439,7 +443,9 @@ async def download_file(url: str,
                     else:
                         columns = _download_progress_columns() if total is not None \
                             else _progress_columns(total_known=False)
-                        with Progress(*columns, transient=total is None) as progress:
+                        with Progress(
+                            *columns, console=CONSOLE, transient=total is None,
+                        ) as progress:
                             task = progress.add_task(
                                 description=f'Downloading {file_name}',
                                 total=total,
@@ -710,7 +716,7 @@ def iter_progress(iterable: Iterable[T],
         yield from iterable
         return
 
-    with Progress(*_progress_columns(total_known=total is not None),
+    with Progress(*_progress_columns(total_known=total is not None), console=CONSOLE,
                   transient=total is None or transient) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         for item in iterable:
@@ -743,7 +749,7 @@ async def aiter_progress(async_iterable: AsyncIterable[T],
             yield item
         return
 
-    with Progress(*_progress_columns(total_known=total is not None),
+    with Progress(*_progress_columns(total_known=total is not None), console=CONSOLE,
                   transient=total is None or transient) as progress:
         task = progress.add_task(description=description, total=total, **kwargs)
         async for item in async_iterable:
@@ -757,8 +763,8 @@ def verbose_print(message: str):
     :param message: The message to print.
     """
     LOGGER.debug(message)
-    if CONFIG.verbose_print:
-        print(message, flush=True)
+    if CONFIG.verbose_print and not LOGGER.isEnabledFor(logging.DEBUG):
+        CONSOLE.print(message)
 
 
 def _start_optional_progress(description: str | None,
@@ -775,7 +781,7 @@ def _start_optional_progress(description: str | None,
     if CONFIG.disable_progress_bar:
         return None, None
 
-    progress = Progress(*_progress_columns(total_known=total is not None),
+    progress = Progress(*_progress_columns(total_known=total is not None), console=CONSOLE,
                         transient=total is None or transient)
     task = progress.add_task(description=description or "Processing...", total=total)
     progress.start()
@@ -891,7 +897,7 @@ def initialize_error_reporting(release: str | None = None) -> bool:
             'profile_lifecycle': 'trace',
         })
     sentry_sdk.init(**options)
-    LOGGER.info('Initialized Sentry error reporting.')
+    LOGGER.debug('Initialized Sentry error reporting.')
     return True
 
 
