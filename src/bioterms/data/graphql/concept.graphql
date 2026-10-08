@@ -6,6 +6,7 @@ enum ConceptPrefix {
     hgnc
     hpo
     loinc
+    mondo
     ncit
     ohdsi
     omim

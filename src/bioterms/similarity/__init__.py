@@ -226,6 +226,64 @@ async def _flush_similarity_results(results: list,
         )
 
 
+async def _prepare_online_similarity(method: SimilarityMethod,
+                                    similarity_config: dict,
+                                    target_prefix: ConceptPrefix,
+                                    corpus_prefix: ConceptPrefix | None,
+                                    doc_db: DocumentDatabase | None,
+                                    graph_db: GraphDatabase | None,
+                                    ) -> GraphDatabase:
+    """Resolve the active databases and check the method's prerequisites are loaded."""
+    if doc_db is None:
+        doc_db = await get_active_doc_db()
+    if graph_db is None:
+        graph_db = get_active_graph_db()
+
+    await _validate_similarity_prerequisites(
+        method, similarity_config, target_prefix, corpus_prefix, doc_db, graph_db,
+    )
+    return graph_db
+
+
+def _similarity_dump_path(target_prefix: ConceptPrefix,
+                          method: SimilarityMethod,
+                          corpus_prefix: ConceptPrefix | None,
+                          ) -> str:
+    """The offline dump path, `<target>-<method>[-<corpus>].similarity.dump`."""
+    corpus_suffix = f'-{corpus_prefix.value}' if corpus_prefix else ''
+    return os.path.join(
+        CONFIG.data_dir,
+        'offline',
+        f'{target_prefix.value}-{method.value}{corpus_suffix}.similarity.dump',
+    )
+
+
+async def _write_similarity_results(results_iter,
+                                    similarity_threshold: float,
+                                    offline: bool,
+                                    offline_file,
+                                    graph_db: GraphDatabase | None,
+                                    target_prefix: ConceptPrefix,
+                                    method: SimilarityMethod,
+                                    corpus_prefix: ConceptPrefix | None,
+                                    ):
+    """Keep results at or above the threshold and flush them in batches of 10,000."""
+    results = []
+    async for result in results_iter:
+        if result[2] >= similarity_threshold:
+            results.append(result)
+
+        if len(results) >= 10000:
+            await _flush_similarity_results(
+                results, offline, offline_file, graph_db, target_prefix, method, corpus_prefix,
+            )
+            results.clear()
+
+    await _flush_similarity_results(
+        results, offline, offline_file, graph_db, target_prefix, method, corpus_prefix,
+    )
+
+
 async def calculate_similarity(method: SimilarityMethod,
                                target_prefix: ConceptPrefix,
                                corpus_prefix: ConceptPrefix = None,
@@ -266,12 +324,7 @@ async def calculate_similarity(method: SimilarityMethod,
         similarity_threshold = similarity_config['defaultThreshold']
 
     if not offline:
-        if doc_db is None:
-            doc_db = await get_active_doc_db()
-        if graph_db is None:
-            graph_db = get_active_graph_db()
-
-        await _validate_similarity_prerequisites(
+        graph_db = await _prepare_online_similarity(
             method, similarity_config, target_prefix, corpus_prefix, doc_db, graph_db,
         )
 
@@ -280,41 +333,24 @@ async def calculate_similarity(method: SimilarityMethod,
     )
     context.threshold = similarity_threshold
 
-    results = []
-    offline_file_path = os.path.join(
-        CONFIG.data_dir,
-        'offline',
-        f'{target_prefix.value}-{method.value}{("-" + corpus_prefix.value) if corpus_prefix else ""}.similarity.dump'
-    )
-
     if offline:
-        offline_file = await aiofiles.open(offline_file_path, mode='w')
+        async with aiofiles.open(
+            _similarity_dump_path(target_prefix, method, corpus_prefix), mode='w',
+        ) as offline_file:
+            await _write_similarity_results(
+                similarity_module.calculate_similarity(context=context), similarity_threshold,
+                True, offline_file, graph_db, target_prefix, method, corpus_prefix,
+            )
     else:
-        offline_file = None
-
-    try:
-        async for result in similarity_module.calculate_similarity(context=context):
-            if result[2] >= similarity_threshold:
-                results.append(result)
-
-            if len(results) >= 10000:
-                await _flush_similarity_results(
-                    results, offline, offline_file, graph_db, target_prefix, method, corpus_prefix,
-                )
-                results.clear()
-
-        await _flush_similarity_results(
-            results, offline, offline_file, graph_db, target_prefix, method, corpus_prefix,
-        )
-    finally:
-        if offline and offline_file is not None:
-            await offline_file.close()
-
-        if not offline:
+        try:
+            await _write_similarity_results(
+                similarity_module.calculate_similarity(context=context), similarity_threshold,
+                False, None, graph_db, target_prefix, method, corpus_prefix,
+            )
+        finally:
             # Cache invalidation is only needed for online graph writes.
             if cache is None:
                 cache = get_active_cache()
-
             await cache.rotate_dataset_version()
 
     LOGGER.info(

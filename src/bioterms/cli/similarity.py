@@ -95,7 +95,6 @@ async def calculate_command(target_prefix: Annotated[
                                 bool,
                                 typer.Option(
                                     '--offline',
-                                    is_flag=True,
                                     help='Run the calculation in offline mode. Requires the offline '
                                          'files from loading functions.'
                                 )

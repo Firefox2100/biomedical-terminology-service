@@ -32,11 +32,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[test]
 
+      # Failures fail the job; later steps use `if: always()` so reports are still published.
       - name: Run tests with coverage
-        continue-on-error: true
         run: |
           export PYTHONPATH=./src:$PYTHONPATH
-          pytest --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html || TEST_FAILED=1
+          # `*_checks.py` are the Docker-backed integration checks (testcontainers), which the
+          # default local `pytest` run leaves out; the hosted runner has Docker, so include them.
+          pytest --continue-on-collection-errors -o python_files="test_*.py *_checks.py" \
+            --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html
 
       - name: Upload test results
         if: always()
@@ -53,6 +56,7 @@ jobs:
           path: coverage.xml
 
       - name: Extract Version
+        if: always()
         run: |
           VERSION=$(awk -F"'" '/^__version__/ {print $2}' ./src/bioterms/__init__.py)
           echo "VERSION=$VERSION" >> $GITHUB_ENV

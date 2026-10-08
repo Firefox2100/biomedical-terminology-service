@@ -143,7 +143,7 @@ async def delete_annotation_files(prefix_1: ConceptPrefix,
         # Fallback to default deletion method
         for file_path in annotation_module.FILE_PATHS:
             try:
-                await aiofiles.os.remove(file_path)
+                await aiofiles.os.remove(os.path.join(CONFIG.data_dir, file_path))
             except Exception:
                 pass
     else:
@@ -401,6 +401,62 @@ def _canonical_annotation_prefix(value: str | ConceptPrefix | None) -> str | Con
         return value.lower()
 
 
+def _parse_dump_row(row: list[str],
+                    location: str,
+                    source_fallback: ConceptPrefix | None,
+                    target_fallback: ConceptPrefix | None,
+                    ) -> Annotation:
+    """
+    Build an Annotation from one annotation dump row.
+    :param row: The CSV row, with at least six columns.
+    :param location: `<path>:<line>` used in error messages.
+    :param source_fallback: Source prefix for rows whose source prefix column is empty.
+    :param target_fallback: Target prefix for rows whose target prefix column is empty.
+    """
+    (row_source_prefix, source_id, row_target_prefix, target_id,
+     annotation_type, properties_text) = row[:6]
+    source_curie = parse_annotation_curie(
+        _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
+    )
+    target_curie = parse_annotation_curie(
+        _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
+    )
+    source_curie_prefix, source_curie_id = source_curie.split(':', 1)
+    target_curie_prefix, target_curie_id = target_curie.split(':', 1)
+
+    try:
+        properties = json.loads(properties_text) if properties_text.strip() else None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f'{location} contains invalid properties JSON') from exc
+
+    return Annotation(
+        prefixFrom=source_curie_prefix,
+        conceptIdFrom=source_curie_id,
+        prefixTo=target_curie_prefix,
+        conceptIdTo=target_curie_id,
+        annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
+        properties=properties,
+    )
+
+
+def _iter_dump_annotations(dump_path: Path,
+                           source_fallback: ConceptPrefix | None,
+                           target_fallback: ConceptPrefix | None,
+                           ):
+    """Stream annotations from a dump file, skipping blank rows and rejecting short ones."""
+    with dump_path.open(encoding='utf-8', newline='') as f:
+        for line_number, row in enumerate(csv.reader(f), 1):
+            if not any(value.strip() for value in row):
+                continue
+            if len(row) < 6:
+                raise ValueError(
+                    f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6'
+                )
+            yield _parse_dump_row(
+                row, f'{dump_path}:{line_number}', source_fallback, target_fallback,
+            )
+
+
 async def restore_annotation(dump_path: str | os.PathLike,
                              source_prefix: str | ConceptPrefix | None = None,
                              target_prefix: str | ConceptPrefix | None = None,
@@ -453,42 +509,12 @@ async def restore_annotation(dump_path: str | os.PathLike,
             )
         await delete_annotation(prefix_1=source_fallback, prefix_2=target_fallback, graph_db=graph_db)
 
-    def annotations():
-        with dump_path.open(encoding='utf-8', newline='') as f:
-            for line_number, row in enumerate(csv.reader(f), 1):
-                if not row or not any(value.strip() for value in row):
-                    continue
-                if len(row) < 6:
-                    raise ValueError(f'{dump_path}:{line_number} has {len(row)} columns; expected at least 6')
-
-                row_source_prefix, source_id, row_target_prefix, target_id, annotation_type, properties_text = row[:6]
-                source_curie = parse_annotation_curie(
-                    _canonical_annotation_prefix(row_source_prefix), source_id, source_fallback,
-                )
-                target_curie = parse_annotation_curie(
-                    _canonical_annotation_prefix(row_target_prefix), target_id, target_fallback,
-                )
-                source_curie_prefix, source_curie_id = source_curie.split(':', 1)
-                target_curie_prefix, target_curie_id = target_curie.split(':', 1)
-
-                try:
-                    properties = json.loads(properties_text) if properties_text.strip() else None
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f'{dump_path}:{line_number} contains invalid properties JSON') from exc
-
-                yield Annotation(
-                    prefixFrom=source_curie_prefix,
-                    conceptIdFrom=source_curie_id,
-                    prefixTo=target_curie_prefix,
-                    conceptIdTo=target_curie_id,
-                    annotationType=annotation_type or AnnotationType.ANNOTATED_WITH.value,
-                    properties=properties,
-                )
-
     async def save(batch: list[Annotation]) -> None:
         await graph_db.save_annotations(batch)
 
-    total = await batched_write(annotations(), save, batch_size)
+    total = await batched_write(
+        _iter_dump_annotations(dump_path, source_fallback, target_fallback), save, batch_size,
+    )
 
     if cache is None:
         cache = get_active_cache()

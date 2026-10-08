@@ -53,7 +53,8 @@ async def test_write_concepts_to_file_includes_search_index_by_default(monkeypat
 
     lines = (tmp_path / 'offline' / 'hpo.doc.dump').read_text().strip().split('\n')
     payload = json.loads(lines[0])
-    assert 'nGrams' in payload and payload['nGrams']
+    assert 'nGrams' in payload
+    assert payload['nGrams']
     assert payload['searchText']
 
 

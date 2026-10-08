@@ -23,6 +23,15 @@ from bioterms.model.user import UserApiKey, User, UserRepository
 from .doc_db import DocumentDatabase, SearchQuery, normalise_search_query
 from .utils import generate_extra_data
 
+# Aggregation pipeline operators and field paths repeated across the search pipelines
+_ADD_FIELDS = '$addFields'
+_LABEL_FIELD = '$label'
+_LIMIT = '$limit'
+_META = '$meta'
+_PROJECT = '$project'
+_SEARCH = '$search'
+_SORT = '$sort'
+
 
 class MongoUserRepository(UserRepository):
     """
@@ -235,8 +244,7 @@ class MongoDocumentDatabase(DocumentDatabase):
 
         try:
             cursor = await collection.list_search_indexes()
-            async for _ in cursor:
-                pass
+            await cursor.to_list()
             self._native_search_supported = True
         except OperationFailure:
             self._native_search_supported = False
@@ -651,7 +659,7 @@ class MongoDocumentDatabase(DocumentDatabase):
             await self._ensure_text_index(collection)
             pipeline = [
                 {
-                    '$search': {
+                    _SEARCH: {
                         'index': CONFIG.mongodb_text_index_name,
                         'compound': {
                             'should': [
@@ -667,18 +675,18 @@ class MongoDocumentDatabase(DocumentDatabase):
                         },
                     },
                 },
-                {'$addFields': {'score': {'$meta': 'searchScore'}}},
-                {'$sort': {'score': -1}},
-                {'$limit': limit},
-                {'$project': {'_id': 0, 'conceptId': 1, 'score': 1}},
+                {_ADD_FIELDS: {'score': {_META: 'searchScore'}}},
+                {_SORT: {'score': -1}},
+                {_LIMIT: limit},
+                {_PROJECT: {'_id': 0, 'conceptId': 1, 'score': 1}},
             ]
         else:
             pipeline = [
                 {'$match': {'nGrams': {'$in': words}}},
-                {'$addFields': {'score': {'$size': {'$setIntersection': ['$nGrams', words]}}}},
-                {'$sort': {'score': -1}},
-                {'$limit': limit},
-                {'$project': {'_id': 0, 'conceptId': 1, 'score': 1}},
+                {_ADD_FIELDS: {'score': {'$size': {'$setIntersection': ['$nGrams', words]}}}},
+                {_SORT: {'score': -1}},
+                {_LIMIT: limit},
+                {_PROJECT: {'_id': 0, 'conceptId': 1, 'score': 1}},
             ]
 
         cursor = await collection.aggregate(pipeline)
@@ -706,7 +714,7 @@ class MongoDocumentDatabase(DocumentDatabase):
             return
         await self._ensure_text_index(collection)
         pipeline = [
-            {'$search': {
+            {_SEARCH: {
                 'index': CONFIG.mongodb_text_index_name,
                 'compound': {
                     'should': [{
@@ -723,10 +731,10 @@ class MongoDocumentDatabase(DocumentDatabase):
                     'minimumShouldMatch': 1,
                 },
             }},
-            {'$addFields': {'score': {'$meta': 'searchScore'}}},
-            {'$sort': {'score': -1}},
-            {'$limit': limit},
-            {'$project': {'_id': 0, 'conceptId': 1, 'score': 1}},
+            {_ADD_FIELDS: {'score': {_META: 'searchScore'}}},
+            {_SORT: {'score': -1}},
+            {_LIMIT: limit},
+            {_PROJECT: {'_id': 0, 'conceptId': 1, 'score': 1}},
         ]
         cursor = await collection.aggregate(pipeline)
         async for doc in cursor:
@@ -758,14 +766,14 @@ class MongoDocumentDatabase(DocumentDatabase):
             },
             # Calculate the scores
             {
-                '$addFields': {
+                _ADD_FIELDS: {
                     'score': {
                         '$indexOfBytes': ['$searchText', score_query]
                     },
                     'labelLength': {
                         '$cond': {
-                            'if': {'$gt': [{'$type': '$label'}, 'null']},
-                            'then': {'$strLenCP': '$label'},
+                            'if': {'$gt': [{'$type': _LABEL_FIELD}, 'null']},
+                            'then': {'$strLenCP': _LABEL_FIELD},
                             'else': 999,
                         }
                     }
@@ -773,7 +781,7 @@ class MongoDocumentDatabase(DocumentDatabase):
             },
             # Rank based on the scores
             {
-                '$sort': {
+                _SORT: {
                     'score': 1,
                     'labelLength': 1,
                     # Concept documents have no ``termId`` field.  Sorting by it therefore
@@ -784,7 +792,7 @@ class MongoDocumentDatabase(DocumentDatabase):
             },
             # Remove the intermediate fields
             {
-                '$project': {
+                _PROJECT: {
                     'score': 0,
                     'labelLength': 0,
                     '_id': 0,
@@ -793,10 +801,10 @@ class MongoDocumentDatabase(DocumentDatabase):
         ]
 
         if limit is not None:
-            pipeline.append({'$limit': limit})
+            pipeline.append({_LIMIT: limit})
 
         pipeline.append({
-            '$project': {
+            _PROJECT: {
                 'nGrams': 0,
                 'searchText': 0,
             },
@@ -820,7 +828,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         """
         pipeline: list[dict] = [
             {
-                '$search': {
+                _SEARCH: {
                     'index': CONFIG.mongodb_text_index_name,
                     'compound': {
                         'must': [
@@ -836,26 +844,26 @@ class MongoDocumentDatabase(DocumentDatabase):
                 },
             },
             {
-                '$addFields': {
-                    'searchScore': {'$meta': 'searchScore'},
+                _ADD_FIELDS: {
+                    'searchScore': {_META: 'searchScore'},
                     'labelLength': {
                         '$cond': {
-                            'if': {'$gt': [{'$type': '$label'}, 'null']},
-                            'then': {'$strLenCP': '$label'},
+                            'if': {'$gt': [{'$type': _LABEL_FIELD}, 'null']},
+                            'then': {'$strLenCP': _LABEL_FIELD},
                             'else': 999,
                         }
                     }
                 }
             },
             {
-                '$sort': {
+                _SORT: {
                     'searchScore': -1,
                     'labelLength': 1,
                     'conceptId': 1,
                 },
             },
             {
-                '$project': {
+                _PROJECT: {
                     'searchScore': 0,
                     'labelLength': 0,
                     '_id': 0,
@@ -870,7 +878,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         ]
 
         if limit is not None:
-            pipeline.append({'$limit': limit})
+            pipeline.append({_LIMIT: limit})
 
         return pipeline
 
@@ -910,7 +918,7 @@ class MongoDocumentDatabase(DocumentDatabase):
         collection = self.db[str(prefix.value)]
         pipeline = [
             {'$sample': {'size': count}},
-            {'$project': {'conceptId': 1}},
+            {_PROJECT: {'conceptId': 1}},
         ]
 
         term_ids = []

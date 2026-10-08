@@ -33,6 +33,52 @@ class EmbeddingItemVector:
     vector: list[float]
 
 
+async def _iter_pending_concepts(concepts: list[Concept] | AsyncIterator[Concept],
+                                 already_embedded: set[str],
+                                 ) -> AsyncIterator[Concept]:
+    """Yield the concepts, from a list or an async iterator, that are not yet embedded."""
+    if isinstance(concepts, AsyncIterator):
+        async for concept in concepts:
+            if concept.concept_id not in already_embedded:
+                yield concept
+    elif isinstance(concepts, list):
+        for concept in concepts:
+            if concept.concept_id not in already_embedded:
+                yield concept
+    else:
+        raise TypeError('concepts must be a list or an AsyncIterator of Concept instances')
+
+
+async def _produce_embedded_batches(embedded_batches: AsyncIterator,
+                                    queue: asyncio.Queue,
+                                    sentinel: object,
+                                    ) -> None:
+    """Feed embedded batches into the queue, always finishing with the sentinel."""
+    try:
+        async for embedded_batch in embedded_batches:
+            await queue.put(embedded_batch)
+    finally:
+        # Always unblock the consumer, even if embedding raised -- otherwise
+        # `_iter_queued_items` (and so `load_embedding_items`) would hang forever waiting on
+        # a queue nothing will ever add to again.
+        await queue.put(sentinel)
+
+
+async def _iter_queued_items(queue: asyncio.Queue,
+                             sentinel: object,
+                             ) -> AsyncIterator[EmbeddingItemVector]:
+    """Drain embedded batches from the queue as storable items until the sentinel arrives."""
+    while (embedded_batch := await queue.get()) is not sentinel:
+        for item, vector in embedded_batch:
+            yield EmbeddingItemVector(
+                item_id=item.item_id,
+                concept_id=item.concept_id,
+                kind=item.kind,
+                text=item.text,
+                vector=vector,
+            )
+
+
 class VectorDatabase(ABC):
     """
     Abstract base class for vector databases.
@@ -110,22 +156,6 @@ class VectorDatabase(ABC):
         if already_embedded and total_concepts is not None:
             total_concepts = max(total_concepts - len(already_embedded), 0)
 
-        async def concept_source() -> AsyncIterator[Concept]:
-            if isinstance(concepts, AsyncIterator):
-                async for concept in concepts:
-                    yield concept
-            elif isinstance(concepts, list):
-                for concept in concepts:
-                    yield concept
-            else:
-                raise TypeError('concepts must be a list or an AsyncIterator of Concept instances')
-
-        async def remaining_concepts() -> AsyncIterator[Concept]:
-            async for concept in concept_source():
-                if concept.concept_id in already_embedded:
-                    continue
-                yield concept
-
         transformer = ConceptTransformer()
 
         # Embedding (reading concepts and running them through the model) and writing already-
@@ -133,41 +163,22 @@ class VectorDatabase(ABC):
         # network-I/O-bound -- so they run as two concurrent tasks joined by a small bounded
         # queue, instead of a single sequential generator chain where the writer's DB round-
         # trip stalls the embedder (and vice versa) even though neither has to wait on the
-        # other. `load_embedding_items` drives the consumer side by iterating `item_iter()`;
+        # other. `load_embedding_items` drives the consumer side by iterating the queued items;
         # the embedder runs independently as `producer_task`, staying up to
         # `_EMBED_QUEUE_MAXSIZE` batches ahead of whatever the writer has consumed so far.
         queue: asyncio.Queue = asyncio.Queue(maxsize=_EMBED_QUEUE_MAXSIZE)
-        _sentinel = object()
+        sentinel = object()
+        embedded_batches = transformer.embed_concepts(
+            _iter_pending_concepts(concepts, already_embedded), total_concepts=total_concepts,
+        )
 
-        async def produce() -> None:
-            try:
-                async for embedded_batch in transformer.embed_concepts(
-                    remaining_concepts(), total_concepts=total_concepts,
-                ):
-                    await queue.put(embedded_batch)
-            finally:
-                # Always unblock the consumer, even if embedding raised -- otherwise
-                # `item_iter` (and so `load_embedding_items`) would hang forever waiting on a
-                # queue nothing will ever add to again.
-                await queue.put(_sentinel)
-
-        async def item_iter() -> AsyncIterator[EmbeddingItemVector]:
-            while True:
-                embedded_batch = await queue.get()
-                if embedded_batch is _sentinel:
-                    break
-                for item, vector in embedded_batch:
-                    yield EmbeddingItemVector(
-                        item_id=item.item_id,
-                        concept_id=item.concept_id,
-                        kind=item.kind,
-                        text=item.text,
-                        vector=vector,
-                    )
-
-        producer_task = asyncio.create_task(produce())
+        producer_task = asyncio.create_task(
+            _produce_embedded_batches(embedded_batches, queue, sentinel),
+        )
         try:
-            written = await self.load_embedding_items(prefix=prefix, items=item_iter())
+            written = await self.load_embedding_items(
+                prefix=prefix, items=_iter_queued_items(queue, sentinel),
+            )
         except BaseException:
             # The writer failed -- stop the (now pointless) embedding work rather than let it
             # keep running, or keep blocking forever on `queue.put` once the queue fills up
@@ -179,7 +190,8 @@ class VectorDatabase(ABC):
 
         # `create_task` swallows exceptions until the task is awaited or checked -- surface an
         # embedding-side failure here rather than silently dropping it now that the consumer
-        # has finished (normally, because it saw the sentinel `produce` sends even on error).
+        # has finished (normally, because it saw the sentinel `_produce_embedded_batches`
+        # sends even on error).
         await producer_task
 
         return written

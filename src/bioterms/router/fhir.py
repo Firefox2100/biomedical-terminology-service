@@ -211,7 +211,7 @@ async def _validate_fhir_code(base_url: str,
                         diagnostics=f'Invalid code system: {system}'
                     )
                 ]
-            )
+            ).model_dump(mode='json', exclude_none=True),
         )
 
     try:
@@ -296,7 +296,7 @@ async def _validate_fhir_code(base_url: str,
             ),
             ParametersParameter(
                 name='system',
-                valueUri=f'{base_url}/CodeSystem/{concept.prefix.value}',
+                valueUri=f'{base_url}{concept.prefix.value}',
             ),
             ParametersParameter(
                 name='code',
@@ -499,49 +499,6 @@ async def lookup_fhir_code_post(search_params: Parameters,
     )
 
 
-@fhir_router.get(
-    '/CodeSystem/{prefix}',
-    response_model=CodeSystem,
-    responses={
-        404: {'model': OperationOutcome}
-    },
-    response_model_exclude_none=True
-)
-async def get_fhir_code_system(prefix: ConceptPrefix,
-                               doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
-                               graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
-                               ):
-    base_url = CONFIG.fhir_canonical_url.strip('/')
-    vocab_status = await get_vocabulary_status(
-        prefix,
-        doc_db=doc_db,
-        graph_db=graph_db,
-    )
-
-    if not vocab_status.loaded:
-        return JSONResponse(
-            status_code=404,
-            content=OperationOutcome(
-                issue=[
-                    OperationOutcomeIssue(
-                        severity='error',
-                        code='not-found',
-                        diagnostics=f'CodeSystem/{prefix.value} not found'
-                    )
-                ]
-            ).model_dump(),
-        )
-
-    return CodeSystem(
-        id=vocab_status.prefix.value,
-        url=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
-        name=vocab_status.name,
-        title=vocab_status.name,
-        status='active',
-        content='fragment',
-    )
-
-
 @fhir_router.get('/CodeSystem/$validate-code', response_model=Parameters, response_model_exclude_none=True)
 async def validate_fhir_code(system: Annotated[str, Query(description='The code system to validate against.')],
                              code: Annotated[str, Query(description='The code to validate.')],
@@ -614,4 +571,49 @@ async def validate_fhir_code_post(search_params: Parameters,
         system=system_input,
         code=code_input,
         doc_db=doc_db,
+    )
+
+
+# Declared after the literal `/CodeSystem/$...` operation routes: Starlette matches in order,
+# so a `{prefix}` route registered first would capture `$validate-code` as a prefix value.
+@fhir_router.get(
+    '/CodeSystem/{prefix}',
+    response_model=CodeSystem,
+    responses={
+        404: {'model': OperationOutcome}
+    },
+    response_model_exclude_none=True
+)
+async def get_fhir_code_system(prefix: ConceptPrefix,
+                               doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+                               graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                               ):
+    base_url = CONFIG.fhir_canonical_url.strip('/')
+    vocab_status = await get_vocabulary_status(
+        prefix,
+        doc_db=doc_db,
+        graph_db=graph_db,
+    )
+
+    if not vocab_status.loaded:
+        return JSONResponse(
+            status_code=404,
+            content=OperationOutcome(
+                issue=[
+                    OperationOutcomeIssue(
+                        severity='error',
+                        code='not-found',
+                        diagnostics=f'CodeSystem/{prefix.value} not found'
+                    )
+                ]
+            ).model_dump(),
+        )
+
+    return CodeSystem(
+        id=vocab_status.prefix.value,
+        url=f'{base_url}/CodeSystem/{vocab_status.prefix.value}',
+        name=vocab_status.name,
+        title=vocab_status.name,
+        status='active',
+        content='fragment',
     )

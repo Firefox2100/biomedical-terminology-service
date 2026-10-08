@@ -63,7 +63,7 @@ async def resolve_global_search(_, info, query: str,
             'returned': len(results),
             'limit': limit,
             'durationMs': (perf_counter() - started) * 1000,
-            'vocabularies': prefixes,
+            'vocabularies': [prefix.value for prefix in prefixes],
             'pipeline': {
                 'lexical': True,
                 'fuzzy': execution.fuzzy_used,

@@ -6,7 +6,8 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.etc.utils import iter_progress
 from bioterms.vocabulary import download_vocabulary, load_vocabulary, delete_vocabulary, embed_vocabulary, \
     restore_vocabulary, restore_vocabulary_embeddings, get_vocabulary_status
-from .utils import CONSOLE, observe_cli_exception, run_async, verbose_cli, verbose_targets
+from .utils import CONSOLE, observe_cli_exception, report_cli_failure, run_async, verbose_cli, \
+    verbose_targets
 
 
 app = typer.Typer(help='Manage biomedical vocabularies.')
@@ -40,7 +41,7 @@ async def download_command(vocabulary: Annotated[
         elif vocabulary:
             target_vocabularies = [vocabulary]
         else:
-            CONSOLE.print('[red]Either specify a vocabulary to download or use the --all flag.[/red]')
+            report_cli_failure('Either specify a vocabulary to download or use the --all flag.')
             return
         verbose_targets('download vocabulary', target_vocabularies)
         for vocabulary in iter_progress(target_vocabularies, description='Downloading vocabularies'):
@@ -109,7 +110,7 @@ async def load_command(vocabulary: Annotated[
         elif vocabulary:
             target_vocabularies = [vocabulary]
         else:
-            CONSOLE.print('[red]Either specify a vocabulary to load or use the --all flag.[/red]')
+            report_cli_failure('Either specify a vocabulary to load or use the --all flag.')
             return
         verbose_targets('load vocabulary', target_vocabularies)
         for vocabulary in iter_progress(target_vocabularies, description='Loading vocabularies'):
@@ -183,7 +184,7 @@ async def restore_command(vocabulary: Annotated[
         elif vocabulary:
             target_vocabularies = [vocabulary]
         else:
-            CONSOLE.print('[red]Either specify a vocabulary to restore or use the --all flag.[/red]')
+            report_cli_failure('Either specify a vocabulary to restore or use the --all flag.')
             return
         verbose_targets('restore vocabulary', target_vocabularies)
         for vocabulary in iter_progress(target_vocabularies, description='Restoring vocabularies'):
@@ -247,7 +248,7 @@ async def embed_command(v: Annotated[
                         ] = False,
                         ):
     if offline and restore:
-        CONSOLE.print('[red]Cannot use --offline and --restore flags together.[/red]')
+        report_cli_failure('Cannot use --offline and --restore flags together.')
         return
 
     try:
@@ -256,7 +257,7 @@ async def embed_command(v: Annotated[
         elif v:
             target_vocabularies = [v]
         else:
-            CONSOLE.print('[red]Either specify a vocabulary to embed or use the --all flag.[/red]')
+            report_cli_failure('Either specify a vocabulary to embed or use the --all flag.')
             return
         verbose_targets('embed vocabulary', target_vocabularies)
         for v in iter_progress(target_vocabularies, description='Embedding vocabularies'):
@@ -301,7 +302,7 @@ async def delete_command(vocabulary: Annotated[
         elif vocabulary:
             target_vocabularies = [vocabulary]
         else:
-            CONSOLE.print('[red]Either specify a vocabulary to delete or use the --all flag.[/red]')
+            report_cli_failure('Either specify a vocabulary to delete or use the --all flag.')
             return
         verbose_targets('delete vocabulary', target_vocabularies)
         for vocabulary in iter_progress(target_vocabularies, description='Deleting vocabularies'):

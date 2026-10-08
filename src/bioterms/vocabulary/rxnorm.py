@@ -95,47 +95,67 @@ def iter_rxnorm_atoms():
     ])
 
 
+class _RxNormRecord:
+    """Accumulates the English RxNorm atoms of one RXCUI into its label, terms and types."""
+
+    def __init__(self):
+        self.terms: list[str] = []
+        self.term_set: set[str] = set()
+        self.types: list[ConceptType] = []
+        self.active = False
+        self.first_label: str | None = None
+        self.active_label: str | None = None
+        self.preferred_label: str | None = None
+
+    def add_atom(self, row) -> None:
+        """Fold one RXNCONSO atom row into the record."""
+        term = row.STR.strip()
+        if term:
+            self._add_term(term, is_active=row.SUPPRESS == 'N', is_preferred=row.ISPREF == 'Y')
+        if row.SUPPRESS == 'N':
+            self.active = True
+        concept_type = _TTY_TYPES.get(row.TTY, ConceptType.DRUG)
+        if concept_type not in self.types:
+            self.types.append(concept_type)
+
+    def _add_term(self, term: str, is_active: bool, is_preferred: bool) -> None:
+        if term not in self.term_set:
+            self.term_set.add(term)
+            self.terms.append(term)
+        self.first_label = self.first_label or term
+        if is_active:
+            self.active_label = self.active_label or term
+            if is_preferred:
+                self.preferred_label = self.preferred_label or term
+
+    def to_concept(self, rxcui: str) -> CONCEPT_CLASS:
+        """Build the concept, preferring a preferred, then any active, then the first label."""
+        label = self.preferred_label or self.active_label or self.first_label
+        return CONCEPT_CLASS(
+            prefix=VOCABULARY_PREFIX, conceptId=rxcui,
+            conceptTypes=self.types, label=label,
+            synonyms=[term for term in self.terms if term != label] or None,
+            status=ConceptStatus.ACTIVE if self.active else ConceptStatus.DEPRECATED,
+        )
+
+
 def load_rxnorm_concepts() -> dict[str, CONCEPT_CLASS]:
     """Build current RxNorm concepts without retaining the full source atom table."""
-    records: dict[str, dict] = {}
+    records: dict[str, _RxNormRecord] = {}
     for atoms in iter_progress(
         iter_rxnorm_atoms(),
         description='Processing RxNorm atom batches',
     ):
         atoms = atoms[(atoms['SAB'] == 'RXNORM') & (atoms['LAT'] == 'ENG')]
         for row in atoms.itertuples(index=False):
-            record = records.setdefault(row.RXCUI, {
-                'terms': [], 'term_set': set(), 'types': [], 'active': False,
-                'first_label': None, 'active_label': None, 'preferred_label': None,
-            })
-            term = row.STR.strip()
-            if term and term not in record['term_set']:
-                record['term_set'].add(term)
-                record['terms'].append(term)
-            if record['first_label'] is None and term:
-                record['first_label'] = term
-            if row.SUPPRESS == 'N':
-                record['active'] = True
-                if record['active_label'] is None and term:
-                    record['active_label'] = term
-                if row.ISPREF == 'Y' and record['preferred_label'] is None and term:
-                    record['preferred_label'] = term
-            concept_type = _TTY_TYPES.get(row.TTY, ConceptType.DRUG)
-            if concept_type not in record['types']:
-                record['types'].append(concept_type)
+            records.setdefault(row.RXCUI, _RxNormRecord()).add_atom(row)
 
-    concepts = {}
-    for rxcui, record in iter_progress(
-        records.items(), description='Building RxNorm concepts', total=len(records),
-    ):
-        label = record['preferred_label'] or record['active_label'] or record['first_label']
-        concepts[rxcui] = CONCEPT_CLASS(
-            prefix=VOCABULARY_PREFIX, conceptId=rxcui,
-            conceptTypes=record['types'], label=label,
-            synonyms=[term for term in record['terms'] if term != label] or None,
-            status=ConceptStatus.ACTIVE if record['active'] else ConceptStatus.DEPRECATED,
+    return {
+        rxcui: record.to_concept(rxcui)
+        for rxcui, record in iter_progress(
+            records.items(), description='Building RxNorm concepts', total=len(records),
         )
-    return concepts
+    }
 
 
 def _load_graph(concepts: dict[str, CONCEPT_CLASS]) -> EdgeBuffer:

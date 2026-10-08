@@ -27,8 +27,8 @@ from bioterms.similarity import get_similarity_status
 from bioterms.task.cache import rebuild_cache_task
 from bioterms.model.user import UserApiKey
 from bioterms.model.annotation_status import AnnotationStatus
-from .utils import TEMPLATES, build_nav_links, sanitise_next_url, login_optional, login_required, \
-    build_structured_data
+from .utils import LD_CONTEXT, LD_TYPE, SCHEMA_ORG, TEMPLATES, build_nav_links, sanitise_next_url, \
+    login_optional, login_required, build_structured_data
 
 
 ui_router = APIRouter(
@@ -188,9 +188,8 @@ async def post_login_credentials(request: Request,
     sanitised_next_url = sanitise_next_url(next_url) if next_url \
         else str(request.url_for('get_home_page'))
 
-    if not username or not password:
-        return _login_redirect(request, next_url, 'Please enter username or password correctly')
-
+    # Empty credentials never reach this point: FastAPI rejects a blank required Form() field
+    # with a 422 before the route runs.
     user = await doc_db.users.get(username)
 
     if not user or not user.validate_password(password):
@@ -381,19 +380,19 @@ async def list_vocabularies(request: Request,
         dataset_lds = []
         for v in vocab_statuses:
             dataset_lds.append({
-                '@type': 'Dataset',
+                LD_TYPE: 'Dataset',
                 'name': v.name,
                 'identifier': v.prefix.value,
                 'url': f'{base_url}/vocabularies/{v.prefix.value}',
                 'description': f'{v.name} vocabulary dataset.',
                 'variableMeasured': [
                     {
-                        '@type': 'PropertyValue',
+                        LD_TYPE: 'PropertyValue',
                         'name': 'concept_count',
                         'value': v.concept_count,
                     },
                     {
-                        '@type': 'PropertyValue',
+                        LD_TYPE: 'PropertyValue',
                         'name': 'relationship_count',
                         'value': v.relationship_count,
                     }
@@ -403,8 +402,8 @@ async def list_vocabularies(request: Request,
             })
 
         structured_data.append({
-            '@context': 'https://schema.org',
-            '@type': 'CollectionPage',
+            LD_CONTEXT: SCHEMA_ORG,
+            LD_TYPE: 'CollectionPage',
             'name': 'Vocabularies',
             'url': base_url + '/vocabularies',
             'description': 'A list of all available vocabularies in the BioMedical '
@@ -486,8 +485,8 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
 
         page_url = f'{base_url}/vocabularies/{vocab_status.prefix.value}'
         dataset_ld = {
-            '@context': 'https://schema.org',
-            '@type': ['Dataset', 'DefinedTermSet'],
+            LD_CONTEXT: SCHEMA_ORG,
+            LD_TYPE: ['Dataset', 'DefinedTermSet'],
             'name': vocab_status.name,
             'identifier': vocab_status.prefix.value,
             'url': page_url,
@@ -496,29 +495,29 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
             'isAccessibleForFree': True,
             'variableMeasured': [
                 {
-                    '@type': 'PropertyValue',
+                    LD_TYPE: 'PropertyValue',
                     'name': 'concept_count',
                     'value': vocab_status.concept_count,
                 },
                 {
-                    '@type': 'PropertyValue',
+                    LD_TYPE: 'PropertyValue',
                     'name': 'relationship_count',
                     'value': vocab_status.relationship_count,
                 },
             ],
             'additionalProperty': [
                 {
-                    '@type': 'PropertyValue',
+                    LD_TYPE: 'PropertyValue',
                     'name': 'loaded',
                     'value': vocab_status.loaded,
                 },
                 {
-                    '@type': 'PropertyValue',
+                    LD_TYPE: 'PropertyValue',
                     'name': 'downloaded',
                     'value': vocab_status.file_downloaded,
                 },
                 {
-                    '@type': 'PropertyValue',
+                    LD_TYPE: 'PropertyValue',
                     'name': 'download_time',
                     'value': vocab_status.file_download_time.isoformat()
                         if vocab_status.file_download_time else None,
@@ -530,18 +529,18 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
                 dataset_ld['license'] = license_str.strip()
             else:
                 dataset_ld['license'] = {
-                    '@type': 'CreativeWork',
+                    LD_TYPE: 'CreativeWork',
                     'text': license_str.strip(),
                 }
         if annotation_statuses:
             dataset_ld['hasPart'] = [
                 {
-                    '@type': 'Dataset',
+                    LD_TYPE: 'Dataset',
                     'name': ann.name,
                     'identifier': f'{ann.prefix_source}-{ann.prefix_target}',
                     'variableMeasured': [
                         {
-                            '@type': 'PropertyValue',
+                            LD_TYPE: 'PropertyValue',
                             'name': 'relationship_count',
                             'value': ann.relationship_count,
                         }
@@ -551,8 +550,8 @@ async def get_vocabulary_info(prefix: ConceptPrefix,
 
         structured_data.extend([
             {
-                '@context': 'https://schema.org',
-                '@type': 'WebPage',
+                LD_CONTEXT: SCHEMA_ORG,
+                LD_TYPE: 'WebPage',
                 'name': f'{vocab_status.name} Vocabulary',
                 'url': page_url,
                 'description': f'Details and statistics for the {vocab_status.name} vocabulary '

@@ -147,7 +147,7 @@ async def _search_terms_v2(query: str,
 
 
 @search_router.get(
-    '/search/v2', response_model=SearchResponseV2, response_model_exclude_none=True,
+    '/search/v2', response_model_exclude_none=True,
 )
 async def search_terms_v2(
     query: Annotated[str, Query(description='The search query string', min_length=1)],
@@ -171,7 +171,6 @@ async def search_terms_v2(
 
 @search_router.get(
     '/vocabularies/{prefix}/search/v2',
-    response_model=SearchResponseV2,
     response_model_exclude_none=True,
 )
 async def search_terms_v2_scoped(

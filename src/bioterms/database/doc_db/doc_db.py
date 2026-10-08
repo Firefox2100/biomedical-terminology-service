@@ -251,8 +251,9 @@ class DocumentDatabase(ABC):
         matches to dilute ordinary BM25/full-text ranking.  Backends without a safe indexed
         implementation return no candidates rather than performing an unbounded scan.
         """
-        if False:  # pragma: no cover - makes this a no-op async generator for base backends.
-            yield '', 0.0
+        # Iterating an empty tuple makes this a no-op async generator for base backends.
+        for item in ():
+            yield item
 
     async def fuzzy_search(self,
                            prefix: ConceptPrefix,
@@ -260,7 +261,12 @@ class DocumentDatabase(ABC):
                            limit: int = 10,
                            ) -> list[tuple[str, float]]:
         """Return approximate lexical matches ranked on the backend's private score scale."""
-        return [item async for item in self.fuzzy_search_iter(prefix, query, limit)]
+        results: list[tuple[str, float]] = []
+
+        async for item in self.fuzzy_search_iter(prefix=prefix, query=query, limit=limit):
+            results.append(item)
+
+        return results
 
     _backend_name = 'unknown'
 

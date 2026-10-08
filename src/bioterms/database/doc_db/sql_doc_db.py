@@ -232,7 +232,7 @@ def safe_table_suffix(prefix_value: str) -> str:
     return s.lower()
 
 
-_FIELD_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+_FIELD_NAME_PATTERN = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
 
 # JSON payload fields that also have a dedicated physical column on the concept table. Indexing
 # these should target the real column (portable, and usable by the query planner for the
@@ -1036,81 +1036,102 @@ class SqlDocumentDatabase(DocumentDatabase):
 
         async with self._engine.begin() as conn:
             tables = await self._ensure_tables_exist(conn, prefix)
-            concept_t = tables.concept
-            ngram_t = tables.ngram
-            fts_t = tables.fts
             mode = await self._get_native_search_mode()
 
             for i in range(0, len(terms), self._batch_size):
                 batch = terms[i : i + self._batch_size]
+                rows, side_rows = self._build_batch_rows(batch, mode)
+                await self._write_concept_rows(conn, tables.concept, rows, no_upsert)
+                await self._replace_search_side_rows(
+                    conn, tables, mode, [c.concept_id for c in batch], side_rows,
+                )
 
-                rows = []
-                ngram_rows = []
-                fts_rows = []
+    def _build_batch_rows(self,
+                          batch: list[Concept],
+                          mode: str,
+                          ) -> tuple[list[dict], list[dict]]:
+        """
+        Build the concept-table rows for one batch, plus any rows for the side table that
+        backs lexical search in the given native search mode.
+        :return: The concept rows and the search side-table rows (n-gram or FTS mirror).
+        """
+        rows = []
+        side_rows = []
 
-                for c in batch:
-                    payload = c.model_dump(exclude_none=True)
+        for c in batch:
+            st = c.search_text()
+            rows.append(
+                {
+                    'concept_id': c.concept_id,
+                    'payload': c.model_dump(exclude_none=True),
+                    'search_text': st,
+                    'label': getattr(c, 'label', None),
+                }
+            )
 
-                    st = c.search_text()
+            if mode == self._NATIVE_NONE:
+                # No native trigram/n-gram search available: keep populating the
+                # portable n-gram side table used by the fallback query path.
+                side_rows.extend({'concept_id': c.concept_id, 'ngram': ng} for ng in c.n_grams())
+            elif mode == self._NATIVE_SQLITE_TRIGRAM:
+                # The FTS5 shadow table isn't kept in sync automatically (it isn't
+                # declared as an "external content" table over `concept_t`), so it is
+                # mirrored by hand alongside the concept row itself.
+                side_rows.append({'concept_id': c.concept_id, 'search_text': st})
+            # NATIVE_PG_TRGM / NATIVE_MYSQL_NGRAM index `concept_t.search_text`
+            # directly -- no extra row needed beyond the concept upsert.
 
-                    rows.append(
-                        {
-                            'concept_id': c.concept_id,
-                            'payload': payload,
-                            'search_text': st,
-                            'label': getattr(c, 'label', None),
-                        }
-                    )
+        return rows, side_rows
 
-                    if mode == self._NATIVE_NONE:
-                        # No native trigram/n-gram search available: keep populating the
-                        # portable n-gram side table used by the fallback query path.
-                        for ng in c.n_grams():
-                            ngram_rows.append({'concept_id': c.concept_id, 'ngram': ng})
-                    elif mode == self._NATIVE_SQLITE_TRIGRAM:
-                        # The FTS5 shadow table isn't kept in sync automatically (it isn't
-                        # declared as an "external content" table over `concept_t`), so it is
-                        # mirrored by hand alongside the concept row itself.
-                        fts_rows.append({'concept_id': c.concept_id, 'search_text': st})
-                    # NATIVE_PG_TRGM / NATIVE_MYSQL_NGRAM index `concept_t.search_text`
-                    # directly -- no extra row needed beyond the concept upsert below.
+    async def _write_concept_rows(self,
+                                  conn: AsyncConnection,
+                                  concept_t: Table,
+                                  rows: list[dict],
+                                  no_upsert: bool,
+                                  ):
+        """Insert, or upsert by concept_id, one batch of concept rows."""
+        if no_upsert:
+            await conn.execute(insert(concept_t).values(rows))
+            return
 
-                if not rows:
-                    continue
+        update_columns = ['payload', 'search_text', 'label']
+        upsert_stmt = _build_upsert_stmt(
+            self._engine.dialect.name,
+            concept_t,
+            rows,
+            conflict_columns=[concept_t.c.concept_id],
+            update_columns=update_columns,
+        )
 
-                if no_upsert:
-                    await conn.execute(insert(concept_t).values(rows))
-                else:
-                    update_columns = ['payload', 'search_text', 'label']
-                    upsert_stmt = _build_upsert_stmt(
-                        self._engine.dialect.name,
-                        concept_t,
-                        rows,
-                        conflict_columns=[concept_t.c.concept_id],
-                        update_columns=update_columns,
-                    )
+        if upsert_stmt is not None:
+            await conn.execute(upsert_stmt)
+        else:
+            await _manual_upsert_rows(
+                conn,
+                concept_t,
+                rows,
+                conflict_columns=[concept_t.c.concept_id],
+                update_columns=update_columns,
+            )
 
-                    if upsert_stmt is not None:
-                        await conn.execute(upsert_stmt)
-                    else:
-                        await _manual_upsert_rows(
-                            conn,
-                            concept_t,
-                            rows,
-                            conflict_columns=[concept_t.c.concept_id],
-                            update_columns=update_columns,
-                        )
+    async def _replace_search_side_rows(self,
+                                        conn: AsyncConnection,
+                                        tables: _PrefixTables,
+                                        mode: str,
+                                        concept_ids: list[str],
+                                        side_rows: list[dict],
+                                        ):
+        """Replace the batch's rows in the n-gram or FTS side table used by the given mode."""
+        if mode == self._NATIVE_NONE:
+            side_t = tables.ngram
+        elif mode == self._NATIVE_SQLITE_TRIGRAM:
+            side_t = tables.fts
+        else:
+            return
 
-                concept_ids = [c.concept_id for c in batch]
-
-                if mode == self._NATIVE_NONE:
-                    await conn.execute(delete(ngram_t).where(ngram_t.c.concept_id.in_(concept_ids)))
-                    if ngram_rows:
-                        await conn.execute(insert(ngram_t), ngram_rows)
-                elif mode == self._NATIVE_SQLITE_TRIGRAM:
-                    await conn.execute(delete(fts_t).where(fts_t.c.concept_id.in_(concept_ids)))
-                    if fts_rows:
-                        await conn.execute(insert(fts_t), fts_rows)
+        await conn.execute(delete(side_t).where(side_t.c.concept_id.in_(concept_ids)))
+        if side_rows:
+            await conn.execute(insert(side_t), side_rows)
 
     async def count_terms(self,
                           prefix: ConceptPrefix,

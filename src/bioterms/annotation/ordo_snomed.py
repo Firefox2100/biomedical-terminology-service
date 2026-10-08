@@ -69,7 +69,7 @@ async def load_annotation_from_file(graph_db: GraphDatabase = None,
         sep='\t',
     )
     mapping_df = rf2_dataframe_deduplicate(mapping_df)
-    mapping_df.drop(mapping_df[mapping_df['active'] == 0].index, inplace=True)
+    mapping_df = mapping_df.drop(mapping_df[mapping_df['active'] == 0].index)
 
     verbose_print('SNOMED CT Orphanet Map package loaded from disk. Processing annotations...')
 

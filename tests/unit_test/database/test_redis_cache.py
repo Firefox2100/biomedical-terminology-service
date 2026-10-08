@@ -131,3 +131,81 @@ async def test_purge_preserves_dataset_version():
     await cache.purge()
 
     assert redis.values == {'version:dataset': '2026-01-02T03:04:05+00:00'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('raw', ['not json', json.dumps(['legacy', 'list']), json.dumps({'version': -1, 'value': 'x'})])
+async def test_unversioned_or_corrupt_payloads_are_returned_as_stale(raw):
+    redis = FakeRedis()
+    redis.values['assets:site_map'] = raw
+    cache = RedisCache(redis)
+
+    assert await cache._load_stale_while_revalidate('assets:site_map') == (raw, True)
+
+
+@pytest.mark.asyncio
+async def test_payload_without_string_value_is_evicted():
+    redis = FakeRedis()
+    redis.values['vocab_status:hpo'] = json.dumps({'version': CACHE_PAYLOAD_VERSION, 'value': 42})
+    cache = RedisCache(redis)
+
+    assert await cache.get_vocabulary_status(ConceptPrefix.HPO) is None
+    assert redis.deleted == ['vocab_status:hpo']
+
+
+@pytest.mark.asyncio
+async def test_invalid_cached_model_is_evicted():
+    redis = FakeRedis()
+    redis.values['vocab_status:hpo'] = json.dumps({
+        'version': CACHE_PAYLOAD_VERSION, 'stale_at': None, 'value': '{"prefix": "not-a-prefix"}',
+    })
+    cache = RedisCache(redis)
+
+    assert await cache.get_vocabulary_status(ConceptPrefix.HPO) is None
+    assert 'vocab_status:hpo' in redis.deleted
+
+
+@pytest.mark.asyncio
+async def test_fresh_status_round_trips_without_rebuild(monkeypatch):
+    cache = RedisCache(FakeRedis())
+    monkeypatch.setattr(cache, '_trigger_rebuild_if_needed', lambda: pytest.fail('fresh value triggered rebuild'))
+
+    await cache.save_vocabulary_status(make_status())
+
+    assert await cache.get_vocabulary_status(ConceptPrefix.HPO) == make_status()
+    assert await cache.get_vocabulary_status(ConceptPrefix.MONDO) is None
+
+
+@pytest.mark.asyncio
+async def test_site_map_round_trip_and_stale_rebuild(monkeypatch):
+    redis = FakeRedis()
+    cache = RedisCache(redis)
+    rebuilds = []
+
+    async def rebuild():
+        rebuilds.append(True)
+
+    monkeypatch.setattr(cache, '_trigger_rebuild_if_needed', rebuild)
+
+    assert await cache.get_site_map() is None
+    await cache.save_site_map('<urlset/>')
+    assert await cache.get_site_map() == '<urlset/>'
+    assert rebuilds == []
+
+    payload = json.loads(redis.values['assets:site_map'])
+    payload['stale_at'] = time.time() - 1
+    redis.values['assets:site_map'] = json.dumps(payload)
+    assert await cache.get_site_map() == '<urlset/>'
+    assert rebuilds == [True]
+
+
+@pytest.mark.asyncio
+async def test_dataset_last_modified_is_initialised_on_first_read():
+    redis = FakeRedis()
+    cache = RedisCache(redis)
+
+    first = await cache.get_dataset_last_modified()
+    again = await cache.get_dataset_last_modified()
+
+    assert first == again
+    assert first.tzinfo is not None

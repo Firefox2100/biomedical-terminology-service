@@ -259,14 +259,25 @@ async def resolve_reactome_concept_paths_to(obj,
 
 
 @REACTOME_CONCEPT.type_resolver
-def reactome_concept_type_resolver(obj, *_):
+async def reactome_concept_type_resolver(obj, info, *_):
     """
-    Resolve the Reactome concept type.
+    Resolve the Reactome concept type. Relationship resolvers (reaction inputs/outputs,
+    `annotatedReactome`) return bare `{'conceptId': ...}` objects, so the concept types are
+    loaded on demand when absent.
     :param obj: The Reactome concept object.
+    :param info: The GraphQL resolver info.
     :param _: Additional arguments.
     :return: The GraphQL type name for the Reactome concept.
     """
-    concept_type = obj['conceptTypes'][0]
+    concept_types = obj.get('conceptTypes')
+    if not concept_types:
+        concept = await info.context['data_loader'].get_concept_loader(
+            ConceptPrefix.REACTOME,
+        ).id.load(obj['conceptId'])
+        concept_types = concept['conceptTypes'] if concept else []
+    if not concept_types:
+        raise ValueError(f'Concept type not found for Reactome concept {obj["conceptId"]}')
+    concept_type = concept_types[0]
 
     if concept_type == 'pathway':
         return 'ReactomePathway'
