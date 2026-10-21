@@ -155,3 +155,18 @@ def test_skip_paths_exempts_api_clients_from_csrf():
     assert app_module.skip_paths({'path': '/fhir/CodeSystem'})
     assert app_module.skip_paths({'path': '/mcp/'})
     assert not app_module.skip_paths({'path': '/login'})
+
+
+def test_main_binds_to_loopback_by_default(monkeypatch):
+    run_options = {}
+
+    monkeypatch.setattr(app_module, 'create_app', lambda: object())
+    monkeypatch.setattr(
+        app_module.uvicorn,
+        'run',
+        lambda _app, **options: run_options.update(options),
+    )
+
+    app_module.main()
+
+    assert run_options['host'] == '127.0.0.1'

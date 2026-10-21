@@ -118,8 +118,10 @@ def _csrf(client, path='/login'):
 
 def _login(client, password='correct horse', next_url=None):
     token = _csrf(client)
-    url = '/login' + (f'?next={next_url}' if next_url else '')
-    return client.post(url, data={'username': 'alice', 'password': password, 'csrftoken': token})
+    data = {'username': 'alice', 'password': password, 'csrftoken': token}
+    if next_url:
+        data['next'] = next_url
+    return client.post('/login', data=data)
 
 
 def test_home_page_renders_counts_and_security_headers(client):
@@ -198,11 +200,20 @@ def test_login_redirects_to_safe_next_and_logout_clears_session(client):
     assert 'Logout (alice)' not in client.get('/').text
 
 
-def test_login_ignores_unsafe_next_url(client):
-    response = _login(client, next_url='https://evil.example/')
+@pytest.mark.parametrize('unsafe_url', [
+    'https://evil.example/',
+    '//evil.example/vocabularies',
+])
+def test_login_ignores_unsafe_next_url(client, unsafe_url):
+    response = _login(client, next_url=unsafe_url)
 
     assert response.status_code == 303
     assert 'evil.example' not in response.headers['location']
+
+    # The GET endpoint must apply the same rule when an authenticated user revisits login.
+    response = client.get('/login', params={'next': unsafe_url})
+    assert response.status_code == 303
+    assert response.headers['location'] == '/'
 
 
 def test_protected_pages_redirect_to_login_when_anonymous(client):
