@@ -211,6 +211,7 @@ __marimo__/
 
 # Term browser built files
 /src/bioterms/data/static/term-browser/
+/node_modules/
 
 # Reranker training.
 scripts/reranker/slurm/

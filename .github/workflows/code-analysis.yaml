@@ -27,6 +27,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: term-browser/package-lock.json
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -41,6 +48,12 @@ jobs:
           pytest --continue-on-collection-errors -o python_files="test_*.py *_checks.py" \
             --junitxml=test-results.xml --cov=bioterms --cov-report=xml --cov-report=html
 
+      - name: Run browser tests with coverage
+        working-directory: term-browser
+        run: |
+          npm ci
+          npm run test:coverage
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,7 +66,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage.xml
+          path: |
+            coverage.xml
+            term-browser/coverage/lcov.info
 
       - name: Extract Version
         if: always()
