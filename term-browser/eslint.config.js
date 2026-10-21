@@ -24,6 +24,9 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // These effects deliberately reset related UI state when the selected ontology or
+      // search query changes; moving the resets into render would retain stale state.
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
 ])

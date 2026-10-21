@@ -402,17 +402,6 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
     }
   }
 
-  const ensureChildrenLoaded = async (nodeId, queryConfig) => {
-    const node = findNodeById(treeDataRef.current, nodeId)
-    if (!node || !node.hasChildren) {
-      return []
-    }
-    if (Array.isArray(node.children)) {
-      return node.children
-    }
-    return loadChildrenForNode(nodeId, queryConfig)
-  }
-
   const expandTreeToConcept = async (conceptId) => {
     if (!schema || !ontologyId || !resolvedRootIds.length) {
       return null

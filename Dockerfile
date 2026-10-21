@@ -29,7 +29,7 @@ COPY ./LICENSE /app/LICENSE
 COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
-ARG TORCH_VERSION=2.8.0
+ARG TORCH_VERSION=2.14.1
 RUN mkdir -p /app/conf && \
     cp -r /app/conf.defaults/. /app/conf/ && \
     pip install --upgrade pip && \
@@ -86,7 +86,7 @@ COPY ./LICENSE /app/LICENSE
 COPY ./README.md /app/README.md
 COPY ./scripts/entrypoint.sh /app/entrypoint.sh
 
-ARG TORCH_VERSION=2.8.0
+ARG TORCH_VERSION=2.14.1
 RUN mkdir -p /app/conf && \
     cp -r /app/conf.defaults/. /app/conf/ && \
     pip install --upgrade pip && \

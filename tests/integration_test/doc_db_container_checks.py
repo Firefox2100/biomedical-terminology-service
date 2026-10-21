@@ -16,7 +16,7 @@ from bioterms.etc.enums import ConceptPrefix
 from bioterms.model.concept import Concept
 from bioterms.model.user import User, UserApiKey
 
-MONGO_IMAGE = 'mongo:8.0'
+MONGO_IMAGE = 'mongo:8.2'
 ELASTICSEARCH_IMAGE = 'docker.elastic.co/elasticsearch/elasticsearch:9.1.5'
 
 
@@ -38,10 +38,27 @@ pytestmark = pytest.mark.skipif(not _docker_available(), reason='Docker is not a
 
 @pytest.fixture(scope='session')
 def mongo_url():
-    from testcontainers.mongodb import MongoDbContainer
+    # MongoDbContainer waits for an exact startup log line that MongoDB 8 no longer emits.
+    # Start it generically and probe the service itself so readiness is independent of logs.
+    import time
+    from pymongo import MongoClient
+    from pymongo.errors import PyMongoError
+    from testcontainers.core.container import DockerContainer
 
-    with MongoDbContainer(MONGO_IMAGE) as container:
-        yield container.get_connection_url()
+    container = DockerContainer(MONGO_IMAGE).with_exposed_ports(27017)
+    with container:
+        url = f'mongodb://{container.get_container_host_ip()}:{container.get_exposed_port(27017)}'
+        deadline = time.monotonic() + 120
+        while True:
+            try:
+                with MongoClient(url, serverSelectionTimeoutMS=2_000) as client:
+                    client.admin.command('ping')
+                break
+            except PyMongoError as error:
+                if time.monotonic() > deadline:
+                    raise TimeoutError('MongoDB did not become ready within 120 seconds') from error
+                time.sleep(1)
+        yield url
 
 
 @pytest.fixture(scope='session')
