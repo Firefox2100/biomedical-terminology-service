@@ -1,3 +1,8 @@
+const formatLabel = (key) => key
+  .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .replace(/[_-]+/g, ' ')
+  .replace(/^./, (character) => character.toUpperCase())
+
 function DetailsPanel({ term, isLoading, error, className = '' }) {
   const preferredKeys = ['label', 'conceptId', 'id', 'definition', 'description', 'comment']
 
@@ -44,14 +49,14 @@ function DetailsPanel({ term, isLoading, error, className = '' }) {
 
   return (
     <div className={`card h-100 ${className}`}>
-      <div className="card-header bg-white fw-semibold">Concept Details</div>
+      <div className="card-header fw-semibold">Concept details</div>
       <div className="card-body">
         {isLoading ? (
-          <div className="text-muted">Loading concept details...</div>
+          <div className="term-loading" role="status">Loading concept details...</div>
         ) : error ? (
-          <div className="text-danger">Detail load failed: {error}</div>
+          <div className="alert alert-danger mb-0" role="alert">Concept details could not be loaded. {error}</div>
         ) : !term ? (
-          <div className="text-muted">No concept selected.</div>
+          <div className="term-empty">Select a concept from the tree or search to view its details.</div>
         ) : (
           <div className="vstack gap-3">
             {sortedEntries.map(([key, value]) => {
@@ -61,7 +66,7 @@ function DetailsPanel({ term, isLoading, error, className = '' }) {
               }
               return (
                 <div key={key}>
-                  <div className="term-details__label">{key}</div>
+                  <div className="term-details__label">{formatLabel(key)}</div>
                   {rendered}
                 </div>
               )

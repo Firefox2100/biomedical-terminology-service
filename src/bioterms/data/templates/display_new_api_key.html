@@ -3,7 +3,7 @@
 {% block content %}
   <div class="row justify-content-center">
     <div class="col-lg-8 col-xl-6">
-      <h1 class="h3 mb-4">New API Key Created</h1>
+      <h1 class="h2 mb-4">API key created</h1>
 
       <div class="alert alert-warning" role="alert">
         <strong>Important:</strong> This API key will only be shown once.
@@ -17,8 +17,9 @@
                id="api-key-value"
                class="form-control font-monospace"
                readonly
+               aria-describedby="api-key-help"
                value="{{ api_key }}">
-        <div class="form-text">
+        <div id="api-key-help" class="form-text">
           Copy this value now. You will not be able to see it again.
         </div>
       </div>
@@ -33,8 +34,4 @@
       </div>
     </div>
   </div>
-{% endblock %}
-
-{% block scripts %}
-  {{ super() }}
 {% endblock %}

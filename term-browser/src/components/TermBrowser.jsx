@@ -67,6 +67,7 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   const detailCache = useRef(new Map())
   const searchRequestId = useRef(0)
   const searchSelectionRequestId = useRef(0)
+  const detailRequestId = useRef(0)
   const suppressSearchRef = useRef(false)
   const treeDataRef = useRef(treeData)
 
@@ -280,7 +281,7 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
           setSearchLoading(false)
         }
       }
-    }, 2000)
+    }, 350)
 
     return () => {
       window.clearTimeout(timer)
@@ -483,6 +484,8 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   }
 
   const handleSelect = async (node) => {
+    const currentRequest = detailRequestId.current + 1
+    detailRequestId.current = currentRequest
     setSelectedTerm(node)
     setSelectedDetails(null)
     setDetailError(null)
@@ -517,14 +520,21 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
       const responseBlock = result?.[detailConfig.rootFieldName]
       const data = responseBlock?.[detailConfig.conceptFieldName]?.data
       const resolved = data || null
+      if (detailRequestId.current !== currentRequest) {
+        return
+      }
       if (resolved) {
         detailCache.current.set(node.id, resolved)
       }
       setSelectedDetails(resolved)
     } catch (error) {
-      setDetailError(error.message)
+      if (detailRequestId.current === currentRequest) {
+        setDetailError(error.message)
+      }
     } finally {
-      setDetailLoading(false)
+      if (detailRequestId.current === currentRequest) {
+        setDetailLoading(false)
+      }
     }
   }
 
@@ -558,20 +568,20 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
   }
 
   return (
-    <div className="term-browser container-fluid py-4">
+    <div className="term-browser container-fluid py-3 py-md-4">
       <div className="row g-3">
         <div className="col-12">
-          <div className="card shadow-sm">
+          <div className="term-browser__header card shadow-sm">
             <div className="card-body">
-              <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <div className="term-browser__header-layout">
                 <div>
-                  <h1 className="h4 mb-1">Ontology Term Browser</h1>
+                  <h1 className="h3 mb-1">Ontology term browser</h1>
                   <p className="text-muted mb-0">
                     Search and explore terminology structures.
                   </p>
                 </div>
-                <div className="d-flex align-items-center gap-2 flex-grow-1 flex-lg-grow-0">
-                  <div style={{ minWidth: '280px' }}>
+                <div className="term-browser__tools">
+                  <div className="term-browser__search">
                     <SearchBar
                       value={query}
                       onChange={(value) => {
@@ -602,14 +612,14 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
                       className="btn btn-outline-secondary"
                       onClick={handleReturn}
                     >
-                      Back
+                      Back to vocabulary
                     </button>
                   ) : null}
                 </div>
               </div>
               {schemaError ? (
-                <div className="text-danger small mt-2">
-                  Unable to load schema: {schemaError}
+                <div className="alert alert-danger mt-3 mb-0" role="alert">
+                  The term browser could not connect to the terminology schema. {schemaError}
                 </div>
               ) : null}
             </div>
@@ -618,16 +628,16 @@ function TermBrowser({ ontologyId, rootConceptIds, returnPath }) {
 
         <div className="col-12 col-lg-4">
           <div className="card term-browser__panel shadow-sm">
-            <div className="card-header bg-white fw-semibold">Ontology Tree</div>
+            <div className="card-header fw-semibold">Ontology tree</div>
             <div className="card-body">
               {!ontologyId ? (
-                <div className="text-muted">Select an ontology to begin.</div>
+                <div className="term-empty">Select an ontology to begin.</div>
               ) : !resolvedRootIds.length ? (
-                <div className="text-muted">
+                <div className="term-empty">
                   Set root concept ids via URL or config to load the tree.
                 </div>
               ) : treeError ? (
-                <div className="text-danger">Tree load failed: {treeError}</div>
+                <div className="alert alert-danger" role="alert">The concept tree could not be loaded. {treeError}</div>
               ) : null}
               <TreeView
                 data={filteredData}

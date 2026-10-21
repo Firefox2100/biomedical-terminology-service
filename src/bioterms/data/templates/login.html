@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="row justify-content-center">
-  <div class="col-12" style="max-width: 420px;">
+<div class="auth-panel">
     <div class="card shadow-sm">
       <div class="card-body p-4">
-        <h1 class="h4 text-center mb-3">Admin Login</h1>
+        <h1 class="h3 mb-2">Administrator sign in</h1>
+        <p class="text-muted mb-4">Manage vocabularies and API access for this service.</p>
 
         {% if error %}
           <div class="alert alert-danger" role="alert">
@@ -53,10 +53,9 @@
       </div>
     </div>
 
-    <div class="text-center mt-3">
-      <a class="small text-muted" href="{{ url_for('list_vocabularies') }}">&laquo; Back to Vocabularies</a>
+    <div class="mt-3">
+      <a class="small link-muted" href="{{ url_for('list_vocabularies') }}">Back to vocabularies</a>
     </div>
-  </div>
 </div>
 
 {% endblock %}

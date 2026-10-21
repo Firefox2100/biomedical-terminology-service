@@ -171,7 +171,9 @@ def test_status_failure_renders_error_page(client, monkeypatch):
 
 
 def test_login_page_and_failed_logins(client):
-    assert client.get('/login?next=/vocabularies').status_code == 200
+    login_page = client.get('/login?next=/vocabularies')
+    assert login_page.status_code == 200
+    assert login_page.headers['cache-control'] == 'no-store'
 
     wrong = _login(client, password='wrong')
     assert wrong.status_code == 303
@@ -228,13 +230,19 @@ def test_api_key_lifecycle(app_and_db):
     client = TestClient(wrapped, follow_redirects=False)
     _login(client)
 
-    assert client.get('/api-keys').status_code == 200
-    assert client.get('/api-keys/new').status_code == 200
+    keys_page = client.get('/api-keys')
+    new_key_page = client.get('/api-keys/new')
+    assert keys_page.status_code == 200
+    assert keys_page.headers['cache-control'] == 'no-store'
+    assert new_key_page.status_code == 200
+    assert new_key_page.headers['cache-control'] == 'no-store'
 
     created = client.post('/api-keys/new', data={
         'name': 'ci', 'csrftoken': client.cookies.get('csrftoken'),
     })
     assert created.status_code == 200
+    assert created.headers['cache-control'] == 'no-store'
+    assert created.headers['pragma'] == 'no-cache'
     [key] = doc_db.users.users['alice'].api_keys
     assert key.name == 'ci'
     # The page shows the raw key once; only its HMAC is stored.
@@ -245,6 +253,38 @@ def test_api_key_lifecycle(app_and_db):
     deleted = client.delete(f'/api-keys/{key_id}', headers={'x-csrf-token': client.cookies.get('csrftoken')})
     assert deleted.status_code == 204
     assert doc_db.users.deleted == [('alice', key_id)]
+
+
+@pytest.mark.parametrize('name', ['', '   ', 'x' * 129])
+def test_api_key_name_validation_rejects_invalid_names(app_and_db, name):
+    wrapped, _, doc_db = app_and_db
+    client = TestClient(wrapped, follow_redirects=False)
+    _login(client)
+
+    response = client.post('/api-keys/new', data={
+        'name': name,
+        'csrftoken': client.cookies.get('csrftoken'),
+    })
+
+    assert response.status_code == 422
+    assert response.headers['cache-control'] == 'no-store'
+    assert 'Enter a key name between 1 and 128 characters.' in response.text
+    assert not doc_db.users.users['alice'].api_keys
+
+
+def test_api_key_name_is_whitespace_normalised(app_and_db):
+    wrapped, _, doc_db = app_and_db
+    client = TestClient(wrapped, follow_redirects=False)
+    _login(client)
+
+    response = client.post('/api-keys/new', data={
+        'name': '  Research\n notebook  ',
+        'csrftoken': client.cookies.get('csrftoken'),
+    })
+
+    assert response.status_code == 200
+    [key] = doc_db.users.users['alice'].api_keys
+    assert key.name == 'Research notebook'
 
 
 def test_admin_endpoints_trigger_cache_rebuild_and_graphql_reload(app_and_db, monkeypatch):

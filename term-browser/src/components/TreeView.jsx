@@ -1,3 +1,11 @@
+function ChevronIcon({ expanded }) {
+  return (
+    <svg className="term-tree__chevron" viewBox="0 0 16 16" aria-hidden="true">
+      <path d={expanded ? 'M3 6l5 5 5-5' : 'M6 3l5 5-5 5'} />
+    </svg>
+  )
+}
+
 function TreeNode({
   node,
   selectedId,
@@ -21,10 +29,11 @@ function TreeNode({
             event.stopPropagation()
             onToggle(node)
           }}
-          aria-label={isExpanded ? 'Collapse node' : 'Expand node'}
+          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${node.label}`}
+          aria-expanded={hasChildren ? isExpanded : undefined}
           disabled={!hasChildren}
         >
-          {hasChildren ? (isExpanded ? 'v' : '>') : '-'}
+          {hasChildren ? <ChevronIcon expanded={isExpanded} /> : <span aria-hidden="true" />}
         </button>
         <button
           type="button"
@@ -32,7 +41,7 @@ function TreeNode({
             isActive ? 'is-active' : ''
           }`}
           onClick={() => onSelect(node)}
-          aria-pressed={isActive}
+          aria-current={isActive ? 'true' : undefined}
         >
           <div className="d-flex justify-content-between align-items-start">
             <span>{node.label}</span>
@@ -73,7 +82,7 @@ function TreeView({ data, selectedId, expandedIds, loadingIds, onSelect, onToggl
   }
 
   return (
-    <ul className="list-unstyled mb-0">
+    <ul className="list-unstyled mb-0" aria-label="Ontology concepts">
       {data.map((node) => (
         <TreeNode
           key={node.id}

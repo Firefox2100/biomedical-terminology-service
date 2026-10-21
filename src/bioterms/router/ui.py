@@ -35,6 +35,11 @@ ui_router = APIRouter(
     tags=['UI'],
 )
 
+PRIVATE_RESPONSE_HEADERS = {
+    'Cache-Control': 'no-store',
+    'Pragma': 'no-cache',
+}
+
 
 @ui_router.get(
     '/',
@@ -120,6 +125,7 @@ async def get_login_page(request: Request,
             'error': error,
             'nav_links': nav_links,
         },
+        headers=PRIVATE_RESPONSE_HEADERS,
     )
 
 
@@ -252,7 +258,8 @@ async def get_api_keys_page(request: Request,
             'page_title': 'API Keys | BioMedical Terminology Service',
             'api_keys': user.api_keys if user and user.api_keys else [],
             'nav_links': nav_links,
-        }
+        },
+        headers=PRIVATE_RESPONSE_HEADERS,
     )
 
 
@@ -276,7 +283,8 @@ async def create_new_api_key(request: Request,
         context={
             'page_title': 'New API Key | BioMedical Terminology Service',
             'nav_links': nav_links,
-        }
+        },
+        headers=PRIVATE_RESPONSE_HEADERS,
     )
 
 
@@ -286,9 +294,9 @@ async def create_new_api_key(request: Request,
     responses={404: {'description': 'User not found.'}},
 )
 async def post_new_api_key(request: Request,
-                           name: Annotated[str, Form()],
                            doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
                            username: Annotated[str, Depends(login_required)],
+                           name: Annotated[str | None, Form()] = None,
                            ):
     """
     Process the creation of a new API key for the logged-in user.
@@ -301,6 +309,24 @@ async def post_new_api_key(request: Request,
     user = await doc_db.users.get(username)
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
+
+    # Names are labels, not credentials. Normalize whitespace so they remain useful in
+    # tables and logs, and enforce the same limit even when the form is bypassed.
+    name = ' '.join((name or '').split())
+    if not name or len(name) > 128:
+        nav_links = await build_nav_links(request, doc_db)
+        return TEMPLATES.TemplateResponse(
+            request=request,
+            name='create_new_api_key.html',
+            context={
+                'page_title': 'New API Key | BioMedical Terminology Service',
+                'nav_links': nav_links,
+                'error': 'Enter a key name between 1 and 128 characters.',
+                'key_name': name,
+            },
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            headers=PRIVATE_RESPONSE_HEADERS,
+        )
 
     new_key_bytes = secrets.token_bytes(32)
     new_key_str = base64.urlsafe_b64encode(new_key_bytes).decode('ascii').rstrip('=')
@@ -330,7 +356,8 @@ async def post_new_api_key(request: Request,
             'page_title': 'New API Key | BioMedical Terminology Service',
             'api_key': new_key_str,
             'nav_links': nav_links,
-        }
+        },
+        headers=PRIVATE_RESPONSE_HEADERS,
     )
 
 

@@ -1,22 +1,22 @@
 {% extends "base.html" %}
 {% block content %}
 
-  <div class="d-flex align-items-center justify-content-between mb-3">
+  <header class="page-header">
     <div>
-      <h1 class="h4 mb-1">{{ vocabulary.name }}</h1>
-      <div class="text-muted small">Vocabulary details</div>
+      <h1 class="h2">{{ vocabulary.name }}</h1>
+      <div class="page-intro"><code>{{ vocabulary.prefix.value }}</code> vocabulary details</div>
     </div>
     <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('list_vocabularies') }}">&laquo; Back to Vocabularies</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('list_vocabularies') }}">Back to vocabularies</a>
       {% if term_browser_url %}
-        <a class="btn btn-outline-secondary" href="{{ term_browser_url }}">Browse</a>
+        <a class="btn btn-primary" href="{{ term_browser_url }}">Browse terms</a>
       {% endif %}
     </div>
-  </div>
+  </header>
 
   <div class="card mb-3 shadow-sm">
     <div class="card-body">
-      <dl class="row mb-0">
+      <dl class="row mb-0 definition-list">
         <dt class="col-sm-3">Prefix</dt>
         <dd class="col-sm-9"><code class="small">{{ vocabulary.prefix.value }}</code></dd>
 
@@ -33,13 +33,13 @@
         <dd class="col-sm-9">{{ vocabulary.name }}</dd>
 
         <dt class="col-sm-3">Concept count</dt>
-        <dd class="col-sm-9">{{ vocabulary.concept_count }}</dd>
+        <dd class="col-sm-9">{{ "{:,}".format(vocabulary.concept_count) }}</dd>
 
         <dt class="col-sm-3">Relationship count</dt>
-        <dd class="col-sm-9">{{ vocabulary.relationship_count }}</dd>
+        <dd class="col-sm-9">{{ "{:,}".format(vocabulary.relationship_count) }}</dd>
 
         <dt class="col-sm-3">Vector count</dt>
-        <dd class="col-sm-9">{{ vocabulary.vector_count }}</dd>
+        <dd class="col-sm-9">{{ "{:,}".format(vocabulary.vector_count) }}</dd>
       </dl>
     </div>
   </div>
@@ -71,10 +71,10 @@
                     {% if ann.loaded %}
                       <span class="badge text-bg-success">Loaded</span>
                     {% else %}
-                      <span class="badge text-bg-warning">Not Loaded</span>
+                      <span class="badge text-bg-warning">Not loaded</span>
                     {% endif %}
                   </td>
-                  <td class="text-end">{{ ann.relationship_count }}</td>
+                  <td class="text-end">{{ "{:,}".format(ann.relationship_count) }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -115,10 +115,10 @@
                     {% if sim.count > 0 %}
                       <span class="badge text-bg-success">Loaded</span>
                     {% else %}
-                      <span class="badge text-bg-warning">Not Loaded</span>
+                      <span class="badge text-bg-warning">Not loaded</span>
                     {% endif %}
                   </td>
-                  <td class="text-end">{{ sim.count }}</td>
+                  <td class="text-end">{{ "{:,}".format(sim.count) }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -140,9 +140,7 @@
               <button
                 type="submit"
                 class="btn btn-{{ btn_color }} btn-sm"
-                {% if btn_color in ['danger','warning'] %}
-                onclick="return confirm('Are you sure?');"
-                {% endif %}
+                {% if btn_color in ['danger','warning'] %}data-confirm="This action may modify or remove vocabulary data. Continue?"{% endif %}
               >
                 {{ action.label }}
               </button>
@@ -165,4 +163,8 @@
       </div>
     </div>
   {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script nonce="{{ request.state.csp_nonce }}" src="{{ request.url_for('static', path='js/vocabularies.js') }}"></script>
 {% endblock %}

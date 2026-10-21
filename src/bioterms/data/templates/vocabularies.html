@@ -1,30 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="d-flex align-items-center justify-content-between mb-3">
+  <header class="page-header">
     <div>
-      <h1 class="h4 mb-0">Vocabularies</h1>
-      <p class="text-muted mb-0">
+      <h1 class="h2">Vocabularies</h1>
+      <p class="page-intro mb-0">
         Supported vocabularies and their statistics.
       </p>
     </div>
 
-    <div>
+    <div class="page-header__actions d-flex flex-wrap gap-2">
       {% if is_admin %}
         <button id="rebuild-cache-btn"
-                class="btn btn-sm btn-warning ms-2"
+                class="btn btn-sm btn-outline-primary"
                 data-endpoint="{{ request.url_for('rebuild_cache_endpoint') }}"
                 data-csrf="{{ request.scope.csrftoken() }}">
           Rebuild Cache
         </button>
         <button id="reload-graphql-btn"
-                class="btn btn-sm btn-outline-secondary ms-2"
+                class="btn btn-sm btn-outline-secondary"
                 data-endpoint="{{ request.url_for('reload_graphql_endpoint') }}"
                 data-csrf="{{ request.scope.csrftoken() }}">
           Reload GraphQL API
         </button>
       {% endif %}
     </div>
-  </div>
+  </header>
+  <div id="admin-action-status" class="status-message" role="status" aria-live="polite"></div>
 
   {% if vocabularies and vocabularies|length > 0 %}
     <div class="table-responsive">
@@ -51,8 +52,8 @@
                 <span class="badge text-bg-warning">Not Loaded</span>
               {% endif %}
             </td>
-            <td class="text-end">{{ v.concept_count }}</td>
-            <td class="text-end">{{ v.relationship_count }}</td>
+            <td class="text-end">{{ "{:,}".format(v.concept_count) }}</td>
+            <td class="text-end">{{ "{:,}".format(v.relationship_count) }}</td>
             <td class="text-end">
               <a class="btn btn-sm btn-outline-primary" href="/vocabularies/{{ v.prefix.value }}">View</a>
             </td>
@@ -63,10 +64,13 @@
     </div>
 
   {% else %}
-    <div class="alert alert-info">
+    <div class="empty-state" role="status">
       No vocabularies supported. This is likely an error. Please contact the administrator.
     </div>
   {% endif %}
 
-  <script src="{{ request.url_for('static', path='js/vocabularies.js') }}"></script>
+{% endblock %}
+
+{% block scripts %}
+  <script nonce="{{ request.state.csp_nonce }}" src="{{ request.url_for('static', path='js/vocabularies.js') }}"></script>
 {% endblock %}

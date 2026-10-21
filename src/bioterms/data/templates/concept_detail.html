@@ -1,25 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="d-flex align-items-center justify-content-between mb-3">
+  <header class="page-header">
     <div>
-      <h1 class="h4 mb-1">
+      <h1 class="h2">
         {% if concept.label %}
           {{ concept.label }}
         {% else %}
           {{ concept.concept_id }}
         {% endif %}
       </h1>
-      <div class="text-muted small">Concept details</div>
+      <div class="page-intro">Concept details in <code>{{ concept.prefix.value }}</code></div>
     </div>
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary"
-         href="{{ url_for('get_vocabulary_info', prefix=concept.prefix.value) }}">&laquo; Back to Vocabulary</a>
+         href="{{ url_for('get_vocabulary_info', prefix=concept.prefix.value) }}">Back to vocabulary</a>
     </div>
-  </div>
+  </header>
 
   <div class="card mb-4 shadow-sm">
     <div class="card-body">
-      <dl class="row mb-0">
+      <dl class="row mb-0 definition-list">
         <dt class="col-sm-3">Concept ID</dt>
         <dd class="col-sm-9"><code class="small">{{ concept.concept_id }}</code></dd>
 

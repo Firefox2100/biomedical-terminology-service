@@ -7,6 +7,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
   const deleteEndpointPattern = endpointsEl.dataset.deleteEndpoint;
   const csrfToken = endpointsEl.dataset.csrfToken;
+  const status = document.getElementById('api-key-status');
+
+  function setStatus(message, isError) {
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('text-danger', Boolean(isError));
+  }
 
   if (!deleteEndpointPattern) {
     console.warn('API Key management: missing data-delete-endpoint on #api-key-endpoints.');
@@ -38,6 +45,9 @@ document.addEventListener('DOMContentLoaded', function () {
       );
 
       try {
+        this.disabled = true;
+        this.setAttribute('aria-busy', 'true');
+        setStatus('Revoking API key...', false);
         const response = await fetch(deleteUrl, {
           method: 'DELETE',
           headers: {
@@ -53,16 +63,21 @@ document.addEventListener('DOMContentLoaded', function () {
             row.remove();
           }
 
+          setStatus('API key revoked.', false);
+
           if (!document.querySelector('tbody tr')) {
             window.location.reload();
           }
         } else {
           console.error('Failed to revoke API key. HTTP status:', response.status);
-          alert('Failed to revoke the API key.');
+          setStatus('The API key could not be revoked. Try again.', true);
         }
       } catch (err) {
         console.error('Error while revoking API key:', err);
-        alert('An error occurred while revoking the API key.');
+        setStatus('The request could not reach the service. Check your connection and try again.', true);
+      } finally {
+        this.disabled = false;
+        this.removeAttribute('aria-busy');
       }
     });
   });

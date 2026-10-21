@@ -132,6 +132,10 @@ async def csp_headers(request, call_next):
 
     response = await call_next(request)
 
+    if request.url.path == '/login' or request.url.path.startswith('/api-keys'):
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Pragma'] = 'no-cache'
+
     if any([
         request.url.path.startswith('/static/'),
         request.url.path.startswith(API_PATH_PREFIX),

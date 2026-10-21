@@ -1,4 +1,21 @@
 :root {
+  --bts-ink: #172235;
+  --bts-muted: #5b6879;
+  --bts-subtle: #eef3f8;
+  --bts-surface: #ffffff;
+  --bts-canvas: #f7f9fc;
+  --bts-border: #dce4ed;
+  --bts-primary: #174f8a;
+  --bts-primary-hover: #103d6d;
+  --bts-focus: #76a9e0;
+  --bts-radius: 0.875rem;
+  --bts-shadow: 0 0.5rem 1.5rem rgba(22, 42, 67, 0.08);
+  --bs-primary: var(--bts-primary);
+  --bs-primary-rgb: 23, 79, 138;
+  --bs-body-color: var(--bts-ink);
+  --bs-body-bg: var(--bts-canvas);
+  --bs-border-color: var(--bts-border);
+  --bs-secondary-color: var(--bts-muted);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -6,11 +23,22 @@
 }
 
 body {
+  min-width: 320px;
+  min-height: 100vh;
   margin: 0;
-  background-color: #f8f9fa;
-  color: #212529;
+  background-color: var(--bts-canvas);
+  color: var(--bts-ink);
+  font-feature-settings: "tnum" 1;
 }
 
 #root {
   min-height: 100vh;
+}
+
+::selection { color: #fff; background: var(--bts-primary); }
+
+:focus-visible {
+  outline: 3px solid var(--bts-focus) !important;
+  outline-offset: 3px;
+  box-shadow: none !important;
 }
