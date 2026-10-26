@@ -2,16 +2,32 @@
 Usage
 =====
 
-This document section explains how to use this service, including its features, query parameters, and potential applications.
+This section documents the public data APIs. It explains what each endpoint returns and
+which API generation a client should choose.
 
-The API provided by this service have multiple versions, corresponding to different tools intended to work with it. They can be broadly categorized into three groups:
+The REST API has several generations because BTS retains compatibility with clients built
+for earlier Cafe Variome services:
 
-* Cafe Variome V2 legacy support: This API version existed before the prototype of this service was built. As a result, it was designed for a different PHP service to provide similar features, and is not optimized for the current service architecture. It should not be used in any new applications.
-* Cafe Variome V3 support: These API endpoints are designed for modern asynchronous web frameworks with better performance and scalability. They provide improved features and optimizations compared to the legacy V2 API. They are mostly POST endpoints, and the server collects all data before returning a response. If a system was originally designed to work with these endpoints, they can safely continue to do so, or consider migrating to the latest API version for better performance.
-* Latest API for load balancer caching and streaming: This is the most recent API version, designed to work with load balancers and caching mechanisms for improved performance. These endpoints are all GET endpoints, allowing for better caching at the load balancer level. They also stream the response data as it generates, putting less load on server memory and improving response times for large datasets. If your application can work with streamed responses and proxy cache, it is recommended to use this latest API version.
-* GraphQL API: All features provided by the REST API are also available through a GraphQL endpoint. This endpoint is not versioned and is subject to continuous improvements. It allows a fine-grain selective access to all data fields, making it suitable for applications that require specific data retrieval without over-fetching. See :doc:`../graphql`.
-* FHIR API: A FHIR-compatible terminology server interface (``CodeSystem`` lookup and validation) for interoperability with FHIR-based clinical systems. See :doc:`../fhir`.
-* MCP: The MCP API is a specialized API designed for usage with LLMs and agents. It provides a more structured and efficient way to interact with the service, particularly for applications that require complex queries or interactions. It is recommended for applications that need to leverage LLMs or agents for data processing and retrieval.
+* **Cafe Variome V2 compatibility** predates BTS and mirrors an older PHP service. Keep it
+  for existing integrations, but do not choose it for a new client.
+* **Cafe Variome V3 compatibility** uses mostly batched ``POST`` requests and returns a
+  complete response after the server has collected the results. Existing clients can
+  continue to use it.
+* **Current REST endpoints** use ``GET`` for read operations where practical. This makes
+  successful responses available to a correctly configured proxy cache. Endpoints that
+  return a ``StreamingResponse`` begin serialising results without first constructing the
+  complete JSON array in application memory. Check each topic for its exact behaviour.
+
+BTS also provides three interfaces that are not REST API versions:
+
+* **GraphQL** supports client-selected fields and queries that combine related data. Its
+  schema reflects the vocabularies and annotations loaded at the time it was generated.
+  See :doc:`../graphql`.
+* **FHIR R4** provides read-only ``CodeSystem`` lookup and validation operations. It is a
+  focused compatibility surface, not a general FHIR terminology implementation. See
+  :doc:`../fhir`.
+* **MCP** exposes six read-only tools and vocabulary licence resources to MCP clients. See
+  :doc:`../mcp-api`.
 
 Not every version is available for every feature below; each topic lists the versions it actually has.
 

@@ -1,61 +1,6 @@
-{% extends "base.html" %}
-{% block content %}
-  <div>
-    <header class="page-header">
-      <div>
-      <h1 class="h2">BioMedical Terminology Service</h1>
-      <p class="page-intro mb-0">
-        This service contains data for various biomedical terminologies, ontologies, and vocabularies.
-      </p>
-      </div>
-    </header>
-
-    <div class="metric-strip" aria-label="Service statistics">
-      <div class="metric">
-        <div class="metric__value">{{ vocabulary_count }}</div>
-        <div class="metric__label">Loaded vocabularies</div>
-      </div>
-      <div class="metric">
-        <div class="metric__value">{{ "{:,}".format(concept_count) }}</div>
-        <div class="metric__label">Available concepts</div>
-      </div>
-    </div>
-
-    <div class="content-prose mt-4">
-      <section>
-        <h2 class="h5">About</h2>
-        <p>
-          The BioMedical Terminology Service is designed to facilitate access to and usage of biomedical
-          terminologies, ontologies, and vocabularies. It offers a centralised service, exposed through REST,
-          GraphQL, FHIR, and MCP interfaces, that allows users and applications to query, retrieve, and interact
-          with a wide range of biomedical terminological resources in various use cases, including research,
-          clinical applications, and data analysis.
-        </p>
-      </section>
-
-      <section>
-        <h2 class="h5">Features</h2>
-        <p>
-          On top of the normal searching and querying functionalities on biomedical terminologies, this service also
-          provides advanced features:
-        </p>
-        <ul>
-          <li>Unified access to multiple terminologies, ontologies, and vocabularies, including SNOMED CT, CTV3, HGNC, HPO, MONDO, NCIt, OMIM, ORDO, Reactome, Ensembl, and OHDSI.</li>
-          <li>Parent-child and other relationship traversal, for use in external queries.</li>
-          <li>Inter- and intra-vocabulary mapping for normalising subject tagging.</li>
-          <li>Semantic similarity based searches and translations between term sets, backed by multiple pluggable similarity methods.</li>
-          <li>Auto-complete and full-text search across loaded vocabularies.</li>
-          <li>A GraphQL endpoint for fine-grained, client-selected field access, alongside the REST API.</li>
-          <li>A FHIR-compatible terminology server interface, for interoperability with FHIR-based clinical systems.</li>
-          <li>An MCP server, for use with LLMs and agents.</li>
-          <li>Regular updates to ensure access to the latest versions of terminological resources.</li>
-          <li>Comprehensive documentation and usage examples.</li>
-        </ul>
-        <p>
-          See the <a href="https://biomedical-terminology-service.readthedocs.io/en/latest/" target="_blank" rel="noopener">full documentation</a>
-          for installation instructions, API usage guides, and the mathematical background of the similarity methods.
-        </p>
-      </section>
-    </div>
-  </div>
+{% extends "base.html" %}{% block content %}
+<section class="home-intro"><div><h1>Biomedical vocabularies, connected and ready to explore.</h1><p>Browse terminology systems, search concepts, and follow relationships across a fully self-hosted heterogeneous graph.</p><a class="button button--primary" href="{{ url_for('list_vocabularies') }}">Browse all vocabularies</a></div><aside class="cross-reference" aria-label="Service capabilities"><strong>One reference, many systems</strong><span>Clinical terms</span><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg><span>Phenotypes</span><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg><span>Genes</span></aside></section>
+<section class="section-heading"><div><h2>Start with a vocabulary</h2><p>Every configured source is available immediately; live status is kept separate from browsing.</p></div><a class="text-link" href="{{ url_for('list_vocabularies') }}">View the complete register</a></section>
+<div class="vocabulary-register vocabulary-register--compact">{% for v in vocabularies[:6] %}<a class="vocabulary-row" href="{{ url_for('get_vocabulary_info', prefix=v.prefix.value) }}"><span class="vocabulary-row__tab" aria-hidden="true"></span><span><strong>{{ v.name }}</strong><small>{{ v.prefix.value }}</small></span><span class="vocabulary-row__scope">{{ v.annotations|length }} cross-vocabulary connection{% if v.annotations|length != 1 %}s{% endif %}</span><span class="row-action">Browse <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></span></a>{% endfor %}</div>
+<section class="service-note"><h2>Built for local control</h2><p>BTS brings REST, GraphQL, FHIR, MCP, advanced similarity, and cross-vocabulary checks to infrastructure you operate. Public browsing stays simple; administrative and research detail remains available through documentation and dedicated status views.</p></section>
 {% endblock %}

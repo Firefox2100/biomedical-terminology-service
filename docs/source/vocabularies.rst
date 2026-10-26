@@ -5,7 +5,10 @@ Vocabularies and Annotations
 Vocabulary Support
 ==================
 
-This software aims to support a wide range of biomedical vocabularies and ontologies to provide comprehensive coverage of biomedical concepts, starting from the most commonly adopted ones. Below is a list of vocabularies and their support status:
+BTS includes loaders and models for the vocabularies below. "Supported" means the code can
+download or accept the named source release, parse it, and load it into the configured
+backends. It does not mean that the data is bundled, freely licensed, or already present in
+a deployment.
 
 ============================ ================== ===========================================================================
 Vocabulary                   Status             Note
@@ -72,7 +75,10 @@ Additionally, vocabularies that are widely adopted in the biomedical community a
 Annotations Support
 ===================
 
-This software also utilises mappings and annotations between the supported vocabularies to enhance the connectivity and semantic richness of the integrated knowledge graph. These annotations help link concepts across different vocabularies, facilitating more comprehensive queries and analyses. Annotations are loaded with ``bioterms-cli annotation load <vocabulary> <another-vocabulary>``, as described in :doc:`build-database`. Below is a list of supported annotation pairs and their sources:
+BTS can load the following publisher mappings and annotations as relationships between
+vocabularies. They are separate from the vocabulary datasets unless a note says otherwise.
+Load a pair with ``bioterms-cli annotation load <vocabulary> <another-vocabulary>``, as
+described in :doc:`build-database`.
 
 ===================== =====================================================================================================================================================
 Vocabulary Pair       Source

@@ -1,4 +1,5 @@
 """Unit tests for the application module's lifespan, cache rebuild and exception handlers."""
+import logging
 import types
 
 import pytest
@@ -66,6 +67,27 @@ async def test_lifespan_closes_backends_when_startup_fails(backends):
             pass  # pragma: no cover
 
     assert log[-3:] == ['close cache', 'close doc_db', 'close graph_db']
+
+
+@pytest.mark.asyncio
+async def test_lifespan_debug_log_does_not_include_secrets(backends, monkeypatch, caplog):
+    async def initialise():
+        return None
+
+    app = types.SimpleNamespace(state=types.SimpleNamespace(
+        graphql_service=types.SimpleNamespace(initialise=initialise),
+    ))
+    monkeypatch.setattr(app_module.CONFIG, 'secret_key', 'sentinel-session-secret')
+    monkeypatch.setattr(app_module.CONFIG, 'server_hmac_key', 'sentinel-hmac-secret')
+
+    with caplog.at_level(logging.DEBUG, logger=app_module.LOGGER.name):
+        async with app_module.lifespan(app):
+            pass
+
+    logged = caplog.text
+    assert 'System configuration loaded' in logged
+    assert 'sentinel-session-secret' not in logged
+    assert 'sentinel-hmac-secret' not in logged
 
 
 @pytest.mark.asyncio

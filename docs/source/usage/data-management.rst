@@ -20,7 +20,11 @@ Vocabulary status
 
 ``GET /api/vocabularies/{prefix}``
 
-Returns the current status of a vocabulary: whether it is loaded, its concept and relationship counts, which annotations and similarity methods are available for it, and file download timestamps. This is the same information shown by ``bioterms-cli vocabulary status`` and on the vocabulary's page in the web UI.
+Returns the current status of a vocabulary: whether it is loaded, its concept and
+relationship counts, which annotations and similarity methods are available for it, and
+file download timestamps. The web interface shows this information on the dedicated
+``/vocabularies/{prefix}/status`` page. Gathering it can require several backend queries;
+the main vocabulary browser does not wait for this status report.
 
 Deleting a vocabulary
 ======================

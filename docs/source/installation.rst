@@ -18,18 +18,17 @@ Prerequisites
 The following software must be installed on your system before proceeding with the installation:
 
 * A **document database** for storing and retrieving biomedical terminology text data.
-  MongoDB is recommended and used throughout this guide. PostgreSQL, MySQL/MariaDB, or SQLite are also
-  supported as alternatives via SQLAlchemy.
+  MongoDB is recommended and used throughout this guide. PostgreSQL, MySQL/MariaDB, or
+  SQLite are supported through SQLAlchemy. Elasticsearch is also supported.
 * A **graph database** for storing relationships between terminology concepts. Neo4j is recommended
   and used throughout this guide. PostgreSQL is also supported as an alternative (plain relational
   tables plus recursive CTEs, not a graph extension), and can share the same PostgreSQL instance as
   the document/vector databases above.
 * A **cache** for hot data and inter-process communication. Only Redis is supported.
-* A **vector database** for storing and searching vector embeddings. Qdrant is recommended and used
-  throughout this guide. MongoDB (with Atlas Search / mongot support) and PostgreSQL (with the
-  pgvector extension) are also supported as alternatives - the latter can run on the same
-  PostgreSQL instance as the document database, in its own set of tables, avoiding a separate
-  database system entirely.
+* A **vector database** for storing and searching vector embeddings. Qdrant is recommended
+  and used throughout this guide. MongoDB with Atlas Search or mongot, PostgreSQL with
+  pgvector, and Elasticsearch are also supported. PostgreSQL can share an instance with
+  the document database while keeping its vector data in separate tables.
 
 Resource requirements:
 
@@ -101,10 +100,13 @@ Both compose files also define two further opt-in `Compose profiles
 
 Pass ``--profile <name>`` to include one. See :doc:`build-database` for details.
 
-### Example Compose
+Example Compose configuration
+-----------------------------
 
-The ``docker-compose.yaml`` file from the repository contains the full production-ready configuration,
-including both the ``bioterms`` web service and an optional ``bioterms-worker`` Celery worker process.
+The repository's ``docker-compose.yaml`` is a working deployment example. It includes the
+``bioterms`` web service and an optional ``bioterms-worker`` Celery worker process. Review
+its credentials, storage, resource limits, proxy, backups, and observability before using
+it in production.
 The compose files reference the images published on Docker Hub at
 ``firefox2100/biomedical-terminology-service``.
 
@@ -301,7 +303,31 @@ Document Database
    * - ``BTS_DOC_DATABASE_DRIVER``
      - ``mongo``
      - no
-     - ``mongo`` or ``sql``. When ``sql``, an async driver package (``asyncpg``, ``aiomysql``, or ``aiosqlite``) is required.
+     - ``mongo``, ``sql``, or ``elasticsearch``. The ``sql`` driver requires an async driver package such as ``asyncpg``, ``aiomysql``, or ``aiosqlite``.
+   * - ``BTS_ELASTICSEARCH_URL``
+     - ``http://localhost:9200``
+     - no
+     - Elasticsearch URL shared by the document and vector drivers
+   * - ``BTS_ELASTICSEARCH_USERNAME``
+     - *(empty)*
+     - yes
+     - Optional Elasticsearch basic-auth username
+   * - ``BTS_ELASTICSEARCH_PASSWORD``
+     - *(empty)*
+     - yes
+     - Optional Elasticsearch basic-auth password
+   * - ``BTS_ELASTICSEARCH_API_KEY``
+     - *(empty)*
+     - yes
+     - Optional Elasticsearch API key. Takes precedence over basic authentication.
+   * - ``BTS_ELASTICSEARCH_INDEX_PREFIX``
+     - ``bts``
+     - no
+     - Prefix for indices created by BTS
+   * - ``BTS_ELASTICSEARCH_BATCH_SIZE``
+     - ``1000``
+     - no
+     - Number of documents per Elasticsearch bulk indexing chunk
    * - ``BTS_MONGODB_HOST``
      - ``localhost``
      - no
@@ -326,6 +352,14 @@ Document Database
      - ``admin``
      - no
      - MongoDB authentication source database
+   * - ``BTS_MONGODB_DIRECT_CONNECTION``
+     - ``false``
+     - no
+     - Connect directly to the configured MongoDB host without replica-set discovery
+   * - ``BTS_MONGODB_TEXT_INDEX_NAME``
+     - ``text_autocomplete_index``
+     - no
+     - Atlas Search or mongot index used for document auto-complete
    * - ``BTS_SQL_DB_URL``
      - ``sqlite+aiosqlite:///./bts.sqlite3``
      - no
@@ -334,6 +368,14 @@ Document Database
      - ``5000``
      - no
      - Batch size for SQL database write operations
+   * - ``BTS_SQL_POOL_SIZE``
+     - ``20``
+     - no
+     - Base size of the SQLAlchemy connection pool
+   * - ``BTS_SQL_MAX_OVERFLOW``
+     - ``20``
+     - no
+     - Connections allowed above the base SQL pool size during bursts
 
 Graph Database
 --------------
@@ -374,6 +416,10 @@ Graph Database
      - ``postgresql+asyncpg://localhost:5432/bts``
      - no
      - SQLAlchemy async URL for the PostgreSQL graph database. Only used when ``BTS_GRAPH_DATABASE_DRIVER=postgresql``. Graph tables live under their own ``graph_*`` names, so this can safely equal ``BTS_SQL_DB_URL``/``BTS_POSTGRES_VECTOR_DB_URL`` to share one PostgreSQL instance.
+   * - ``BTS_POSTGRES_GRAPH_CLOSURE_DEPTH``
+     - ``5``
+     - no
+     - Number of hierarchy levels materialised in each PostgreSQL graph closure table
    * - ``BTS_POSTGRES_GRAPH_CLOSURE_MAX_DEPTH``
      - ``500``
      - no
@@ -406,6 +452,10 @@ Cache
      - ``0``
      - no
      - Redis database index
+   * - ``BTS_REDIS_PASSWORD``
+     - *(empty)*
+     - yes
+     - Optional Redis password
    * - ``BTS_CACHE_HARD_TTL_MULTIPLIER``
      - ``7``
      - no
@@ -429,11 +479,15 @@ Vector Database
    * - ``BTS_VECTOR_DATABASE_DRIVER``
      - ``qdrant``
      - no
-     - ``qdrant``, ``mongodb``, or ``postgresql``
+     - ``qdrant``, ``mongodb``, ``postgresql``, or ``elasticsearch``
    * - ``BTS_QDRANT_LOCATION``
      - ``http://localhost:6333``
      - no
      - Qdrant API endpoint URL
+   * - ``BTS_QDRANT_STORAGE_TYPE``
+     - ``float32``
+     - no
+     - Vector storage type for new Qdrant collections: ``float32``, ``float16``, ``uint8``, or ``turbo4``
    * - ``BTS_MONGODB_VECTOR_INDEX_NAME``
      - ``vector_index``
      - no
@@ -451,6 +505,10 @@ Vector Database
        ``BTS_VECTOR_DATABASE_DRIVER=postgresql``. When equal to ``BTS_SQL_DB_URL`` (and
        ``BTS_DOC_DATABASE_DRIVER=sql``), vectors share the SQL document database's own tables
        instead of a separate vector-only set.
+   * - ``BTS_ELASTICSEARCH_VECTOR_NUM_CANDIDATES_MULTIPLIER``
+     - ``10``
+     - no
+     - Multiplier used to derive the candidate count for Elasticsearch k-nearest-neighbour search
 
 External API Keys (Optional)
 ----------------------------
@@ -504,7 +562,7 @@ Embedding & Search Settings
      - no
      - Worker-process count for embedding generation. Set to 1 to disable multiprocessing.
    * - ``BTS_EMBEDDING_BATCH_SIZE``
-     - ``32``
+     - ``128``
      - no
      - Number of embedding items to embed per batch
    * - ``BTS_TORCH_DEVICE``
@@ -516,6 +574,38 @@ Embedding & Search Settings
      - no
      - Reciprocal Rank Fusion "k" constant used to combine ``/search``'s lexical, alias-embedding,
        and definition-embedding recall lists
+   * - ``BTS_RERANKER_MODEL``
+     - local bundle if present
+     - no
+     - Optional local path or Hugging Face repository ID for the ColBERT reranker. Leave empty to keep RRF order.
+   * - ``BTS_SEARCH_RETRIEVAL_CANDIDATE_LIMIT``
+     - ``10``
+     - no
+     - Minimum candidates requested from each lexical or vector recall path before fusion
+   * - ``BTS_SEARCH_FUZZY_RECALL_LIMIT``
+     - ``50``
+     - no
+     - Candidate depth for fuzzy lexical recall. Set to ``0`` to disable it.
+   * - ``BTS_SEARCH_FUZZY_RRF_WEIGHT``
+     - ``0.75``
+     - no
+     - Relative RRF contribution of fuzzy lexical recall
+   * - ``BTS_SEARCH_FUZZY_MIN_TOKEN_LENGTH``
+     - ``4``
+     - no
+     - Minimum token length eligible for fuzzy expansion
+   * - ``BTS_SEARCH_FUZZY_MINIMUM_SHOULD_MATCH``
+     - ``2<75%``
+     - no
+     - Elasticsearch ``minimum_should_match`` expression for fuzzy query tokens
+   * - ``BTS_SEARCH_FUZZY_MAX_EXPANSIONS``
+     - ``50``
+     - no
+     - Maximum Elasticsearch fuzzy expansions for each eligible token
+   * - ``BTS_SEARCH_VECTOR_OVERRETRIEVE_FACTOR``
+     - ``1.0``
+     - no
+     - Multiplier applied to alias and definition vector recall depth before fusion
    * - ``BTS_SEARCH_MAPPED_RECALL_LIMIT``
      - ``0``
      - no
@@ -525,6 +615,54 @@ Embedding & Search Settings
      - ``20``
      - no
      - Maximum number of distinct mapped candidates contributed per searched vocabulary
+   * - ``BTS_RERANKER_CANDIDATE_LIMIT``
+     - ``50``
+     - no
+     - Maximum number of non-exact RRF candidates passed to the reranker
+   * - ``BTS_RERANKER_BATCH_SIZE``
+     - ``32``
+     - no
+     - Encoding batch size used by the reranker
+   * - ``BTS_RERANKER_QUERY_LENGTH``
+     - ``32``
+     - no
+     - Maximum query token length expected by the reranker bundle
+   * - ``BTS_RERANKER_DOCUMENT_LENGTH``
+     - ``64``
+     - no
+     - Maximum candidate token length expected by the reranker bundle
+   * - ``BTS_RERANKER_MAX_ALIASES``
+     - ``6``
+     - no
+     - Maximum synonyms rendered for each reranker candidate. Set to ``0`` for no cap.
+
+Download Settings
+-----------------
+
+.. list-table:: Downloads
+   :header-rows: 1
+   :widths: 55 15 5 25
+
+   * - Variable
+     - Default
+     - Sec
+     - Description
+   * - ``BTS_DOWNLOAD_CONNECT_TIMEOUT_SECONDS``
+     - ``30.0``
+     - no
+     - Connect, write, and connection-pool timeout for vocabulary downloads
+   * - ``BTS_DOWNLOAD_READ_TIMEOUT_SECONDS``
+     - ``120.0``
+     - no
+     - Per-chunk read timeout for streamed vocabulary downloads
+   * - ``BTS_DOWNLOAD_MAX_RETRIES``
+     - ``5``
+     - no
+     - Maximum attempts for a vocabulary download
+   * - ``BTS_DOWNLOAD_RETRY_BACKOFF_SECONDS``
+     - ``5.0``
+     - no
+     - Base delay between download attempts, multiplied by the attempt number
 
 CLI Output Settings
 -------------------

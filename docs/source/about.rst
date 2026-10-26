@@ -2,8 +2,41 @@
 About
 =====
 
-Originally, this service is designed as a proof of concept that we could have one centralised service to provide unified access to multiple biomedical terminologies, and offer semantic similarity features on top of that. Over time, it has evolved into a more comprehensive platform that not only provides access to various biomedical terminologies but also offers advanced features such as semantic similarity calculations, ontology management, and integration capabilities.
+Why BTS exists
+==============
 
-The BTS aims to address the challenges faced by researchers, clinicians, and developers in accessing and utilizing biomedical terminologies effectively. By providing a unified interface and advanced features, the BTS facilitates better data integration, retrieval, and analysis in the biomedical domain.
+BTS began as a proof of concept: could one self-hosted service provide consistent access
+to several biomedical terminologies and calculate useful relationships on top of them?
+The project now includes loaders for multiple vocabulary formats, a heterogeneous graph
+for concepts and cross-vocabulary annotations, lexical and vector search, and several
+similarity methods.
 
-This software itself is under MIT License, including the source code and the documentation provided in this repository. However, please note that the individual biomedical terminologies integrated into the BTS may have their own specific licenses and usage restrictions. They are not distributed with this software package, and while being used, is not modified in any way either. This software simply offers a way to access and utilize these terminologies. Before the admins decide to download and use any specific vocabulary to be used with this software, they should carefully review and comply with the licensing terms and conditions of each vocabulary to ensure proper usage and adherence to any restrictions imposed by the original licensors. The developers of this software are not responsible for any licensing issues that may arise from the use of the integrated biomedical terminologies.
+The main audience for the public interface is anyone who needs to look up and explore
+concepts. The API and operator documentation are intended for developers, researchers,
+and administrators who need repeatable access to terminology data or want to build and
+maintain a local deployment.
+
+What BTS does
+=============
+
+* Presents supported vocabularies through one browser and API model.
+* Stores concept records, graph relationships, and vector embeddings in backends chosen
+  by the operator.
+* Loads published annotations so clients can follow direct or multi-hop mappings between
+  vocabularies.
+* Supports hierarchy expansion, constrained translation, and precomputed concept
+  similarity in addition to ordinary lookup and search.
+* Runs on infrastructure controlled by the operator. No hosted BTS service is required.
+
+What BTS does not do
+====================
+
+BTS does not bundle the vocabulary datasets, replace their publishers, or grant rights to
+use them. Some loaders require accounts, API keys, or licence acceptance with the original
+publisher. Review the terms for every dataset before downloading, loading, or exposing it.
+The supported sources and their requirements are listed in :doc:`vocabularies`.
+
+The software and this documentation are released under the MIT License. That licence
+applies to BTS, not to data loaded into it. A local deployment is also responsible for its
+own access controls, retention policy, and assessment of whether a dataset is suitable for
+its intended use.

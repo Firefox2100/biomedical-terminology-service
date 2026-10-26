@@ -6,30 +6,50 @@ various functionalities such as home page, login, API key management,
 vocabulary listing, and vocabulary details.
 """
 
-import secrets
-import hmac
-import hashlib
 import base64
+import hashlib
+import hmac
+import secrets
 from typing import Annotated
-from uuid import UUID
 from urllib.parse import urlencode
-from markdown import markdown
-from fastapi import APIRouter, Query, Form, Depends, Request, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from uuid import UUID
 
-from bioterms.etc.consts import CONFIG, STATIC_FILE_PATH
-from bioterms.etc.enums import ConceptPrefix
-from bioterms.database import Cache, DocumentDatabase, GraphDatabase, get_active_cache, \
-    get_active_doc_db, get_active_graph_db
-from bioterms.vocabulary import get_vocabulary_status, get_vocabulary_config, get_vocabulary_license
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from markdown import markdown
+
 from bioterms.annotation import get_annotation_status
+from bioterms.database import (
+    Cache,
+    DocumentDatabase,
+    GraphDatabase,
+    get_active_cache,
+    get_active_doc_db,
+    get_active_graph_db,
+)
+from bioterms.etc.consts import CONFIG
+from bioterms.etc.enums import ConceptPrefix
+from bioterms.model.annotation_status import AnnotationStatus
+from bioterms.model.user import UserApiKey
 from bioterms.similarity import get_similarity_status
 from bioterms.task.cache import rebuild_cache_task
-from bioterms.model.user import UserApiKey
-from bioterms.model.annotation_status import AnnotationStatus
-from .utils import LD_CONTEXT, LD_TYPE, SCHEMA_ORG, TEMPLATES, build_nav_links, sanitise_next_url, \
-    login_optional, login_required, build_structured_data
+from bioterms.vocabulary import (
+    get_vocabulary_config,
+    get_vocabulary_license,
+    get_vocabulary_status,
+)
 
+from .utils import (
+    LD_CONTEXT,
+    LD_TYPE,
+    SCHEMA_ORG,
+    TEMPLATES,
+    build_nav_links,
+    build_structured_data,
+    login_optional,
+    login_required,
+    sanitise_next_url,
+)
 
 ui_router = APIRouter(
     tags=['UI'],
@@ -40,6 +60,29 @@ PRIVATE_RESPONSE_HEADERS = {
     'Pragma': 'no-cache',
 }
 
+# Root concepts used by the progressively enhanced hierarchy browser.  Keeping these in the
+# server-rendered UI means the first useful view does not depend on GraphQL introspection or a
+# warmed status cache. Vocabularies without a stable hierarchy still get the same search-first UI.
+VOCABULARY_ROOTS: dict[ConceptPrefix, list[str]] = {
+    ConceptPrefix.CTV3: ['.....'],
+    ConceptPrefix.HPO: ['0000001'],
+    ConceptPrefix.MONDO: ['0000001', '0021125', '0021178', '0042489'],
+    ConceptPrefix.NCIT: [
+        'C12218', 'C12219', 'C12913', 'C14250', 'C16612', 'C17828', 'C1908',
+        'C20047', 'C20181', 'C20189', 'C20633', 'C22187', 'C22188', 'C26548',
+        'C28428', 'C3910', 'C43431', 'C7057', 'C97325',
+    ],
+    ConceptPrefix.OMIM: ['MTHU000209', 'MTHU000057', 'MTHU000109'],
+    ConceptPrefix.ORDO: ['C001', 'C010', 'C041'],
+    ConceptPrefix.SNOMED: ['138875005'],
+    ConceptPrefix.UBERON: ['0000104', '0000105', '0001062', '0035943'],
+}
+
+
+def _vocabulary_catalogue() -> list[dict]:
+    """Return static vocabulary metadata without touching database or cache state."""
+    return [get_vocabulary_config(prefix) for prefix in ConceptPrefix]
+
 
 @ui_router.get(
     '/',
@@ -48,30 +91,15 @@ PRIVATE_RESPONSE_HEADERS = {
 )
 async def get_home_page(request: Request,
                         doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
-                        graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                         ):
     """
     Serve the home page of the BioMedical Terminology Service.
     \f
     :param request: Request object.
     :param doc_db: Document database instance.
-    :param graph_db: Graph database instance.
     :return: An HTML response with the home page content.
     """
     try:
-        loaded_sum = 0
-        concept_sum = 0
-        for prefix in ConceptPrefix:
-            vocab_status = await get_vocabulary_status(
-                prefix,
-                doc_db=doc_db,
-                graph_db=graph_db,
-            )
-
-            if vocab_status.loaded:
-                loaded_sum += 1
-                concept_sum += vocab_status.concept_count
-
         nav_links = await build_nav_links(request, doc_db)
         base_url = str(request.base_url).rstrip('/')
         structured_data = build_structured_data(base_url)
@@ -81,8 +109,7 @@ async def get_home_page(request: Request,
             name='home.html',
             context={
                 'page_title': 'Home | BioMedical Terminology Service',
-                'vocabulary_count': loaded_sum,
-                'concept_count': concept_sum,
+                'vocabularies': _vocabulary_catalogue(),
                 'nav_links': nav_links,
                 'google_site_verification_id': CONFIG.google_site_verification_id,
                 'structured_data': structured_data,
@@ -219,7 +246,7 @@ async def post_login_credentials(request: Request,
     return RedirectResponse(dest, status_code=status.HTTP_303_SEE_OTHER)
 
 
-@ui_router.get('/logout', response_class=RedirectResponse)
+@ui_router.post('/logout', response_class=RedirectResponse)
 async def handle_logout(request: Request):
     """
     Logout a user
@@ -386,7 +413,6 @@ async def delete_api_key(key_id: str,
 )
 async def list_vocabularies(request: Request,
                             doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
-                            graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
                             username: Annotated[str | None, Depends(login_optional)],
                             ):
     """
@@ -394,44 +420,24 @@ async def list_vocabularies(request: Request,
     \f
     :param request: Request object.
     :param doc_db: Document database instance.
-    :param graph_db: Graph database instance.
     :param username: The username of the logged-in user, if any.
     :return: An HTML response with the list of vocabularies.
     """
     try:
-        vocab_statuses = []
-        for prefix in ConceptPrefix:
-            vocab_status = await get_vocabulary_status(
-                prefix,
-                doc_db=doc_db,
-                graph_db=graph_db,
-            )
-            vocab_statuses.append(vocab_status)
+        vocabularies = _vocabulary_catalogue()
 
         nav_links = await build_nav_links(request, doc_db)
         base_url = str(request.base_url).rstrip('/')
         structured_data = build_structured_data(base_url)
 
         dataset_lds = []
-        for v in vocab_statuses:
+        for v in vocabularies:
             dataset_lds.append({
                 LD_TYPE: 'Dataset',
-                'name': v.name,
-                'identifier': v.prefix.value,
-                'url': f'{base_url}/vocabularies/{v.prefix.value}',
-                'description': f'{v.name} vocabulary dataset.',
-                'variableMeasured': [
-                    {
-                        LD_TYPE: 'PropertyValue',
-                        'name': 'concept_count',
-                        'value': v.concept_count,
-                    },
-                    {
-                        LD_TYPE: 'PropertyValue',
-                        'name': 'relationship_count',
-                        'value': v.relationship_count,
-                    }
-                ],
+                'name': v['name'],
+                'identifier': v['prefix'].value,
+                'url': f"{base_url}/vocabularies/{v['prefix'].value}",
+                'description': f"{v['name']} vocabulary dataset.",
                 'isAccessibleForFree': True,
                 'inLanguage': 'en',
             })
@@ -452,7 +458,7 @@ async def list_vocabularies(request: Request,
             context={
                 'request': request,
                 'page_title': 'Vocabularies | BioMedical Terminology Service',
-                'vocabularies': vocab_statuses,
+                'vocabularies': vocabularies,
                 'nav_links': nav_links,
                 'structured_data': structured_data,
                 'is_admin': username is not None,
@@ -469,158 +475,131 @@ async def list_vocabularies(request: Request,
 )
 async def get_vocabulary_info(prefix: ConceptPrefix,
                               request: Request,
-                              cache: Annotated[Cache, Depends(get_active_cache)],
                               doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
-                              graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+                              query: Annotated[str | None, Query(alias='q', max_length=200)] = None,
                               ):
     """
-    Get information about the specified vocabulary.
+    Browse and search concepts in a vocabulary without requiring status/cache warm-up.
     \f
     :param prefix: The vocabulary prefix.
     :param request: Request object.
-    :param cache: Cache instance.
     :param doc_db: Document database instance.
-    :param graph_db: Graph database instance.
+    :param query: Optional server-rendered concept search.
     :return: An HTML response with the vocabulary information.
     """
     try:
-        vocab_status = await get_vocabulary_status(
-            prefix,
-            cache=cache,
-            doc_db=doc_db,
-            graph_db=graph_db,
-        )
-        sim_status = await get_similarity_status(
-            prefix,
-            cache=cache,
-            doc_db=doc_db,
-            graph_db=graph_db,
-        )
+        vocabulary = get_vocabulary_config(prefix)
+        model_class = vocabulary['conceptClass']
+        clean_query = (query or '').strip()
+        search_results = []
+        if len(clean_query) >= 3:
+            search_results = await doc_db.auto_complete_search(
+                prefix=prefix,
+                query=clean_query,
+                limit=20,
+                model_class=model_class,
+            )
+
+        root_ids = VOCABULARY_ROOTS.get(prefix, [])
+        root_concepts = []
+        if root_ids:
+            root_concepts = await doc_db.get_terms_by_ids(
+                prefix=prefix,
+                concept_ids=root_ids,
+                model_class=model_class,
+            )
+        roots_by_id = {concept.concept_id: concept for concept in root_concepts}
+        roots = [roots_by_id.get(root_id) for root_id in root_ids]
         nav_links = await build_nav_links(request, doc_db)
         base_url = str(request.base_url).rstrip('/')
         structured_data = build_structured_data(base_url)
-        license_str = get_vocabulary_license(prefix)
-        license_html = None
-        if license_str:
-            license_html = markdown(
-                license_str,
-                extensions=['extra', 'sane_lists', 'toc']
-            )
-
-        annotation_statuses: list[AnnotationStatus] = []
-        for annotation in vocab_status.annotations:
-            annotation_status = await get_annotation_status(
-                prefix_1=vocab_status.prefix,
-                prefix_2=annotation,
-                cache=cache,
-                graph_db=graph_db,
-            )
-
-            annotation_statuses.append(annotation_status)
-
-        page_url = f'{base_url}/vocabularies/{vocab_status.prefix.value}'
+        page_url = f'{base_url}/vocabularies/{prefix.value}'
         dataset_ld = {
             LD_CONTEXT: SCHEMA_ORG,
             LD_TYPE: ['Dataset', 'DefinedTermSet'],
-            'name': vocab_status.name,
-            'identifier': vocab_status.prefix.value,
+            'name': vocabulary['name'],
+            'identifier': prefix.value,
             'url': page_url,
-            'description': f'{vocab_status.name} vocabulary dataset.',
+            'description': f"Browse and search {vocabulary['name']} concepts.",
             'inLanguage': 'en',
             'isAccessibleForFree': True,
-            'variableMeasured': [
-                {
-                    LD_TYPE: 'PropertyValue',
-                    'name': 'concept_count',
-                    'value': vocab_status.concept_count,
-                },
-                {
-                    LD_TYPE: 'PropertyValue',
-                    'name': 'relationship_count',
-                    'value': vocab_status.relationship_count,
-                },
-            ],
-            'additionalProperty': [
-                {
-                    LD_TYPE: 'PropertyValue',
-                    'name': 'loaded',
-                    'value': vocab_status.loaded,
-                },
-                {
-                    LD_TYPE: 'PropertyValue',
-                    'name': 'downloaded',
-                    'value': vocab_status.file_downloaded,
-                },
-                {
-                    LD_TYPE: 'PropertyValue',
-                    'name': 'download_time',
-                    'value': vocab_status.file_download_time.isoformat()
-                        if vocab_status.file_download_time else None,
-                },
-            ]
         }
-        if license_str:
-            if license_str.strip().startswith('http'):
-                dataset_ld['license'] = license_str.strip()
-            else:
-                dataset_ld['license'] = {
-                    LD_TYPE: 'CreativeWork',
-                    'text': license_str.strip(),
-                }
-        if annotation_statuses:
-            dataset_ld['hasPart'] = [
-                {
-                    LD_TYPE: 'Dataset',
-                    'name': ann.name,
-                    'identifier': f'{ann.prefix_source}-{ann.prefix_target}',
-                    'variableMeasured': [
-                        {
-                            LD_TYPE: 'PropertyValue',
-                            'name': 'relationship_count',
-                            'value': ann.relationship_count,
-                        }
-                    ],
-                } for ann in annotation_statuses
-            ]
 
         structured_data.extend([
             {
                 LD_CONTEXT: SCHEMA_ORG,
                 LD_TYPE: 'WebPage',
-                'name': f'{vocab_status.name} Vocabulary',
+                'name': f"{vocabulary['name']} Vocabulary",
                 'url': page_url,
-                'description': f'Details and statistics for the {vocab_status.name} vocabulary '
-                               f'in the BioMedical Terminology Service.',
+                'description': f"Browse and search {vocabulary['name']} in the "
+                               'BioMedical Terminology Service.',
             },
             dataset_ld,
         ])
 
-        if prefix in [
-            ConceptPrefix.CTV3, ConceptPrefix.HPO, ConceptPrefix.MONDO, ConceptPrefix.NCIT,
-            ConceptPrefix.OMIM, ConceptPrefix.ORDO, ConceptPrefix.SNOMED, ConceptPrefix.UBERON
-        ]:
-            params = {
-                'ontology': prefix.value,
-                'returnTo': f'/vocabularies/{prefix.value}',
+        return TEMPLATES.TemplateResponse(
+            request=request,
+            name='vocabulary_browser.html',
+            context={
+                'request': request,
+                'page_title': f"{vocabulary['name']} Concepts | BioMedical Terminology Service",
+                'meta_description': f"Browse and search concepts in {vocabulary['name']}.",
+                'vocabulary': vocabulary,
+                'query': clean_query,
+                'search_results': search_results,
+                'roots': roots,
+                'nav_links': nav_links,
+                'structured_data': structured_data,
             }
-            term_browser_url = f'{request.url_for("get_term_browser")}?{urlencode(params)}'
-        else:
-            term_browser_url = None
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
+
+@ui_router.get(
+    '/vocabularies/{prefix}/status',
+    response_class=HTMLResponse,
+    responses={500: {'description': 'Failed to load vocabulary status information.'}},
+)
+async def get_vocabulary_status_page(
+    prefix: ConceptPrefix,
+    request: Request,
+    cache: Annotated[Cache, Depends(get_active_cache)],
+    doc_db: Annotated[DocumentDatabase, Depends(get_active_doc_db)],
+    graph_db: Annotated[GraphDatabase, Depends(get_active_graph_db)],
+):
+    """Render the deliberately separate, potentially expensive vocabulary status view."""
+    try:
+        vocabulary = await get_vocabulary_status(
+            prefix, cache=cache, doc_db=doc_db, graph_db=graph_db,
+        )
+        similarity = await get_similarity_status(
+            prefix, cache=cache, doc_db=doc_db, graph_db=graph_db,
+        )
+        annotations: list[AnnotationStatus] = []
+        for annotation in vocabulary.annotations:
+            annotations.append(await get_annotation_status(
+                prefix_1=prefix,
+                prefix_2=annotation,
+                cache=cache,
+                graph_db=graph_db,
+            ))
+        license_str = get_vocabulary_license(prefix)
+        license_html = markdown(
+            license_str, extensions=['extra', 'sane_lists', 'toc']
+        ) if license_str else None
         return TEMPLATES.TemplateResponse(
             request=request,
             name='vocabulary_detail.html',
             context={
-                'request': request,
-                'page_title': f'{vocab_status.name} | BioMedical Terminology Service',
-                'vocabulary': vocab_status,
-                'similarity': sim_status,
-                'annotations': annotation_statuses,
-                'nav_links': nav_links,
+                'page_title': f'{vocabulary.name} Status | BioMedical Terminology Service',
+                'vocabulary': vocabulary,
+                'similarity': similarity,
+                'annotations': annotations,
+                'nav_links': await build_nav_links(request, doc_db),
                 'license_html': license_html,
-                'term_browser_url': term_browser_url,
-                'structured_data': structured_data,
-            }
+                'term_browser_url': request.url_for('get_vocabulary_info', prefix=prefix.value),
+            },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -695,14 +674,7 @@ async def get_term_browser():
     Serve the term browser page.
     :return:
     """
-    try:
-        html_path = STATIC_FILE_PATH / 'term-browser' / 'index.html'
-        return FileResponse(html_path)
-    except RuntimeError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Term browser not compiled or deployed.'
-        )
+    return RedirectResponse('/vocabularies', status_code=status.HTTP_308_PERMANENT_REDIRECT)
 
 
 @ui_router.post('/rebuild-cache', status_code=status.HTTP_202_ACCEPTED)

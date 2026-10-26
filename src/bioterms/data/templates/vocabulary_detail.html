@@ -3,13 +3,13 @@
 
   <header class="page-header">
     <div>
-      <h1 class="h2">{{ vocabulary.name }}</h1>
-      <div class="page-intro"><code>{{ vocabulary.prefix.value }}</code> vocabulary details</div>
+      <h1 class="h2">{{ vocabulary.name }} status</h1>
+      <div class="page-intro"><code>{{ vocabulary.prefix.value }}</code> ingestion, relationship, and similarity diagnostics</div>
     </div>
     <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('list_vocabularies') }}">Back to vocabularies</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('list_vocabularies') }}">All vocabularies</a>
       {% if term_browser_url %}
-        <a class="btn btn-primary" href="{{ term_browser_url }}">Browse terms</a>
+        <a class="btn btn-primary" href="{{ term_browser_url }}">Browse concepts</a>
       {% endif %}
     </div>
   </header>

@@ -48,17 +48,12 @@ const rootConceptIds = rootParams.flatMap((value) =>
   value.split(',').map((entry) => entry.trim()),
 ).filter(Boolean)
 
-if (import.meta.env.DEV) {
-  ensureStylesheet({
-    href: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
-    integrity: "sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH",
-    crossOrigin: "anonymous",
-  });
-} else {
-  ensureStylesheet({
-    href: "/static/vendor/bootstrap/5.3.8/css/bootstrap.min.css",
-  });
-}
+// The compatibility build is fully self-contained. The integrated Jinja browser is the
+// public default, but this bundle still uses the locally shipped Bootstrap package when
+// opened during migration or development—never a CDN fallback.
+ensureStylesheet({
+  href: "/static/vendor/bootstrap/5.3.8/css/bootstrap.min.css",
+});
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

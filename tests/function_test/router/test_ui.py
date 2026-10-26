@@ -12,15 +12,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import bioterms.app as app_module
-import bioterms.router.ui as ui
 from bioterms.database import get_active_cache, get_active_doc_db, get_active_graph_db
 from bioterms.etc.consts import CONFIG, PH
 from bioterms.etc.enums import ConceptPrefix, SimilarityMethod
 from bioterms.model.annotation_status import AnnotationStatus
 from bioterms.model.concept import Concept
 from bioterms.model.similarity_status import SimilarityStatus
-from bioterms.model.user import User, UserApiKey
+from bioterms.model.user import User
 from bioterms.model.vocabulary_status import VocabularyStatus
+from bioterms.router import ui
 
 
 class FakeUsers:
@@ -49,6 +49,13 @@ class FakeDocDb:
 
     async def get_terms_by_ids(self, prefix, concept_ids, model_class=Concept):
         return [self.concepts[c] for c in concept_ids if c in self.concepts]
+
+    async def auto_complete_search(self, prefix, query, limit=None, model_class=Concept):
+        query = query.casefold()
+        return [
+            concept for concept in self.concepts.values()
+            if concept.prefix == prefix and query in (concept.label or '').casefold()
+        ][:limit]
 
 
 def _vocabulary_status(prefix, **_):
@@ -134,18 +141,21 @@ def test_home_page_renders_counts_and_security_headers(client):
     assert 'application/ld+json' in response.text
 
 
-def test_vocabulary_pages_render_statuses_annotations_and_license(client):
+def test_vocabulary_pages_render_browser_and_separate_status(client):
     listing = client.get('/vocabularies')
-    detail = client.get('/vocabularies/hpo')
-    no_browser = client.get('/vocabularies/go')
+    browser = client.get('/vocabularies/hpo')
+    status_page = client.get('/vocabularies/hpo/status')
+    search = client.get('/vocabularies/hpo?q=abnormality')
 
     assert listing.status_code == 200
     assert 'CollectionPage' in listing.text
-    assert detail.status_code == 200
-    assert 'hpo-mondo' in detail.text           # annotation status rendered
-    assert 'term-browser?ontology=hpo' in detail.text
-    assert no_browser.status_code == 200
-    assert 'term-browser?ontology=go' not in no_browser.text
+    assert browser.status_code == 200
+    assert 'Search Human Phenotype Ontology' in browser.text
+    assert 'Vocabulary status' in browser.text
+    assert status_page.status_code == 200
+    assert 'hpo-mondo' in status_page.text
+    assert search.status_code == 200
+    assert 'Phenotypic abnormality' in search.text
 
 
 def test_concept_detail_and_missing_concept(client):
@@ -164,10 +174,13 @@ def test_status_failure_renders_error_page(client, monkeypatch):
 
     monkeypatch.setattr(ui, 'get_vocabulary_status', broken)
 
-    response = client.get('/vocabularies')
+    listing = client.get('/vocabularies')
+    response = client.get('/vocabularies/hpo/status')
 
+    assert listing.status_code == 200  # Browsing does not wait for status/cache warm-up.
     assert response.status_code == 500
-    assert 'status backend down' in response.text
+    assert 'The service could not complete this request. Please try again later.' in response.text
+    assert 'status backend down' not in response.text
 
 
 def test_login_page_and_failed_logins(client):
@@ -198,7 +211,11 @@ def test_login_redirects_to_safe_next_and_logout_clears_session(client):
     assert client.get('/login').status_code == 303
     assert 'Logout (alice)' in client.get('/').text
 
-    assert client.get('/logout').status_code == 303
+    assert client.get('/logout').status_code == 405
+    assert client.post('/logout').status_code == 403
+    assert client.post('/logout', data={
+        'csrftoken': client.cookies.get('csrftoken'),
+    }).status_code == 303
     assert 'Logout (alice)' not in client.get('/').text
 
 

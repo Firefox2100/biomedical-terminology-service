@@ -1,16 +1,17 @@
 MCP API Reference
 =================
 
-The MCP (Model Context Protocol) API is a specialized interface for integrating the BioMedical Terminology Service with LLMs and AI agents. Built on top of the `fastmcp <https://fastmcp.readthedocs.io/>`_ framework (which itself is built on `MCP <https://modelcontextprotocol.io/>`_), it exposes the service as a set of callable tools — structured functions with typed JSON parameters and return values — rather than HTTP endpoints. It is an alternative to the REST and GraphQL APIs, designed specifically for programmatic tool-calling by language models and agent orchestration frameworks such as LangChain, LlamaIndex, or direct MCP clients.
+The MCP (Model Context Protocol) API exposes a focused set of BTS operations as typed,
+read-only tools for language models and other MCP clients. It is built with
+`FastMCP <https://fastmcp.readthedocs.io/>`_ and runs inside the main BTS application.
+Use REST or GraphQL when a conventional application API is a better fit.
 
 Connection
 ==========
 
-The MCP server is mounted at ``/mcp`` inside the FastAPI application. You connect using any standard MCP transport: HTTP SSE, or raw stdio (in-process).
-
-* **HTTP SSE** — Point your MCP client at (for example) ``http://localhost:5000/mcp/sse``.
-* **HTTP** — Send MCP protocol messages to ``http://localhost:5000/mcp``.
-* **Stdio / in-process** — Instantiate the ``FastMCP`` object from ``bioterms.mcp_api`` directly and run ``mcp.run()``.
+The MCP server is mounted at ``/mcp`` and uses FastMCP's streamable HTTP transport. Point
+the client at, for example, ``http://localhost:5000/mcp``. It is part of the web process;
+there is no separate stdio command in the BTS deployment.
 
 No separate authentication is required at the MCP transport layer; the server shares the same document, graph, and vector database instances as the REST and GraphQL APIs. Any concept readable via REST or GraphQL is readable via the MCP tools.
 
@@ -19,7 +20,7 @@ Supported Vocabularies
 
 The tool parameters accept vocabulary identifiers defined in two Enums:
 
-* **ConceptPrefix** (used by ``auto_complete``, ``search_vocabulary``, ``map_concepts``, ``get_similar_concepts`` and ``translate_concepts_to_constraints``): ``CTV3``, ``ENSEMBL``, ``GO``, ``HGNC``, ``HGNC_SYMBOL``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``RXNORM``, ``SNOMED``, ``UBERON``, ``UNIPROT`` — all seventeen supported vocabularies are available.
+* **ConceptPrefix** (used by ``auto_complete``, ``search_vocabulary``, ``map_concepts``, ``get_similar_concepts`` and ``translate_concepts_to_constraints``): ``CTV3``, ``ENSEMBL``, ``GO``, ``HGNC``, ``HGNC_SYMBOL``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``RXNORM``, ``SNOMED``, ``UBERON``, ``UNIPROT``. All seventeen supported vocabularies are available.
 
 * **OntologyPrefix** (used only by ``expand_ontology``):
   ``CTV3``, ``GO``, ``HPO``, ``LOINC``, ``MONDO``, ``NCIT``, ``OHDSI``, ``OMIM``, ``ORDO``, ``REACTOME``, ``RXNORM``, ``SNOMED``, ``UBERON``. This is restricted to vocabularies with a traversable ontology or internal hierarchy; atomic identifier tables such as HGNC and UniProt are not included.
@@ -51,7 +52,10 @@ Performs hybrid lexical + semantic search over a vocabulary's concepts (see :doc
 * ``query`` (**string**, required): The search query string.
 * ``limit`` (**integer**, default ``10``): Maximum number of results.
 
-Returns a list of `ConceptUnion` objects ranked by embedding similarity. See :doc:`usage/search` for the REST API equivalent.
+Returns a list of `ConceptUnion` objects ranked by the hybrid search pipeline. The pipeline
+can combine lexical matches, alias and definition embeddings, reciprocal rank fusion, and
+reranking when the corresponding data and model are available. See :doc:`usage/search` for
+the REST API equivalent.
 
 expand_ontology
 ---------------
@@ -85,7 +89,7 @@ Retrieves concepts semantically similar to given inputs, based on pre-computed s
 
 * ``vocabulary`` (**ConceptPrefix**, required): The vocabulary to search within.
 * ``concept_ids`` (**list of string**, required): Concept IDs to find similar concepts for.
-* ``threshold`` (**float**, default ``1.0``): Minimum similarity score to include (0.0–1.0). ``1.0`` is an exact match; lower thresholds accept weaker matches. Note that the server may not have all similarity scores stored for every possible pair; a very low threshold may yield very large responses or performance degradation on vocabularies with many precomputed options.
+* ``threshold`` (**float**, default ``1.0``): Minimum similarity score to include, from 0.0 to 1.0. ``1.0`` is an exact match; lower thresholds accept weaker matches. Note that the server may not have all similarity scores stored for every possible pair; a very low threshold may yield very large responses or performance degradation on vocabularies with many precomputed options.
 * ``same_vocabulary`` (**bool**, default ``True``): Restrict results to the same vocabulary as input.
 * ``corpus_vocabulary`` (**ConceptPrefix**, optional): Only consider scores computed with this corpus.
 * ``method`` (**SimilarityMethod**, optional): Filter by similarity method. One of ``CO_ANNOTATION``, ``RELEVANCE``, or ``WEIGHED_RELEVANCE``.
@@ -113,53 +117,26 @@ The MCP server exposes one resource URI per vocabulary license: ``license://<pre
 
 These correspond to the license files in ``src/bioterms/data/licenses/``. Access them via your MCP client's ``read_resource`` method.
 
-Use cases
-=========
+Suitable uses
+=============
 
-The MCP API is designed for integration with LLMs and AI agents. Typical use cases include:
+The tools support bounded terminology tasks such as finding a concept from a phrase,
+walking down an ontology hierarchy, following loaded publisher mappings, or comparing a
+concept with a supplied candidate set. Results depend on the datasets, annotations,
+embeddings, and similarity scores loaded by the operator.
 
-**Clinical decision support**
+Do not treat an MCP response as clinical advice or as proof that two codes are equivalent.
+``map_concepts`` follows the relationships stored in the graph, including multi-hop paths
+when requested. The client remains responsible for checking relationship provenance and
+whether a result is suitable for its use case.
 
-An agent queries a physician's diagnosis (via auto-complete or search), expands the HPO concepts to find related OMIM diseases, then maps to SNOMED CT codes for the patient record.
+Connecting a client
+===================
 
-**Literature analysis**
+Use an MCP client that supports streamable HTTP and configure its server URL as
+``https://your-host/mcp``. Tool discovery returns the six tools documented above. Licence
+resources are available through the client's resource-reading operation.
 
-A research agent receives a list of gene names, searches HGNC for the corresponding Ensembl IDs, translates to MONDO diseases, and retrieves literature-relevant gene-disease co-annotations.
-
-**Ontology browsing**
-
-An agent explores a hierarchy by expanding a concept downward (expand_ontology) or mapping it upward through a chain of vocabularies (map_concepts with max_hops > 1).
-
-**Semantic search in constrained space**
-
-An agent takes free-text from a patient report, searches for similar concepts, and narrows results to vocabulary-specific terminology using translation to constraints.
-
-Connecting and using the MCP API
-================================
-
-To consume the MCP API, use any MCP-compatible client library (e.g. the ``mcp`` Python SDK, ``@modelcontextprotocol/sdk`` for Node.js, or an MCP-hosting framework such as `fastmcp`).
-
-Example — loading available MCP tools in Python:
-
-.. code-block:: python
-
-   from mcp import ClientSession, StdioServerParameters
-   from mcp.client.stdio import stdio_client
-
-   async def main():
-       async with stdio_client(StdioServerParameters(
-           command="uvicorn",
-           args=["bioterms.asgi:application", "--app", "bioterms.mcp_api:mcp"]
-       )) as (read, write):
-           async with ClientSession(read, write) as session:
-               await session.initialize()
-               tools = await session.list_tools()
-               print(tools)
-
-Connecting via HTTP SSE (for web frameworks or browser-based MCP clients):
-
-.. code-block:: bash
-
-   curl https://your-host/mcp/sse
-
-The MCP server will respond with JSON-RPC messages over the SSE connection.
+The MCP transport does not add its own authentication layer. If a deployment should not
+be publicly readable, restrict ``/mcp`` at the reverse proxy or another trusted network
+boundary.

@@ -52,7 +52,20 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for the FastAPI application.
     :param app: The FastAPI application instance.
     """
-    LOGGER.debug('System configuration loaded: %s', CONFIG.model_dump_json())
+    # Log only an explicit operational allow-list. Settings include database credentials,
+    # signing material and third-party API keys, so serialising the model is never safe.
+    LOGGER.debug('System configuration loaded: %s', {
+        'environment': CONFIG.environment,
+        'logging_level': CONFIG.logging_level,
+        'doc_database_driver': CONFIG.doc_database_driver,
+        'graph_database_driver': CONFIG.graph_database_driver,
+        'cache_driver': CONFIG.cache_driver,
+        'vector_database_driver': CONFIG.vector_database_driver,
+        'enable_metrics': CONFIG.enable_metrics,
+        'enable_error_reporting': CONFIG.enable_error_reporting,
+        'enable_profiling': CONFIG.enable_profiling,
+        'service_root_path': CONFIG.service_root_path,
+    })
     initialize_metrics()
 
     cache = get_active_cache()
@@ -245,9 +258,13 @@ async def http_exception_handler(request, exc):
     doc_db = await get_active_doc_db()
     nav_links = await build_nav_links(request, doc_db)
 
+    detail = getattr(exc, 'detail', None)
+    if exc.status_code >= 500:
+        detail = 'The service could not complete this request. Please try again later.'
+
     context = {
         'page_title': f'{exc.status_code} Error | BioMedical Terminology Service',
-        'detail': getattr(exc, 'detail', None),
+        'detail': detail,
         'nav_links': nav_links,
         'return_url': '/',
         'return_label': 'Back to Home',

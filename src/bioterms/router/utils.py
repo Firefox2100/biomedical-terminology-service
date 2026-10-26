@@ -239,7 +239,8 @@ async def build_nav_links(request: Request, db: DocumentDatabase) -> list[dict]:
             {
                 'label': f'Logout ({username})',
                 'url': request.url_for('handle_logout'),
-                'active': False
+                'active': False,
+                'post': True,
             },
         ])
     else:

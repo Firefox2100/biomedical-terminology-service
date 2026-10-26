@@ -9,7 +9,7 @@ import bioterms
 from packaging.version import Version
 
 project = 'BioMedical Terminology Service'
-copyright = '2025, Firefox2100'
+copyright = '2025-2026, Firefox2100'
 author = 'Firefox2100'
 
 _v = Version(bioterms.__version__)

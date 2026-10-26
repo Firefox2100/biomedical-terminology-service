@@ -1,83 +1,12 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-
-  <title>{{ page_title or "BioMedical Terminology Service" }}</title>
-  <meta name="description"
-        content="{{ meta_description or 'A service for using with biomedical terminologies, such as ontologies or vocabularies.' }}"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-
-  {% if google_site_verification_id %}
-    <meta name="google-site-verification" content="{{ google_site_verification_id }}"/>
-  {% endif %}
-
-  <link href="{{ url_for('static', path='vendor/bootstrap/5.3.8/css/bootstrap.min.css') }}" rel="stylesheet"/>
-  <link href="{{ url_for('static', path='vendor/bootstrap-icons/1.13.1/bootstrap-icons.css') }}" rel="stylesheet"/>
-  <link rel="stylesheet" href="{{ url_for('static', path='css/custom.css') }}"/>
-
-  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='img/favicon.svg') }}"/>
-
-  {% if structured_data %}
-    <script type="application/ld+json" nonce="{{ request.state.csp_nonce }}">
-      {{ structured_data | tojson | safe }}
-    </script>
-  {% endif %}
-</head>
-<body>
-<a class="skip-link" href="#main-content">Skip to main content</a>
-<nav class="navbar navbar-expand-lg navbar-light bg-body-tertiary">
-  <div class="container">
-    <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-      <span class="site-logo-wrapper">
-        {% include "partials/logo-animated.svg" %}
-      </span>
-      <span class="d-none d-md-inline">BioMedical Terminology Service</span>
-      <span class="d-inline d-md-none">BTS</span>
-    </a>
-
-    <!-- Mobile toggler -->
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav"
-            aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-
-    <div id="mainNav" class="collapse navbar-collapse">
-      <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
-        {% block nav_links %}
-          {% if nav_links %}
-            {% for link in nav_links %}
-              <li class="nav-item">
-                {% if link.active %}
-                  <a class="nav-link active" aria-current="page"
-                     href="{{ link.url }}">{{ link.label }}</a>
-                {% else %}
-                  <a class="nav-link" href="{{ link.url }}"
-                     {% if link.external %}target="_blank" rel="noopener noreferrer"{% endif %}>
-                    {{ link.label }}{% if link.external %}&nbsp;<i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span class="visually-hidden"> (opens in a new tab)</span>{% endif %}
-                  </a>
-                {% endif %}
-              </li>
-            {% endfor %}
-          {% endif %}
-        {% endblock %}
-      </ul>
-    </div>
-  </div>
-</nav>
-
-<main id="main-content" class="container py-4 py-md-5" tabindex="-1">
-  {% block content %}{% endblock %}
-</main>
-
-<footer class="footer py-4">
-  <div class="container text-muted small">
-    BioMedical Terminology Service — open-source software by Firefox2100
-  </div>
-</footer>
-
-<script nonce="{{ request.state.csp_nonce }}"
-        src="{{ url_for('static', path='vendor/bootstrap/5.3.8/js/bootstrap.bundle.min.js') }}"></script>
-{% block scripts %}{% endblock %}
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title or "BioMedical Terminology Service" }}</title>
+<meta name="description" content="{{ meta_description or 'Browse and connect biomedical vocabularies in a self-hosted heterogeneous graph.' }}">
+{% if google_site_verification_id %}<meta name="google-site-verification" content="{{ google_site_verification_id }}">{% endif %}
+<link rel="stylesheet" href="{{ url_for('static', path='css/custom.css') }}"><link rel="stylesheet" href="{{ url_for('static', path='css/compat.css') }}"><link rel="stylesheet" href="{{ url_for('static', path='css/responsive.css') }}"><link rel="stylesheet" href="{{ url_for('static', path='css/polish.css') }}"><link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='img/favicon.svg') }}">
+{% if structured_data %}<script type="application/ld+json" nonce="{{ request.state.csp_nonce }}">{{ structured_data | tojson | safe }}</script>{% endif %}</head>
+<body><a class="skip-link" href="#main-content">Skip to main content</a>
+<header class="site-header"><div class="shell site-header__inner"><a class="brand" href="{{ url_for('get_home_page') }}" aria-label="BioMedical Terminology Service home"><span class="brand__mark" aria-hidden="true">BTS<span>:</span></span><span class="brand__name">BioMedical Terminology Service</span></a><button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">Menu</button><nav id="site-navigation" class="site-nav" aria-label="Primary navigation">{% if nav_links %}{% for link in nav_links %}{% if link.post %}<form method="post" action="{{ link.url }}"><input type="hidden" name="csrftoken" value="{{ request.scope.csrftoken() }}"><button class="site-nav__link" type="submit">{{ link.label }}</button></form>{% else %}<a class="site-nav__link{% if link.active %} is-active{% endif %}" href="{{ link.url }}"{% if link.active %} aria-current="page"{% endif %}{% if link.external %} target="_blank" rel="noopener noreferrer"{% endif %}>{{ link.label }}{% if link.external %}<svg class="icon external-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3 5 11"/><path d="M11 9v4H3V5h4"/></svg>{% endif %}</a>{% endif %}{% endfor %}{% endif %}</nav></div></header>
+<main id="main-content" class="shell main-content" tabindex="-1">{% block content %}{% endblock %}</main>
+<footer class="site-footer"><div class="shell">BioMedical Terminology Service <span aria-hidden="true">·</span> Open-source software by Firefox2100</div></footer>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ url_for('static', path='js/site.js') }}"></script>{% block scripts %}{% endblock %}</body></html>
