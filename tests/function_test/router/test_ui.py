@@ -340,3 +340,10 @@ def test_unknown_page_renders_404_template(client):
     response = client.get('/vocabularies/not-a-prefix')
 
     assert response.status_code in (404, 422)
+
+
+def test_legacy_term_browser_redirects_to_vocabulary_catalogue(client):
+    response = client.get('/term-browser')
+
+    assert response.status_code == 308
+    assert response.headers['location'] == '/vocabularies'

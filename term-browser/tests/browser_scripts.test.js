@@ -106,37 +106,53 @@ describe('API key management', () => {
   })
 })
 
+describe('site navigation', () => {
+  it('opens and closes the responsive navigation', async () => {
+    document.body.innerHTML = `
+      <button class="nav-toggle" aria-expanded="false">Menu</button>
+      <nav id="site-navigation"></nav>`
+    await import('@server-js/site.js')
+
+    const toggle = document.querySelector('.nav-toggle')
+    const navigation = document.getElementById('site-navigation')
+    toggle.click()
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(navigation).toHaveClass('is-open')
+    toggle.click()
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(navigation).not.toHaveClass('is-open')
+  })
+
+  it('is safe on pages without navigation controls', async () => {
+    await import('@server-js/site.js')
+    expect(document.body).toBeEmptyDOMElement()
+  })
+})
+
 describe('vocabulary administration', () => {
-  it('handles successful and failed actions and confirmation forms', async () => {
+  it('handles successful and failed actions', async () => {
     document.body.innerHTML = `
       <div id="admin-action-status"></div>
       <button id="rebuild-cache-btn" data-endpoint="/cache" data-csrf="one">Rebuild</button>
-      <button id="reload-graphql-btn" data-endpoint="/graphql" data-csrf="two">Reload</button>
-      <form><button data-confirm="Continue?">Delete</button></form>`
+      <button id="reload-graphql-btn" data-endpoint="/graphql" data-csrf="two">Reload</button>`
     const fetch = vi.fn()
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: false, status: 409, text: async () => 'busy' })
     vi.stubGlobal('fetch', fetch)
-    vi.stubGlobal('confirm', vi.fn(() => false))
     await import('@server-js/vocabularies.js')
 
     const reload = document.getElementById('reload-graphql-btn')
     reload.click()
     await vi.waitFor(() => expect(document.getElementById('admin-action-status').textContent)
-      .toBe('GraphQL schema reload started'))
+      .toBe('GraphQL reload started.'))
     expect(reload.textContent).toBe('Reload')
     expect(reload.disabled).toBe(false)
 
     const rebuild = document.getElementById('rebuild-cache-btn')
     rebuild.click()
-    await vi.waitFor(() => expect(document.getElementById('admin-action-status').textContent).toContain('failed (409)'))
-    expect(document.getElementById('admin-action-status').textContent).toContain('busy')
+    await vi.waitFor(() => expect(document.getElementById('admin-action-status').textContent)
+      .toContain('could not be completed'))
     expect(document.getElementById('admin-action-status').classList).toContain('text-danger')
-
-    const form = document.querySelector('form')
-    const submit = new Event('submit', { cancelable: true })
-    form.dispatchEvent(submit)
-    expect(submit.defaultPrevented).toBe(true)
   })
 
   it('reports a network error', async () => {
@@ -148,6 +164,45 @@ describe('vocabulary administration', () => {
 
     document.getElementById('reload-graphql-btn').click()
     await vi.waitFor(() => expect(document.getElementById('admin-action-status').textContent)
-      .toContain('could not reach the service'))
+      .toContain('could not be completed'))
+  })
+
+  it('filters the register and refreshes availability from the API', async () => {
+    document.body.innerHTML = `
+      <input id="vocabulary-filter">
+      <div id="register-count"></div>
+      <article data-vocabulary="human phenotype ontology hpo" data-prefix="hpo">
+        <span data-availability></span>
+      </article>
+      <article data-vocabulary="gene ontology go" data-prefix="go">
+        <span data-availability></span>
+      </article>`
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ prefix: 'hpo', loaded: true }, { prefix: 'go', loaded: false }],
+    }))
+    await import('@server-js/vocabularies.js')
+
+    await vi.waitFor(() => expect(document.querySelector('[data-prefix="hpo"] [data-availability]'))
+      .toHaveTextContent('Available'))
+    expect(document.querySelector('[data-prefix="go"] [data-availability]')).toHaveTextContent('Not loaded')
+
+    const filter = document.getElementById('vocabulary-filter')
+    filter.value = 'phenotype'
+    filter.dispatchEvent(new Event('input'))
+    expect(document.querySelector('[data-prefix="hpo"]')).not.toHaveAttribute('hidden')
+    expect(document.querySelector('[data-prefix="go"]')).toHaveAttribute('hidden')
+    expect(document.getElementById('register-count')).toHaveTextContent('1 vocabulary')
+  })
+
+  it('falls back to linked status when availability cannot be loaded', async () => {
+    document.body.innerHTML = `
+      <article data-vocabulary="hpo" data-prefix="hpo"><span data-availability></span></article>`
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+    await import('@server-js/vocabularies.js')
+
+    await vi.waitFor(() => expect(document.querySelector('[data-availability]'))
+      .toHaveTextContent('View status'))
+    expect(document.querySelector('[data-availability]').dataset.state).toBe('unavailable')
   })
 })

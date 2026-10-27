@@ -17,6 +17,7 @@ export default defineConfig({
       reportsDirectory: 'term-browser/coverage',
       include: [
         'src/bioterms/data/static/js/api_keys.js',
+        'src/bioterms/data/static/js/site.js',
         'src/bioterms/data/static/js/vocabularies.js',
         'term-browser/src/**/*.{js,jsx}',
       ],
