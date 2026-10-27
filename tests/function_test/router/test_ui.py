@@ -43,6 +43,8 @@ class FakeDocDb:
     def __init__(self):
         self.users = FakeUsers()
         self.concepts = {
+            '0000001': Concept(prefix=ConceptPrefix.HPO, conceptId='0000001',
+                               label='All HPO concepts'),
             'HP:0000118': Concept(prefix=ConceptPrefix.HPO, conceptId='HP:0000118',
                                   label='Phenotypic abnormality', synonyms=['Organ abnormality']),
         }
@@ -151,6 +153,9 @@ def test_vocabulary_pages_render_browser_and_separate_status(client):
     assert 'CollectionPage' in listing.text
     assert browser.status_code == 200
     assert 'Search Human Phenotype Ontology' in browser.text
+    assert 'data-concept-tree' in browser.text
+    assert 'aria-label="Show child terms for All HPO concepts"' in browser.text
+    assert 'js/vocabulary_browser.js' in browser.text
     assert 'Vocabulary status' in browser.text
     assert status_page.status_code == 200
     assert 'hpo-mondo' in status_page.text
