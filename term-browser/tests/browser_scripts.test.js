@@ -195,14 +195,125 @@ describe('vocabulary administration', () => {
     expect(document.getElementById('register-count')).toHaveTextContent('1 vocabulary')
   })
 
-  it('falls back to linked status when availability cannot be loaded', async () => {
+  it('shows an unavailable state when availability cannot be loaded', async () => {
     document.body.innerHTML = `
       <article data-vocabulary="hpo" data-prefix="hpo"><span data-availability></span></article>`
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     await import('@server-js/vocabularies.js')
 
     await vi.waitFor(() => expect(document.querySelector('[data-availability]'))
-      .toHaveTextContent('View status'))
-    expect(document.querySelector('[data-availability]').dataset.state).toBe('unavailable')
+      .toHaveTextContent('Status unavailable'))
+    expect(document.querySelector('[data-availability]').dataset.state).toBe('error')
+    expect(document.querySelector('[data-vocabulary]').dataset.availabilityState).toBe('error')
+  })
+})
+
+function hierarchyMarkup() {
+  return `
+    <ul data-concept-tree data-api-base="/api/vocabularies/hpo/concepts/">
+      <li class="hierarchy-node" data-concept-id="HP:1">
+        <div class="hierarchy-node__row">
+          <button class="hierarchy-toggle" aria-expanded="false"
+            aria-label="Show child terms for Root"><span>toggle</span></button>
+        </div>
+        <ul class="hierarchy-children" hidden></ul>
+      </li>
+    </ul>`
+}
+
+describe('lazy vocabulary hierarchy', () => {
+  it('is safe on pages without a concept tree', async () => {
+    await import('@server-js/vocabulary_browser.js')
+    expect(document.body).toBeEmptyDOMElement()
+  })
+
+  it('loads, renders, opens, and closes child concepts', async () => {
+    document.body.innerHTML = hierarchyMarkup()
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ children: [
+        { conceptId: 'HP:2', label: 'Child concept' },
+        { concept_id: 'HP:3' },
+        { conceptId: 'HP:1', label: 'Self cycle' },
+        {},
+      ] }),
+    })
+    vi.stubGlobal('fetch', fetch)
+    await import('@server-js/vocabulary_browser.js')
+
+    const button = document.querySelector('.hierarchy-toggle')
+    button.querySelector('span').click()
+    await vi.waitFor(() => expect(document.querySelectorAll('.hierarchy-children > li')).toHaveLength(2))
+
+    expect(fetch).toHaveBeenCalledWith('/api/vocabularies/hpo/concepts/HP%3A1', {
+      headers: { Accept: 'application/json' },
+    })
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+    expect(button).toHaveAttribute('aria-label', 'Hide child terms for Root')
+    expect(document.querySelector('[data-concept-id="HP:2"] a')).toHaveTextContent('Child conceptHP:2')
+    expect(document.querySelector('[data-concept-id="HP:3"] a')).toHaveTextContent('HP:3HP:3')
+    expect(document.querySelector('[data-concept-id="HP:2"] a').href).toContain('/HP%3A2')
+
+    button.click()
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    expect(document.querySelector('.hierarchy-children')).toHaveAttribute('hidden')
+
+    button.click()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it.each([
+    [{ children: [] }],
+    [{ children: 'not-an-array' }],
+  ])('marks a concept as a leaf when no children are returned', async (payload) => {
+    document.body.innerHTML = hierarchyMarkup()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => payload }))
+    await import('@server-js/vocabulary_browser.js')
+
+    const button = document.querySelector('.hierarchy-toggle')
+    button.click()
+    await vi.waitFor(() => expect(button).toHaveClass('is-leaf'))
+
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('aria-label', 'No child terms')
+    expect(button).not.toHaveAttribute('aria-expanded')
+  })
+
+  it('shows an error and permits a retry after a failed request', async () => {
+    document.body.innerHTML = hierarchyMarkup()
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ children: [{ id: 'HP:4', label: 'Recovered child' }] }),
+      })
+    vi.stubGlobal('fetch', fetch)
+    await import('@server-js/vocabulary_browser.js')
+
+    const button = document.querySelector('.hierarchy-toggle')
+    button.click()
+    await vi.waitFor(() => expect(document.querySelector('.hierarchy-message'))
+      .toHaveTextContent('could not be loaded'))
+    expect(button).not.toBeDisabled()
+    expect(document.querySelector('.hierarchy-node')).not.toHaveAttribute('aria-busy')
+
+    button.click()
+    await vi.waitFor(() => expect(document.querySelector('[data-concept-id="HP:4"]')).toBeInTheDocument())
+    expect(document.querySelector('.hierarchy-message')).not.toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores clicks outside hierarchy toggles and on known leaves', async () => {
+    document.body.innerHTML = hierarchyMarkup()
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    await import('@server-js/vocabulary_browser.js')
+
+    document.querySelector('[data-concept-tree]').click()
+    const button = document.querySelector('.hierarchy-toggle')
+    button.classList.add('is-leaf')
+    button.click()
+    expect(fetch).not.toHaveBeenCalled()
   })
 })

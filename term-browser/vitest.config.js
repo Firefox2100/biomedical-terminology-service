@@ -19,6 +19,7 @@ export default defineConfig({
         'src/bioterms/data/static/js/api_keys.js',
         'src/bioterms/data/static/js/site.js',
         'src/bioterms/data/static/js/vocabularies.js',
+        'src/bioterms/data/static/js/vocabulary_browser.js',
         'term-browser/src/**/*.{js,jsx}',
       ],
       exclude: ['term-browser/src/main.jsx'],
