@@ -1,0 +1,105 @@
+name: Dependency Analysis with Dependency-Track
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DT_HOSTNAME: dependency.firefox2100.co.uk
+  DT_AUDIENCE: https://dependency.firefox2100.co.uk
+  DT_PROVIDER: github-actions
+  DT_SERVICE_ACCOUNT: github-biomedical-terminology-service
+
+jobs:
+  analysis:
+    name: Generate and upload SBOM for analysis
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Extract version
+        run: |
+          VERSION=$(awk -F'"' '/^__version__/ {print $2}' ./src/bioterms/__init__.py)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      # Resolve the runtime dependency set (same extras as the Docker image) without
+      # installing it, then convert the pinned result to CycloneDX.
+      - name: Generate Python SBOM
+        run: |
+          pip install uv==0.13.8 cyclonedx-bom==8.0.1
+          uv pip compile pyproject.toml --extra all --python-version 3.11 \
+            --no-header -o requirements.lock
+          cyclonedx-py requirements requirements.lock \
+            --pyproject pyproject.toml \
+            --sv 1.6 --of JSON -o bom-backend.json
+
+      - name: Generate term-browser SBOM
+        working-directory: term-browser
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm@7.0.1 \
+            --package-lock-only --omit dev \
+            --spec-version 1.6 --output-format JSON \
+            --output-file ../bom-term-browser.json
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: |
+            bom-backend.json
+            bom-term-browser.json
+
+      - name: Upload backend SBOM to Dependency-Track
+        uses: DependencyTrack/gh-upload-sbom@331f980a6eba119842052f447c54b09e4888b4c6 # v4.3.0
+        with:
+          server-hostname: ${{ env.DT_HOSTNAME }}
+          workload-identity-provider: ${{ env.DT_PROVIDER }}
+          service-account: ${{ env.DT_SERVICE_ACCOUNT }}
+          oidc-audience: ${{ env.DT_AUDIENCE }}
+          project-name: biomedical-terminology-service
+          project-version: ${{ env.VERSION }}
+          project-tags: backend,python
+          bom-filename: bom-backend.json
+          auto-create: true
+          is-latest: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Upload term-browser SBOM to Dependency-Track
+        uses: DependencyTrack/gh-upload-sbom@331f980a6eba119842052f447c54b09e4888b4c6 # v4.3.0
+        with:
+          server-hostname: ${{ env.DT_HOSTNAME }}
+          workload-identity-provider: ${{ env.DT_PROVIDER }}
+          service-account: ${{ env.DT_SERVICE_ACCOUNT }}
+          oidc-audience: ${{ env.DT_AUDIENCE }}
+          project-name: biomedical-terminology-service-term-browser
+          project-version: ${{ env.VERSION }}
+          project-tags: frontend,javascript
+          bom-filename: bom-term-browser.json
+          auto-create: true
+          is-latest: ${{ github.ref == 'refs/heads/main' }}
