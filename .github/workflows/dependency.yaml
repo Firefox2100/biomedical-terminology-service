@@ -14,7 +14,12 @@ permissions:
   contents: read
 
 env:
-  DT_HOSTNAME: dependency.firefox2100.co.uk
+  # Reached over Tailscale rather than the public hostname: Cloudflare's bot challenge
+  # blocks GitHub-hosted runners. Traffic is encrypted by WireGuard, hence plain http.
+  DT_HOSTNAME: 100.86.189.45
+  DT_PORT: "9080"
+  DT_PROTOCOL: http
+  # Must still match the audience configured on the workload identity provider.
   DT_AUDIENCE: https://dependency.firefox2100.co.uk
   DT_PROVIDER: github-actions
   DT_SERVICE_ACCOUNT: github-biomedical-terminology-service
@@ -76,10 +81,20 @@ jobs:
             bom-backend.json
             bom-term-browser.json
 
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: ${{ env.DT_HOSTNAME }}
+
       - name: Upload backend SBOM to Dependency-Track
         uses: DependencyTrack/gh-upload-sbom@331f980a6eba119842052f447c54b09e4888b4c6 # v4.3.0
         with:
           server-hostname: ${{ env.DT_HOSTNAME }}
+          port: ${{ env.DT_PORT }}
+          protocol: ${{ env.DT_PROTOCOL }}
           workload-identity-provider: ${{ env.DT_PROVIDER }}
           service-account: ${{ env.DT_SERVICE_ACCOUNT }}
           oidc-audience: ${{ env.DT_AUDIENCE }}
@@ -94,6 +109,8 @@ jobs:
         uses: DependencyTrack/gh-upload-sbom@331f980a6eba119842052f447c54b09e4888b4c6 # v4.3.0
         with:
           server-hostname: ${{ env.DT_HOSTNAME }}
+          port: ${{ env.DT_PORT }}
+          protocol: ${{ env.DT_PROTOCOL }}
           workload-identity-provider: ${{ env.DT_PROVIDER }}
           service-account: ${{ env.DT_SERVICE_ACCOUNT }}
           oidc-audience: ${{ env.DT_AUDIENCE }}
